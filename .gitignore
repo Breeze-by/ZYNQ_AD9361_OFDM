@@ -1,0 +1,55 @@
+# Xilinx SDK / Eclipse workspace runtime
+.metadata/
+.sdk/
+RemoteSystemsTempFiles/
+
+# Xilinx WebTalk and local run logs
+webtalk/
+.Xil/
+SDK.log
+*.log
+*.jou
+*.str
+
+# SDK build output directories
+**/Debug/
+**/Release/
+
+# C/C++ and Xilinx generated build artifacts
+*.o
+*.obj
+*.d
+*.a
+*.elf
+*.elf.size
+*.map
+*.lst
+*.su
+*.gcno
+*.gcda
+*.gcov
+
+# Generated make dependency fragments in build directories
+objects.mk
+sources.mk
+subdir.mk
+
+# Local launch/debug state
+*.launch
+
+# Editor, temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.backup.*
+*.orig
+*.rej
+*~
+*.swp
+*.swo
+
+# OS metadata
+Thumbs.db
+Desktop.ini
+.DS_Store
