@@ -13,6 +13,7 @@ src/
 |   |-- ad9361/
 |   |-- dma/
 |   |-- interrupt/
+|   |-- net/
 |   |-- timer/
 |   `-- uart/
 |-- utils/
@@ -52,6 +53,14 @@ src/
   - `SCU_GIC.c/.h`
   - `ISR.c/.h`
 
+- `drivers/net/`
+  lwIP RAW API based Ethernet/UDP receive path, application-layer ACK protocol, and DMA TX scheduling.
+  Main files:
+  - `net_config.h`
+  - `net_init.c/.h`
+  - `net_rx.c/.h`
+  - `net_protocol.c/.h`
+
 - `drivers/timer/`
   SCU private timer wrapper.
   Main files:
@@ -85,6 +94,17 @@ src/
   - `drivers/timer/SCU_TIMER.c`
   - `drivers/timer/SCU_TIMER.h`
 
+- Change UDP port, packet magic, or receive-side protocol limits:
+  - `drivers/net/net_config.h`
+  - `drivers/net/net_protocol.h`
+
+- Change Ethernet initialization, static IP setup, or lwIP polling:
+  - `drivers/net/net_init.c`
+
+- Change UDP receive flow, DMA trigger timing, ACK rules, or duplicate-seq handling:
+  - `drivers/net/net_rx.c`
+  - `drivers/net/net_protocol.c`
+
 - Change only application constants without touching flow:
   - `app/app_config.h`
 
@@ -92,4 +112,6 @@ src/
 
 - The SDK project file `.cproject` now points to the new source include directories under `src/`.
 - `lscript.ld` and `Xilinx.spec` remain in `src/` to avoid changing linker behavior.
-- No AD9361, SPI, DMA, UART, interrupt, or timer logic was intentionally changed in this reorganization.
+- AD9361, SPI, UART, interrupt, and timer logic remain unchanged.
+- The old test waveform loop was replaced by a UDP receive -> DMA TX flow, but AXI DMA initialization and interrupt handlers are still reused as before.
+- To stay inside the "only modify AD9361_test2" boundary, the PC sender tool is placed under `AD9361_test2/tools/pc_sender/send_data.py`.

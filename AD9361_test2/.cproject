@@ -34,6 +34,7 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/ad9361}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/dma}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/interrupt}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/net}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/timer}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/uart}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/utils}&quot;"/>
@@ -114,6 +115,7 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/ad9361}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/dma}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/interrupt}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/net}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/timer}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/drivers/uart}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/AD9361_test2/src/utils}&quot;"/>
