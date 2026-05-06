@@ -30,10 +30,8 @@ static int has_last_completed_seq;
 static int dma_busy;
 static uint64_t total_completed_bytes;
 static uint32_t total_completed_chunks;
-static XTime first_accept_time;
-static XTime last_ack_time;
 static XTime active_dma_start_time;
-static int has_accept_time;
+static uint64_t total_app_elapsed_us;
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
@@ -256,7 +254,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     Error = 0;
     total_completed_bytes = 0U;
     total_completed_chunks = 0U;
-    has_accept_time = 0;
+    total_app_elapsed_us = 0U;
 
     udp_recv(udp_control_pcb, net_udp_receive_callback, NULL);
     UART_Printf("UDP RX ready, max payload %u bytes\r\n", dma_tx_capacity_bytes);
@@ -291,7 +289,6 @@ void Net_RxPoll(void)
         XTime now_time;
         uint64_t dma_elapsed_us;
         uint64_t app_elapsed_us;
-        uint64_t total_elapsed_us;
         uint32_t recent_rate_x100_kib;
         uint32_t avg_rate_x100_kib;
 
@@ -302,18 +299,11 @@ void Net_RxPoll(void)
         total_completed_chunks += 1U;
 
         XTime_GetTime(&now_time);
-        if (has_accept_time == 0) {
-            first_accept_time = active_chunk.accept_time;
-            last_ack_time = now_time;
-            has_accept_time = 1;
-        }
-
         dma_elapsed_us = net_elapsed_us(active_dma_start_time, now_time);
         app_elapsed_us = net_elapsed_us(active_chunk.accept_time, now_time);
-        total_elapsed_us = net_elapsed_us(first_accept_time, now_time);
         recent_rate_x100_kib = net_rate_x100_kib(active_chunk.transfer_len, app_elapsed_us);
-        avg_rate_x100_kib = net_rate_x100_kib((uint32_t)total_completed_bytes, total_elapsed_us);
-        last_ack_time = now_time;
+        total_app_elapsed_us += app_elapsed_us;
+        avg_rate_x100_kib = net_rate_x100_kib((uint32_t)total_completed_bytes, total_app_elapsed_us);
 
         net_send_ack(&active_chunk.peer_addr, active_chunk.peer_port, active_chunk.seq,
             NET_ACK_STATUS_OK, active_chunk.transfer_len);
