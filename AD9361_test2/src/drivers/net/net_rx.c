@@ -16,6 +16,7 @@ typedef struct {
     ip_addr_t peer_addr;
     u16_t peer_port;
     XTime accept_time;
+    uint64_t recv_gap_us;
 } net_pending_chunk_t;
 
 static struct udp_pcb *udp_control_pcb;
@@ -31,7 +32,9 @@ static int dma_busy;
 static uint64_t total_completed_bytes;
 static uint32_t total_completed_chunks;
 static XTime active_dma_start_time;
-static uint64_t total_app_elapsed_us;
+static XTime first_recv_time;
+static XTime last_recv_time;
+static int has_recv_time;
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
@@ -52,16 +55,17 @@ static uint32_t net_rate_x100_kib(uint32_t bytes, uint64_t elapsed_us)
 }
 
 static void net_print_rate_line(const char *prefix, uint32_t seq, uint32_t transfer_len,
-    uint64_t dma_elapsed_us, uint64_t app_elapsed_us,
+    uint64_t dma_elapsed_us, uint64_t app_elapsed_us, uint64_t recv_gap_us,
     uint32_t recent_rate_x100_kib, uint32_t avg_rate_x100_kib)
 {
     UART_Printf(
-        "%s seq=%lu len=%lu dma_us=%lu app_us=%lu rate=%lu.%02lu avg=%lu.%02lu total=%lu\r\n",
+        "%s seq=%lu len=%lu dma_us=%lu app_us=%lu gap_us=%lu rate=%lu.%02lu avg=%lu.%02lu total=%lu\r\n",
         prefix,
         (unsigned long)seq,
         (unsigned long)transfer_len,
         (unsigned long)dma_elapsed_us,
         (unsigned long)app_elapsed_us,
+        (unsigned long)recv_gap_us,
         (unsigned long)(recent_rate_x100_kib / 100U),
         (unsigned long)(recent_rate_x100_kib % 100U),
         (unsigned long)(avg_rate_x100_kib / 100U),
@@ -219,6 +223,14 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     ip_addr_copy(pending_chunk.peer_addr, *addr);
     pending_chunk.peer_port = port;
     XTime_GetTime(&pending_chunk.accept_time);
+    if (has_recv_time == 0) {
+        first_recv_time = pending_chunk.accept_time;
+        pending_chunk.recv_gap_us = 0U;
+        has_recv_time = 1;
+    } else {
+        pending_chunk.recv_gap_us = net_elapsed_us(last_recv_time, pending_chunk.accept_time);
+    }
+    last_recv_time = pending_chunk.accept_time;
 
     UART_Printf("UDP recv seq=%lu payload=%u aligned=%lu from_port=%u\r\n",
         (unsigned long)header.seq,
@@ -254,7 +266,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     Error = 0;
     total_completed_bytes = 0U;
     total_completed_chunks = 0U;
-    total_app_elapsed_us = 0U;
+    has_recv_time = 0;
 
     udp_recv(udp_control_pcb, net_udp_receive_callback, NULL);
     UART_Printf("UDP RX ready, max payload %u bytes\r\n", dma_tx_capacity_bytes);
@@ -289,6 +301,7 @@ void Net_RxPoll(void)
         XTime now_time;
         uint64_t dma_elapsed_us;
         uint64_t app_elapsed_us;
+        uint64_t avg_recv_elapsed_us;
         uint32_t recent_rate_x100_kib;
         uint32_t avg_rate_x100_kib;
 
@@ -301,14 +314,14 @@ void Net_RxPoll(void)
         XTime_GetTime(&now_time);
         dma_elapsed_us = net_elapsed_us(active_dma_start_time, now_time);
         app_elapsed_us = net_elapsed_us(active_chunk.accept_time, now_time);
-        recent_rate_x100_kib = net_rate_x100_kib(active_chunk.transfer_len, app_elapsed_us);
-        total_app_elapsed_us += app_elapsed_us;
-        avg_rate_x100_kib = net_rate_x100_kib((uint32_t)total_completed_bytes, total_app_elapsed_us);
+        recent_rate_x100_kib = net_rate_x100_kib(active_chunk.transfer_len, active_chunk.recv_gap_us);
+        avg_recv_elapsed_us = net_elapsed_us(first_recv_time, active_chunk.accept_time);
+        avg_rate_x100_kib = net_rate_x100_kib((uint32_t)total_completed_bytes, avg_recv_elapsed_us);
 
         net_send_ack(&active_chunk.peer_addr, active_chunk.peer_port, active_chunk.seq,
             NET_ACK_STATUS_OK, active_chunk.transfer_len);
         net_print_rate_line("ACK", active_chunk.seq, active_chunk.transfer_len,
-            dma_elapsed_us, app_elapsed_us,
+            dma_elapsed_us, app_elapsed_us, active_chunk.recv_gap_us,
             recent_rate_x100_kib, avg_rate_x100_kib);
 
         dma_busy = 0;
