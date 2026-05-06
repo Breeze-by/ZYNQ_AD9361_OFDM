@@ -1,14 +1,16 @@
-# AD9361_test2 Source Layout
+# AD9361_test2 源码目录说明
 
-This application project is organized so that only `AD9361_test2` contains user-maintained code. BSP and hardware-exported projects remain untouched.
+这是 `AD9361_test2` 应用工程自己的说明文档，重点关注源码分层。
 
-## Directory Structure
+更完整的项目背景、联调步骤、网络协议、BSP 参数建议，请优先看仓库根目录 [README.md](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/README.md:1)。
+
+## 当前源码结构
 
 ```text
 src/
 |-- app/
-|   |-- app_config.h
-|   `-- main.c
+|   |-- main.c
+|   `-- app_config.h
 |-- drivers/
 |   |-- ad9361/
 |   |-- dma/
@@ -21,97 +23,60 @@ src/
 `-- Xilinx.spec
 ```
 
-## Module Responsibilities
+## 目录职责
 
-- `app/main.c`
-  Application entry point. It keeps the original boot, AD9361 bring-up, DMA transfer, lwIP polling, UART print, and interrupt initialization flow unchanged.
-
-- `app/app_config.h`
-  Application-level constants used by `main.c`, such as DMA buffer addresses, transfer lengths, waveform parameters, and static Ethernet settings.
+- `app/`
+  应用主入口和应用常量。
 
 - `drivers/ad9361/`
-  AD9361 driver stack and platform adaptation layer.
-  Main files:
-  - `ad9361.c/.h`, `ad9361_api.c/.h`
-  - `platform.c/.h`
-  - `spi_ctrl.c/.h`
-  - `ad9361_config.h`, `radio_set.h`, `parameters.h`, `gpio_initial.h`, `io_control.h`, `config.h`, `common1.h`
+  AD9361、SPI、GPIO、平台适配相关代码。
 
 - `drivers/dma/`
-  AXI DMA initialization and TX/RX interrupt handlers.
-  Main files:
-  - `AXI_DMA.c/.h`
-
-- `drivers/uart/`
-  PS UART wrapper used for formatted debug output and raw TX/RX access.
-  Main files:
-  - `PS_UART.c/.h`
+  AXI DMA 初始化和 DMA 中断处理。
 
 - `drivers/interrupt/`
-  SCU GIC wrapper and user interrupt handlers.
-  Main files:
-  - `SCU_GIC.c/.h`
-  - `ISR.c/.h`
+  SCU GIC 和 ISR。
 
 - `drivers/net/`
-  lwIP RAW API based Ethernet/UDP receive path, application-layer ACK protocol, and DMA TX scheduling.
-  Main files:
-  - `net_config.h`
-  - `net_init.c/.h`
-  - `net_rx.c/.h`
-  - `net_protocol.c/.h`
+  lwIP 网络初始化、UDP 接收、ACK 协议、DMA TX 投递。
 
 - `drivers/timer/`
-  SCU private timer wrapper.
-  Main files:
-  - `SCU_TIMER.c/.h`
+  SCU 私有定时器封装。
+
+- `drivers/uart/`
+  PS UART 打印和字节收发。
 
 - `utils/`
-  Shared utility code and common platform includes.
-  Main files:
-  - `COMMON.c/.h`
-  - `util.c/.h`
+  公共头文件、公共参数和基础工具函数。
 
-## Where To Modify Features Later
+## 现在的主循环
 
-- Change AD9361 initialization parameters, FIR, LO, bandwidth, gain, or GPIO RF path selection:
-  - `utils/COMMON.c`
-  - `drivers/ad9361/*.h`
+当前 `main.c` 已经从“本地生成正弦 + DMA 循环发送”改成：
 
-- Change DMA initialization, TX/RX done handling, or DMA error recovery:
-  - `drivers/dma/AXI_DMA.c`
-  - `drivers/dma/AXI_DMA.h`
+1. 初始化 AD9361 / SPI / UART / GIC / DMA
+2. 初始化 lwIP / UDP 接收
+3. 在死循环中执行：
+   - `Net_Poll()`
+   - `Net_RxPoll()`
 
-- Change UART print or serial I/O helpers:
-  - `drivers/uart/PS_UART.c`
-  - `drivers/uart/PS_UART.h`
+当前工程的主数据入口已经变成网口。
 
-- Change interrupt controller setup or user ISR behavior:
-  - `drivers/interrupt/SCU_GIC.c`
-  - `drivers/interrupt/ISR.c`
+## 关键入口文件
 
-- Change private timer setup or timer interrupt hookup:
-  - `drivers/timer/SCU_TIMER.c`
-  - `drivers/timer/SCU_TIMER.h`
+- 应用入口：
+  [main.c](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/src/app/main.c:1)
 
-- Change UDP port, packet magic, or receive-side protocol limits:
-  - `drivers/net/net_config.h`
-  - `drivers/net/net_protocol.h`
+- 网络初始化：
+  [net_init.c](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/src/drivers/net/net_init.c:1)
 
-- Change Ethernet initialization, static IP setup, or lwIP polling:
-  - `drivers/net/net_init.c`
+- UDP 接收与 DMA 发送调度：
+  [net_rx.c](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/src/drivers/net/net_rx.c:1)
 
-- Change UDP receive flow, DMA trigger timing, ACK rules, or duplicate-seq handling:
-  - `drivers/net/net_rx.c`
-  - `drivers/net/net_protocol.c`
+- 应用协议：
+  [net_protocol.h](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/src/drivers/net/net_protocol.h:1)
 
-- Change only application constants without touching flow:
-  - `app/app_config.h`
+- DMA 驱动：
+  [AXI_DMA.c](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/src/drivers/dma/AXI_DMA.c:1)
 
-## Build Notes
-
-- The SDK project file `.cproject` now points to the new source include directories under `src/`.
-- `lscript.ld` and `Xilinx.spec` remain in `src/` to avoid changing linker behavior.
-- AD9361, SPI, UART, interrupt, and timer logic remain unchanged.
-- The old test waveform loop was replaced by a UDP receive -> DMA TX flow, but AXI DMA initialization and interrupt handlers are still reused as before.
-- To stay inside the "only modify AD9361_test2" boundary, the PC sender tool is placed under `AD9361_test2/tools/pc_sender/send_data.py`.
+- AD9361 参数和 GPIO 路由：
+  [COMMON.c](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/src/utils/COMMON.c:1)

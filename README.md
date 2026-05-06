@@ -1,134 +1,333 @@
-# AD9361_test2 SDK Project
+# ZYNQ_AD9361_OFDM
 
-这是一个基于 Xilinx SDK 2018.3 的 Zynq-7000 裸机工程，用于在 `ps7_cortexa9_0` 上初始化 AD9361，并通过 AXI DMA 进行 PL/PS 间的数据收发测试。工程当前包含应用工程、BSP 工程和 Vivado 导出的硬件平台文件，适合直接作为 SDK workspace 打开和继续迭代。
+这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程仓库。当前仓库同时包含：
 
-## 工程组成
+- 应用工程：`AD9361_test2`
+- BSP 工程：`AD9361_test2_bsp`
+- Vivado 导出的硬件平台：`System_wrapper_hw_platform_0`
+- 根目录硬件导出文件：`System_wrapper.hdf`
 
-```text
-AD9361_test2.sdk/
-├── AD9361_test2/                    # SDK 应用工程
-│   ├── src/                         # 用户主程序、链接脚本、通用中断入口
-│   └── ZYNQ7010_Lib/                # 自定义外设和 AD9361 支持库
-├── AD9361_test2_bsp/                # SDK BSP 工程，目标处理器 ps7_cortexa9_0
-├── System_wrapper_hw_platform_0/    # Vivado 导出的硬件平台、bitstream、PS 初始化文件
-└── System_wrapper.hdf               # 根目录保留的硬件导出文件
-```
+本文档长期维护为中文版总说明，回答三个核心问题：
 
-本仓库刻意保留硬件平台和 BSP 文件，因为这些文件会随 Vivado block design、地址分配、中断号、外设实例和 BSP 配置变化而变化。克隆后可重新构建生成 `Debug/`、`libxil.a`、`.o`、`.d`、`.elf` 等产物。
+1. 这个仓库现在是什么结构
+2. 目前代码已经改到了什么状态
+3. 接下来应该怎么编译、下载、联调和继续改
 
-## 软件功能
-
-应用入口为 `AD9361_test2/src/main.c`，当前流程如下：
-
-1. 关闭 I-Cache 和 D-Cache。
-2. 初始化 PS GPIO，并配置 AD9361 相关控制引脚。
-3. 初始化 SPI0，调用 AD9361 no-OS 风格驱动完成芯片初始化。
-4. 设置 AD9361 TX/RX FIR、采样率、LO、带宽、增益、发射衰减和射频端口。
-5. 初始化 PS UART0，波特率为 `115200`。
-6. 初始化 SCU GIC 和 AXI DMA 中断。
-7. 在 DDR 指定地址生成 64-bit 打包的 12-bit 正弦测试数据。
-8. 循环启动 AXI DMA MM2S/S2MM 传输，并等待 TX/RX 中断完成。
-
-当前主要参数：
+## 当前项目结构
 
 ```text
-TX buffer base : 0x01200000
-RX buffer base : 0x01400000
-TX samples     : 2000 x 64-bit
-RX samples     : 400 x 64-bit
-AD9361 sample  : 40 MHz
-TX LO          : 200 MHz
-RX LO          : 200 MHz
-RF bandwidth   : 20 MHz
-RX gain        : 10 dB
-TX attenuation : 70000 mdB
+ZYNQ_AD9361_OFDM/
+|-- AD9361_test2/
+|   |-- .cproject
+|   |-- .project
+|   |-- AGENT.md
+|   |-- src/
+|   |   |-- app/
+|   |   |   |-- main.c
+|   |   |   `-- app_config.h
+|   |   |-- drivers/
+|   |   |   |-- ad9361/
+|   |   |   |-- dma/
+|   |   |   |-- interrupt/
+|   |   |   |-- net/
+|   |   |   |-- timer/
+|   |   |   `-- uart/
+|   |   |-- utils/
+|   |   |-- lscript.ld
+|   |   |-- README.md
+|   |   `-- Xilinx.spec
+|   `-- tools/
+|       `-- pc_sender/
+|           `-- send_data.py
+|-- AD9361_test2_bsp/
+|   |-- system.mss
+|   `-- ps7_cortexa9_0/
+|       |-- include/
+|       |-- lib/
+|       `-- libsrc/
+|-- System_wrapper_hw_platform_0/
+|   |-- System_wrapper.bit
+|   |-- system.hdf
+|   `-- ps7_init.*
+|-- System_wrapper.hdf
+`-- README.md
 ```
 
-AD9361 射频参数主要在 `AD9361_test2/ZYNQ7010_Lib/AD9361/radio_set.h` 和 `AD9361_test2/ZYNQ7010_Lib/AD9361/ad9361_config.h` 中维护。
+## 各目录职责
 
-## 关键目录说明
+### `AD9361_test2`
 
-`AD9361_test2/src/`
+这是用户代码主工程，也是当前主要修改区。
 
-- `main.c`：主流程，完成 AD9361 初始化、DMA buffer 填充和循环传输。
-- `COMMON.h/.c`：公共头文件和基础宏。
-- `ISR.h/.c`：用户中断处理入口，目前保留 SCU timer handler。
-- `lscript.ld`：应用链接脚本。
-- `Xilinx.spec`：SDK 链接用 specs 文件。
+- `src/app/`
+  - `main.c`：主流程，只负责初始化顺序和主循环调度
+  - `app_config.h`：应用常量，例如缓冲区地址、静态 IP、UDP 端口相关设置
 
-`AD9361_test2/ZYNQ7010_Lib/`
+- `src/drivers/ad9361/`
+  AD9361、SPI、GPIO、平台适配相关代码。
 
-- `AD9361/`：AD9361 驱动、SPI/GPIO 平台适配、参数配置和射频端口选择。
-- `AXI_DMA/`：AXI DMA 初始化、TX/RX 中断注册和中断处理。
-- `SCU/`：SCU GIC 和私有定时器封装。
-- `PS_UART/`：PS UART0 初始化、字符串/格式化/字节发送和非阻塞接收。
+- `src/drivers/dma/`
+  AXI DMA 初始化、DMA 中断注册、完成标志和错误恢复。
 
-`AD9361_test2_bsp/`
+- `src/drivers/interrupt/`
+  SCU GIC 封装和 ISR。
 
-- `system.mss`：BSP 配置，当前 OS 为 `standalone 6.8`，处理器为 `ps7_cortexa9_0`。
-- `ps7_cortexa9_0/include/`：BSP 导出的头文件，包括 `xparameters.h`。
-- `ps7_cortexa9_0/libsrc/`：BSP 驱动源码，如 `axidma 9.8`、`gpiops 3.4`、`spips 3.1`、`uartps 3.7`、`scugic 3.10` 等。
-- `ps7_cortexa9_0/lib/libxil.a` 是构建产物，已通过 `.gitignore` 忽略。
+- `src/drivers/timer/`
+  SCU 私有定时器封装。
 
-`System_wrapper_hw_platform_0/`
+- `src/drivers/uart/`
+  PS UART 封装，主要用于串口调试输出。
 
-- `System_wrapper.bit`：PL bitstream。
-- `system.hdf`：SDK 使用的硬件描述文件。
-- `ps7_init.*`：PS7 初始化源码、头文件和 TCL 脚本。
-- `.project`：SDK 硬件平台工程描述。
+- `src/drivers/net/`
+  新增的 lwIP 网络模块，负责：
+  - GEM0 网口初始化
+  - UDP RAW API 接收
+  - 应用层 ACK
+  - DMA TX 数据投递
 
-## 硬件和 BSP 摘要
+- `src/utils/`
+  公共参数、公共头文件和基础工具函数。
 
-从当前 BSP 和 `xparameters.h` 可见，工程依赖以下主要硬件资源：
+- `tools/pc_sender/send_data.py`
+  上位机 UDP 发送脚本。
+
+### `AD9361_test2_bsp`
+
+这是 SDK 自动生成/维护的 BSP 工程。
+
+- `ps7_cortexa9_0/include/`
+  BSP 导出的头文件
+- `ps7_cortexa9_0/lib/`
+  BSP 编译产物，例如 `libxil.a`、`liblwip4.a`
+- `ps7_cortexa9_0/libsrc/`
+  BSP 驱动和 lwIP 源码
+
+现在 `.gitignore` 已调整为允许跟踪这三个目录及其嵌套内容，后续如果你在 SDK 中重建 BSP，`lib/` 里的产物可以进入版本控制。
+
+### `System_wrapper_hw_platform_0`
+
+这是 Vivado 导出的硬件平台工程，包含 bitstream、硬件描述和 `ps7_init.*`。软件侧通常只引用，不手改。
+
+## 当前软件状态
+
+### 保留不变的部分
+
+以下底层流程没有被故意重写：
+
+- AD9361 初始化流程
+- SPI 初始化和 AD9361 寄存器访问
+- AXI DMA 初始化
+- DMA TX/RX 中断处理逻辑
+- UART 初始化和打印
+- SCU GIC 初始化
+- 定时器驱动
+
+### 当前主功能
+
+当前板端运行模式是：
+
+1. 初始化 AD9361、SPI、UART、GIC、DMA
+2. 初始化 lwIP 和 GEM0 网口
+3. 在 UDP 端口 `5001` 监听数据
+4. 上位机发送带协议头的 UDP 数据块
+5. 板端校验后写入 DMA TX buffer
+6. 启动 DMA MM2S 把数据发往 PL
+7. DMA TX 中断完成后回 ACK
+8. 上位机收到 ACK 再发下一块
+
+### 当前已替换的旧逻辑
+
+原来 `main.c` 里的“正弦波生成 + 48-bit / 双路组帧 + DMA 循环发送”测试逻辑，已经被网口接收路径替换。  
+当前 TX buffer 的数据来源是 UDP payload。
+
+## 当前网络协议
+
+### 数据包格式
+
+每个 UDP 包为：
 
 ```text
-CPU          : ps7_cortexa9_0, 666.666687 MHz
-AXI DMA      : axi_dma_0, base 0x40400000, 64-bit MM2S/S2MM, simple mode
-PS GPIO      : ps7_gpio_0
-PS SPI       : ps7_spi_0 for AD9361 control
-PS UART      : ps7_uart_0
-Interrupts   : AXI DMA MM2S/S2MM fabric interrupts through SCU GIC
+net_data_header_t + payload
 ```
 
-如果 Vivado 中修改了 block design、AXI 地址、中断连接或 bitstream，需要重新导出硬件到 SDK，并同步更新 `System_wrapper_hw_platform_0/`、`System_wrapper.hdf` 和 `AD9361_test2_bsp/`。
+头格式：
 
-## 构建和运行
+```c
+uint32_t magic;
+uint32_t seq;
+uint16_t payload_len;
+uint16_t reserved;
+uint32_t payload_crc32;
+```
 
-推荐使用 Xilinx SDK 2018.3 打开本目录作为 workspace。
+当前常量：
 
-1. 启动 Xilinx SDK 2018.3。
-2. Workspace 选择本目录：`AD9361_test2.sdk`。
-3. 如果工程未自动出现，使用 `File -> Import -> Existing Projects into Workspace`，选择本目录导入：
+- 数据包 `magic`：`0x4E455430`
+- ACK 包 `magic`：`0x41434B30`
+- UDP 端口：`5001`
+
+### ACK 包格式
+
+```c
+uint32_t magic;
+uint32_t seq;
+uint16_t status;
+uint16_t reserved;
+uint32_t transfer_len;
+```
+
+### ACK 状态码
+
+- `0`：OK
+- `1`：magic 错误
+- `2`：长度错误
+- `3`：CRC 校验错误
+- `4`：板端忙
+- `5`：DMA 错误
+
+## DMA TX buffer 规则
+
+当前 TX buffer 规则如下：
+
+- 起始地址：`TX_BUFFER_BASE = 0x01200000`
+- 缓冲区容量：`2000 x 64-bit = 16000 bytes`
+- 上位机 payload 不再分两路
+- 不再使用旧的 48-bit 打包格式
+- payload 按字节顺序连续写入 TX buffer
+- 每 `8` 字节构成一个 `64-bit word`
+- 最后一组不足 `8` 字节时补 `0x00`
+- 实际 DMA 发送长度必须按 `8` 字节对齐
+
+## 如何在板端运行
+
+推荐使用 `Xilinx SDK 2018.3`。
+
+### 导入工程
+
+1. 打开 `Xilinx SDK 2018.3`
+2. 选择本仓库根目录作为 workspace
+3. 如未自动出现，手动导入：
    - `System_wrapper_hw_platform_0`
    - `AD9361_test2_bsp`
    - `AD9361_test2`
-4. 先构建 `AD9361_test2_bsp`，再构建 `AD9361_test2`。
-5. 连接 JTAG，Program FPGA 后下载 `AD9361_test2.elf` 到 `ARM Cortex-A9 #0` 运行。
 
-注意：`.sdk/launch_scripts` 已忽略，因为当前脚本中含有旧机器上的绝对路径，例如 `E:/by2025/...`。换机器或换工作区后应在 SDK 里重新生成/配置 Launch Configuration。
+### 构建顺序
 
-## 版本控制策略
+1. 先 Build `AD9361_test2_bsp`
+2. 确认 `AD9361_test2_bsp/ps7_cortexa9_0/lib/` 下生成库文件
+3. 再 Build `AD9361_test2`
 
-应跟踪：
+### 下载运行
 
-- 应用源码：`AD9361_test2/src/`
-- 自定义库和 AD9361 移植代码：`AD9361_test2/ZYNQ7010_Lib/`
-- SDK 工程配置：`.project`、`.cproject`、`.sdkproject`
-- BSP 配置和 BSP 源码：`AD9361_test2_bsp/system.mss`、`include/`、`libsrc/`
-- 硬件平台：`System_wrapper_hw_platform_0/`、`System_wrapper.hdf`
+1. JTAG 连接板卡
+2. Program FPGA
+3. 下载 `AD9361_test2.elf`
+4. 打开串口观察输出
 
-不跟踪：
+正常情况下应看到类似信息：
 
-- SDK/Eclipse workspace runtime：`.metadata/`
-- 本机调试启动脚本：`.sdk/`
-- 远程系统临时工程：`RemoteSystemsTempFiles/`
-- WebTalk 和 Xilinx 日志：`webtalk/`、`*.jou`、`*.log`
-- 构建产物：`Debug/`、`Release/`、`*.o`、`*.d`、`*.elf`、`*.a`
-- 软件自动备份和临时文件：`*.bak`、`*.backup.*`、`*.tmp`、`*~`
+- `Ethernet ready`
+- MAC 地址
+- 静态 IP 地址
+- `UDP : listen on port 5001`
+- `UDP RX ready, max payload ...`
+- 收到数据时打印：`UDP recv seq=... payload=... aligned=...`
+- 启动 DMA 时打印：`DMA start seq=... len=...`
+- 完成 ACK 时打印：`ACK seq=... len=... total_bytes=... recent=... avg=...`
 
-## 注意事项
+## 上位机如何发送数据
 
-- 当前代码关闭了 I-Cache/D-Cache，但仍调用了 `Xil_DCacheFlushRange()`；如果后续打开 D-Cache，需要重新审视 DMA buffer 的 cache coherency。
-- `TX_BUFFER_BASE` 和 `RX_BUFFER_BASE` 是硬编码 DDR 地址，修改链接脚本或 DDR 分区时需要确认不会与 `.text`、堆、栈或其他 buffer 冲突。
-- `main.c` 中 DMA 循环会一直等待 `TxDone` 和 `RxDone`，如果硬件中断未连接或 DMA 发生错误，程序会卡在等待循环。调试时建议临时打开错误检查和超时保护。
-- AD9361 控制 GPIO 编号依赖当前硬件设计和 `parameters.h`，硬件平台变化后需要重新核对。
+脚本路径：
+
+[send_data.py](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/tools/pc_sender/send_data.py:1)
+
+### 发送测试数据
+
+```bash
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --port 5001 --test-size 4096 --chunk-size 1024
+```
+
+### 发送文件
+
+```bash
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --port 5001 --file data.bin --chunk-size 1024
+```
+
+### 参数说明
+
+- `--ip`：板端 IP
+- `--port`：板端 UDP 端口，默认 `5001`
+- `--test-size`：发送指定长度的测试数据
+- `--file`：从文件读取原始字节发送
+- `--chunk-size`：每个 UDP chunk 的 payload 大小
+- `--timeout`：等待 ACK 超时时间
+- `--retries`：单个 chunk 最大重发次数
+
+### 使用建议
+
+- 初始调试建议 `chunk-size = 1024`
+- 不要一开始就超过 `1400`
+- 如果经常收到 `BUSY`，先减小 chunk 或增加发送间隔
+
+## 当前 BSP lwIP 配置状态
+
+根据现有 `AD9361_test2_bsp/ps7_cortexa9_0/include/lwipopts.h` 与 `xlwipconfig.h`：
+
+- `NO_SYS = 1`
+- `LWIP_SOCKET = 0`
+- `LWIP_NETCONN = 0`
+- `LWIP_UDP = 1`
+- `LWIP_DHCP = 0`
+- `MEM_SIZE = 131072`
+- `MEMP_NUM_PBUF = 16`
+- `MEMP_NUM_UDP_PCB = 4`
+- `PBUF_POOL_SIZE = 256`
+- `PBUF_POOL_BUFSIZE = 1700`
+- `IP_REASSEMBLY = 1`
+- `IP_FRAG = 1`
+- `IP_FRAG_MAX_MTU = 1500`
+- `XLWIP_CONFIG_N_TX_DESC = 64`
+- `XLWIP_CONFIG_N_RX_DESC = 64`
+
+### 当前建议你手动重点检查
+
+- `MEMP_NUM_PBUF`
+  当前 `16`，如果后续丢包或 ACK 超时，建议升到 `32`
+
+- `MEM_SIZE`
+  当前 `131072`，如网络流量增大可考虑 `262144`
+
+- `LWIP_FULL_CSUM_OFFLOAD_RX`
+- `LWIP_FULL_CSUM_OFFLOAD_TX`
+  当前 BSP 中是 `1`。如果怀疑校验和卸载与当前硬件配置不匹配，建议手动关掉再测。
+
+## 当前已知限制
+
+- 当前仓库里 `AD9361_test2_bsp/ps7_cortexa9_0/lib/` 还没有现成产物，因此我只能做源码级编译检查，不能完整链接最终 ELF。
+- 当前网络路径只用了 DMA 的 `MM2S` 方向，也就是“PS 内存 -> PL”。
+- 当前采用停止等待协议，优先保证稳定，不追求最高吞吐。
+- 当前只记住“最近一次已成功完成的 seq”，用于处理 ACK 重传场景。
+
+## 建议测试顺序
+
+1. 先 Build BSP，确认 `libxil.a`、`liblwip4.a` 生成
+2. Build `AD9361_test2`
+3. 板端启动，看串口是否打印网口 ready
+4. PC 先 ping 板端 IP
+5. 用 `--test-size 64 --chunk-size 32` 做最小闭环
+6. 再测 `1024`、`4096`、文件发送
+7. 最后再考虑增大 chunk 或调 BSP 参数
+
+## 文档维护约定
+
+从现在开始，这个根目录 `README.md` 作为项目总说明持续维护。  
+后续如果再改：
+
+- 协议格式
+- 网口端口
+- DMA buffer 规则
+- 调试步骤
+- BSP 参数建议
+- 工程结构
+
+都应该同步更新这里。

@@ -29,6 +29,20 @@ SDK.log
 *.gcda
 *.gcov
 
+# Keep BSP exported headers/sources/libs under version control
+!AD9361_test2_bsp/ps7_cortexa9_0/include/
+!AD9361_test2_bsp/ps7_cortexa9_0/include/**
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/**
+!AD9361_test2_bsp/ps7_cortexa9_0/libsrc/
+!AD9361_test2_bsp/ps7_cortexa9_0/libsrc/**
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/*.a
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/**/*.a
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/*.o
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/**/*.o
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/*.d
+!AD9361_test2_bsp/ps7_cortexa9_0/lib/**/*.d
+
 # Generated make dependency fragments in build directories
 objects.mk
 sources.mk
