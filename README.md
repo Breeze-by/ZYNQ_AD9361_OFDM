@@ -38,7 +38,9 @@ ZYNQ_AD9361_OFDM/
 |   |   `-- Xilinx.spec
 |   `-- tools/
 |       `-- pc_sender/
-|           `-- send_data.py
+|           |-- send_data.py
+|           |-- sender_core.py
+|           `-- sender_gui.py
 |-- AD9361_test2_bsp/
 |   |-- system.mss
 |   `-- ps7_cortexa9_0/
@@ -89,7 +91,10 @@ ZYNQ_AD9361_OFDM/
   公共参数、公共头文件和基础工具函数。
 
 - `tools/pc_sender/send_data.py`
-  上位机 UDP 发送脚本。
+  命令行 UDP 发送脚本。
+
+- `tools/pc_sender/sender_gui.py`
+  上位机图形界面，支持文件选择、速率配置、实时状态和可视化。
 
 ### `AD9361_test2_bsp`
 
@@ -240,6 +245,7 @@ uint32_t transfer_len;
 脚本路径：
 
 [send_data.py](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/tools/pc_sender/send_data.py:1)
+[sender_gui.py](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/AD9361_test2/tools/pc_sender/sender_gui.py:1)
 
 ### 发送测试数据
 
@@ -262,12 +268,79 @@ python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --port 5001 -
 - `--chunk-size`：每个 UDP chunk 的 payload 大小
 - `--timeout`：等待 ACK 超时时间
 - `--retries`：单个 chunk 最大重发次数
+- `--target-rate-kib-s`：可选的发送限速，`0` 表示不主动限速
 
 ### 使用建议
 
 - 初始调试建议 `chunk-size = 1024`
 - 不要一开始就超过 `1400`
 - 如果经常收到 `BUSY`，先减小 chunk 或增加发送间隔
+
+## 上位机图形界面
+
+图形界面入口：
+
+```bash
+python AD9361_test2/tools/pc_sender/sender_gui.py
+```
+
+### 当前 UI 支持的能力
+
+- 选择常见二进制源文件直接发送
+  - `jpg / jpeg / png / bmp / gif`
+  - `bin`
+  - `mp4 / mov / avi / ts`
+  - `txt / csv / json`
+  - 以及任意其他原始文件
+
+- 发送测试数据
+  - 输入测试字节数
+  - 不依赖文件即可做链路压测
+
+- 配置网络参数
+  - 目标 IP
+  - 目标端口
+  - Chunk 大小
+  - ACK 超时
+  - 最大重试次数
+  - 发送限速 `KiB/s`
+
+- 一键发送 / 停止发送
+
+- 实时状态显示
+  - 当前状态
+  - 最近 ACK 状态
+  - 最近 Seq
+  - 最近 RTT
+  - 当前发送速率
+  - 平均发送速率
+  - 估计 PS 侧速率
+  - ACK OK 数
+  - Timeout 数
+  - 重试次数
+  - BUSY 次数
+  - 错误 ACK 次数
+
+- 实时可视化
+  - 发送速率曲线
+  - 估计 PS 侧速率曲线
+  - RTT 曲线
+
+- 事件日志
+  - 每个 chunk 的发送
+  - ACK OK
+  - ACK 非 OK 状态
+  - Timeout
+  - 停止 / 完成 / 错误
+
+### 关于“估计 PS 侧速率”
+
+上位机拿不到板端 DMA 的绝对真实瞬时速率，只能通过 ACK 返回时间做估算。  
+当前 UI 里显示的“估计 PS 侧速率”本质上是：
+
+- `transfer_len / (发送该 chunk 到收到 ACK 的时间)`
+
+它更适合作为联调指标，而不是严格的硬件 DMA 基准值。
 
 ## 当前 BSP lwIP 配置状态
 

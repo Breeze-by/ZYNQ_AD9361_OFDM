@@ -2,7 +2,7 @@
 
 这是 `AD9361_test2` 应用工程自己的说明文档，重点关注源码分层。
 
-更完整的项目背景、联调步骤、网络协议、BSP 参数建议，请优先看仓库根目录 [README.md](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/README.md:1)。
+更完整的项目背景、联调步骤、网络协议、BSP 参数建议和上位机 UI 使用方法，请优先看仓库根目录 [README.md](C:/Users/29143/Desktop/ZYNQ_AD9361_OFDM/README.md:1)。
 
 ## 当前源码结构
 
@@ -39,6 +39,9 @@ src/
 
 - `drivers/net/`
   lwIP 网络初始化、UDP 接收、ACK 协议、DMA TX 投递。
+
+- `tools/pc_sender/`
+  上位机发送端工具，包含命令行脚本、发送核心模块和图形界面。
 
 - `drivers/timer/`
   SCU 私有定时器封装。
