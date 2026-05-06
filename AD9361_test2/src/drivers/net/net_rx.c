@@ -31,6 +31,7 @@ static uint64_t total_completed_bytes;
 static uint32_t total_completed_chunks;
 static XTime first_completion_time;
 static XTime last_completion_time;
+static XTime active_dma_start_time;
 static int has_completion_time;
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
@@ -52,19 +53,19 @@ static uint32_t net_rate_x100_kib(uint32_t bytes, uint64_t elapsed_us)
 }
 
 static void net_print_rate_line(const char *prefix, uint32_t seq, uint32_t transfer_len,
-    uint32_t recent_rate_x100_kib, uint32_t avg_rate_x100_kib)
+    uint64_t dma_elapsed_us, uint32_t recent_rate_x100_kib, uint32_t avg_rate_x100_kib)
 {
     UART_Printf(
-        "%s seq=%lu len=%lu total_bytes=%lu chunks=%lu recent=%lu.%02lu KiB/s avg=%lu.%02lu KiB/s\r\n",
+        "%s seq=%lu len=%lu dma_us=%lu rate=%lu.%02lu avg=%lu.%02lu total=%lu\r\n",
         prefix,
         (unsigned long)seq,
         (unsigned long)transfer_len,
-        (unsigned long)total_completed_bytes,
-        (unsigned long)total_completed_chunks,
+        (unsigned long)dma_elapsed_us,
         (unsigned long)(recent_rate_x100_kib / 100U),
         (unsigned long)(recent_rate_x100_kib % 100U),
         (unsigned long)(avg_rate_x100_kib / 100U),
-        (unsigned long)(avg_rate_x100_kib % 100U));
+        (unsigned long)(avg_rate_x100_kib % 100U),
+        (unsigned long)total_completed_bytes);
 }
 
 static void net_send_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
@@ -117,6 +118,7 @@ static void net_start_dma_transfer(void)
     UART_Printf("DMA start seq=%lu len=%lu\r\n",
         (unsigned long)pending_chunk.seq,
         (unsigned long)pending_chunk.transfer_len);
+    XTime_GetTime(&active_dma_start_time);
 
     active_chunk = pending_chunk;
     pending_chunk.valid = 0;
@@ -283,6 +285,7 @@ void Net_RxPoll(void)
 
     if (TxDone != 0) {
         XTime now_time;
+        uint64_t dma_elapsed_us;
         uint64_t recent_elapsed_us;
         uint64_t total_elapsed_us;
         uint32_t recent_rate_x100_kib;
@@ -301,15 +304,21 @@ void Net_RxPoll(void)
             has_completion_time = 1;
         }
 
+        dma_elapsed_us = net_elapsed_us(active_dma_start_time, now_time);
         recent_elapsed_us = net_elapsed_us(last_completion_time, now_time);
         total_elapsed_us = net_elapsed_us(first_completion_time, now_time);
-        recent_rate_x100_kib = net_rate_x100_kib(active_chunk.transfer_len, recent_elapsed_us);
+        if (recent_elapsed_us == 0U) {
+            recent_rate_x100_kib = net_rate_x100_kib(active_chunk.transfer_len, dma_elapsed_us);
+        } else {
+            recent_rate_x100_kib = net_rate_x100_kib(active_chunk.transfer_len, recent_elapsed_us);
+        }
         avg_rate_x100_kib = net_rate_x100_kib((uint32_t)total_completed_bytes, total_elapsed_us);
         last_completion_time = now_time;
 
         net_send_ack(&active_chunk.peer_addr, active_chunk.peer_port, active_chunk.seq,
             NET_ACK_STATUS_OK, active_chunk.transfer_len);
         net_print_rate_line("ACK", active_chunk.seq, active_chunk.transfer_len,
+            dma_elapsed_us,
             recent_rate_x100_kib, avg_rate_x100_kib);
 
         dma_busy = 0;
