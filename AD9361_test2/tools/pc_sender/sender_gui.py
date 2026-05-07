@@ -94,11 +94,12 @@ class SenderGui:
         self.timeout_var = tk.StringVar(value="1.0")
         self.retries_var = tk.StringVar(value="10")
         self.target_rate_var = tk.StringVar(value="0")
-        self.window_var = tk.StringVar(value="16")
-        self.test_size_var = tk.StringVar(value="4096")
+        self.window_var = tk.StringVar(value="64")
+        self.test_size_var = tk.StringVar(value=str(64 * 1024 * 1024))
         self.socket_buffer_var = tk.StringVar(value=str(4 * 1024 * 1024))
-        self.progress_interval_var = tk.StringVar(value="100")
+        self.progress_interval_var = tk.StringVar(value="1000")
         self.verbose_var = tk.BooleanVar(value=False)
+        self.throughput_mode_var = tk.BooleanVar(value=True)
 
         self.status_text_var = tk.StringVar(value="Idle")
         self.progress_text_var = tk.StringVar(value="0 / 0")
@@ -192,6 +193,8 @@ class SenderGui:
         ttk.Label(test_row, text="Test Bytes", width=12).pack(side=tk.LEFT)
         self.test_entry = ttk.Entry(test_row, textvariable=self.test_size_var, width=16)
         self.test_entry.pack(side=tk.LEFT)
+        ttk.Button(test_row, text="64 MiB", command=lambda: self._set_test_size_mib(64)).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(test_row, text="256 MiB", command=lambda: self._set_test_size_mib(256)).pack(side=tk.LEFT, padx=(8, 0))
 
         net_box = ttk.LabelFrame(parent, text="Network and Sender", padding=12)
         net_box.pack(fill=tk.X, pady=(12, 0))
@@ -214,10 +217,12 @@ class SenderGui:
             ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
             ttk.Entry(row, textvariable=variable, width=18).pack(side=tk.LEFT)
 
+        ttk.Checkbutton(net_box, text="Throughput Mode", variable=self.throughput_mode_var,
+            command=self._update_throughput_mode).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
         ttk.Label(
             net_box,
-            text="Keep verbose events disabled when measuring throughput.",
+            text="Throughput mode disables packet logs and uses at least 1000 ms progress updates.",
             foreground="#555555",
         ).pack(anchor=tk.W, pady=(6, 0))
 
@@ -316,6 +321,21 @@ class SenderGui:
         suffix = path.suffix.lower() if path.suffix else "(no extension)"
         self.file_info_var.set(f"{path.name} | {suffix} | {path.stat().st_size} bytes")
 
+    def _set_test_size_mib(self, mib: int):
+        self.mode_var.set("test")
+        self.test_size_var.set(str(mib * 1024 * 1024))
+        self._update_mode_widgets()
+
+    def _update_throughput_mode(self):
+        if self.throughput_mode_var.get():
+            self.verbose_var.set(False)
+            try:
+                current_interval = int(self.progress_interval_var.get().strip())
+            except ValueError:
+                current_interval = 0
+            if current_interval < 1000:
+                self.progress_interval_var.set("1000")
+
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
         self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
@@ -334,6 +354,15 @@ class SenderGui:
 
     def _start_send(self):
         try:
+            throughput_mode = bool(self.throughput_mode_var.get())
+            progress_interval_ms = int(self.progress_interval_var.get().strip())
+            verbose_events = bool(self.verbose_var.get()) and not throughput_mode
+            if throughput_mode and progress_interval_ms < 1000:
+                progress_interval_ms = 1000
+                self.progress_interval_var.set(str(progress_interval_ms))
+            if throughput_mode:
+                self.verbose_var.set(False)
+
             payload = self._build_payload()
             config = SenderConfig(
                 ip=self.ip_var.get().strip(),
@@ -344,8 +373,9 @@ class SenderGui:
                 target_rate_kib_s=float(self.target_rate_var.get().strip()),
                 window_size=int(self.window_var.get().strip()),
                 socket_buffer_bytes=int(self.socket_buffer_var.get().strip()),
-                progress_interval_s=max(int(self.progress_interval_var.get().strip()), 10) / 1000.0,
-                verbose_events=bool(self.verbose_var.get()),
+                progress_interval_s=max(progress_interval_ms, 10) / 1000.0,
+                verbose_events=verbose_events,
+                throughput_mode=throughput_mode,
             )
         except Exception as exc:
             messagebox.showerror("Parameter Error", str(exc))
@@ -358,7 +388,7 @@ class SenderGui:
         self.status_text_var.set("Sending")
         self._append_log(
             f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
-            f"chunk={config.chunk_size} window={config.window_size}"
+            f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode}"
         )
 
         self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)
@@ -449,7 +479,10 @@ class SenderGui:
             self.rtt_chart.add_point(stats.last_rtt_ms)
 
             now = time.time()
-            if self.verbose_var.get() or (now - self.last_summary_log_time) >= 0.5:
+            log_interval_s = 0.5
+            if self.sender is not None and self.sender.config.throughput_mode:
+                log_interval_s = max(self.sender.config.progress_interval_s, 1.0)
+            if self.verbose_var.get() or (now - self.last_summary_log_time) >= log_interval_s:
                 self.last_summary_log_time = now
                 self._append_log(
                     f"PROGRESS acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "

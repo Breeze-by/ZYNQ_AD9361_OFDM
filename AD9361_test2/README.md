@@ -83,11 +83,11 @@ Board-side values:
 Host defaults:
 
 - `chunk_size = 1456`
-- `window_size = 16`
+- `window_size = 64`
 - `socket_buffer_bytes = 4194304`
 - `progress_interval_ms = 100`
 - `verbose_events = false`
-- `throughput_mode = false`
+- `throughput_mode = true` in the GUI
 
 `1456` is chosen to keep `16-byte application header + 1456-byte payload = 1472-byte UDP payload`, which stays within the common Ethernet MTU without IP fragmentation.
 
@@ -128,23 +128,25 @@ Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per
 Example throughput command:
 
 ```bash
-python tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1456 --window-size 32 --throughput-mode
+python tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1456 --window-size 64 --throughput-mode
 ```
+
+The same test can be run from the GUI by selecting `Test Data`, keeping `Throughput Mode` enabled, clicking `64 MiB`, and pressing `Start`.
 
 ## Recommended Operating Range
 
 Start with:
 
 - `chunk_size = 1456`
-- `window_size = 16`
+- `window_size = 64`
 - `target_rate_kib_s = 0`
 
 If stable, try:
 
-1. `window_size = 24`
-2. `window_size = 32`
+1. Keep `window_size = 64` as the current recommended upper bound.
+2. If you go above `64`, first confirm `busy=0` and the aggregation buffers are not persistently full.
 
-Only increase `chunk_size` if you also re-check the MTU budget. Going above `1456` payload bytes will usually trigger IP fragmentation and often reduces real throughput. Prefer increasing `window_size` up to `64` before changing chunk size.
+Only increase `chunk_size` if you also re-check the MTU budget. Going above `1456` payload bytes will usually trigger IP fragmentation and often reduces real throughput.
 
 ## Important Files
 

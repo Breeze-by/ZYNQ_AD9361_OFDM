@@ -43,7 +43,7 @@ class SenderConfig:
     timeout: float = 1.0
     retries: int = 10
     target_rate_kib_s: float = 0.0
-    window_size: int = 16
+    window_size: int = 64
     socket_buffer_bytes: int = 4 * 1024 * 1024
     progress_interval_s: float = 0.1
     verbose_events: bool = False
@@ -87,7 +87,7 @@ def parse_args():
     parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
     parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
         help="optional offered load cap in KiB/s, 0 means unlimited")
-    parser.add_argument("--window-size", type=int, default=16,
+    parser.add_argument("--window-size", type=int, default=64,
         help="number of in-flight chunks allowed before waiting for ACKs")
     parser.add_argument("--socket-buffer-bytes", type=int, default=4 * 1024 * 1024,
         help="host socket send/recv buffer size")
