@@ -45,6 +45,13 @@ static uint32_t total_busy_acks;
 static uint32_t total_error_acks;
 static uint32_t total_pending_acks;
 static uint32_t total_duplicate_acks;
+static uint32_t total_ok_acks;
+static uint32_t ack_batch_fill_count;
+static uint32_t ack_batch_last_seq;
+static uint32_t ack_batch_last_len;
+static ip_addr_t ack_batch_peer_addr;
+static u16_t ack_batch_peer_port;
+static int ack_batch_valid;
 static XTime active_dma_start_time;
 static XTime first_recv_time;
 static XTime last_recv_time;
@@ -109,12 +116,13 @@ static void net_print_stats_summary(uint64_t recv_gap_us, uint32_t recent_rate_x
     uint32_t avg_rate_x100_kib)
 {
     UART_Printf(
-        "STAT chunks=%lu total=%lu q=%lu/%u qmax=%lu busy=%lu pend=%lu dup=%lu err=%lu gap_us=%lu rate=%lu.%02lu avg=%lu.%02lu\r\n",
+        "STAT chunks=%lu total=%lu q=%lu/%u qmax=%lu okack=%lu busy=%lu pend=%lu dup=%lu err=%lu gap_us=%lu rate=%lu.%02lu avg=%lu.%02lu\r\n",
         (unsigned long)total_completed_chunks,
         (unsigned long)total_completed_bytes,
         (unsigned long)queue_count,
         (unsigned)NET_TX_QUEUE_DEPTH,
         (unsigned long)queue_max_depth,
+        (unsigned long)total_ok_acks,
         (unsigned long)total_busy_acks,
         (unsigned long)total_pending_acks,
         (unsigned long)total_duplicate_acks,
@@ -150,6 +158,23 @@ static void net_send_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
     memcpy(ack_pbuf->payload, &ack_packet, sizeof(ack_packet));
     udp_sendto(udp_control_pcb, ack_pbuf, addr, port);
     pbuf_free(ack_pbuf);
+}
+
+static void net_send_ok_ack_batch_if_needed(int force_send)
+{
+    if (ack_batch_valid == 0) {
+        return;
+    }
+
+    if (force_send == 0 && ack_batch_fill_count < NET_ACK_BATCH_COUNT) {
+        return;
+    }
+
+    net_send_ack(&ack_batch_peer_addr, ack_batch_peer_port, ack_batch_last_seq,
+        NET_ACK_STATUS_OK, ack_batch_last_len);
+    total_ok_acks += 1U;
+    ack_batch_valid = 0;
+    ack_batch_fill_count = 0U;
 }
 
 static net_pending_chunk_t *net_find_queued_chunk_by_seq(uint32_t seq)
@@ -441,6 +466,12 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     total_error_acks = 0U;
     total_pending_acks = 0U;
     total_duplicate_acks = 0U;
+    total_ok_acks = 0U;
+    ack_batch_fill_count = 0U;
+    ack_batch_last_seq = 0U;
+    ack_batch_last_len = 0U;
+    ack_batch_peer_port = 0U;
+    ack_batch_valid = 0;
     has_recv_time = 0;
 
     udp_recv(udp_control_pcb, net_udp_receive_callback, NULL);
@@ -472,6 +503,7 @@ void Net_RxPoll(void)
             NET_ACK_STATUS_DMA_ERROR, active_chunk.transfer_len);
         dma_busy = 0;
         active_chunk.valid = 0;
+        net_send_ok_ack_batch_if_needed(1);
         net_release_queue_head();
         Error = 0;
         TxDone = 0;
@@ -500,8 +532,12 @@ void Net_RxPoll(void)
         avg_recv_elapsed_us = net_elapsed_us(first_recv_time, active_chunk.accept_time);
         avg_rate_x100_kib = net_rate_x100_kib((uint32_t)total_completed_bytes, avg_recv_elapsed_us);
 
-        net_send_ack(&active_chunk.peer_addr, active_chunk.peer_port, active_chunk.seq,
-            NET_ACK_STATUS_OK, active_chunk.transfer_len);
+        ack_batch_last_seq = active_chunk.seq;
+        ack_batch_last_len = active_chunk.transfer_len;
+        ip_addr_copy(ack_batch_peer_addr, active_chunk.peer_addr);
+        ack_batch_peer_port = active_chunk.peer_port;
+        ack_batch_fill_count += 1U;
+        ack_batch_valid = 1;
         if (net_should_report_packet_log() != 0) {
             net_print_rate_line("ACK", active_chunk.seq, active_chunk.transfer_len,
                 dma_elapsed_us, app_elapsed_us, active_chunk.recv_gap_us,
@@ -515,6 +551,10 @@ void Net_RxPoll(void)
         net_release_queue_head();
         TxDone = 0;
         Error = 0;
+
+        if ((queue_count == 0U) || (ack_batch_fill_count >= NET_ACK_BATCH_COUNT)) {
+            net_send_ok_ack_batch_if_needed(1);
+        }
 
         if (queue_count != 0U) {
             net_start_dma_transfer();

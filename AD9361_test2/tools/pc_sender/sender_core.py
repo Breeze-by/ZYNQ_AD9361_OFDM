@@ -74,6 +74,7 @@ class SenderStats:
     estimated_ps_rate_kib_s: float = 0.0
     ack_pending: int = 0
     delivered_rate_kib_s: float = 0.0
+    ack_batches: int = 0
 
 
 def parse_args():
@@ -274,23 +275,48 @@ class UdpSender:
                     stats.last_transfer_len = transfer_len
 
                     if status == ACK_STATUS_OK:
-                        outstanding.pop(ack_seq)
-                        acked[ack_seq] = True
+                        completed_seqs = sorted(seq for seq in outstanding.keys() if seq <= ack_seq)
+                        if not completed_seqs:
+                            self._emit(callback, "ack_ignored", {
+                                "seq": ack_seq,
+                                "status": status,
+                                "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                                "transfer_len": transfer_len,
+                            })
+                            continue
+
+                        last_completed_seq = completed_seqs[-1]
+                        last_entry = outstanding[last_completed_seq]
+
+                        for completed_seq in completed_seqs:
+                            completed_entry = outstanding.pop(completed_seq)
+                            acked[completed_seq] = True
+                            stats.bytes_sent = max(stats.bytes_sent, completed_entry["end"])
+                            stats.bytes_acked += len(completed_entry["chunk"])
+                            stats.chunks_acked += 1
+
                         while base_seq < total_chunks and acked[base_seq]:
                             base_seq += 1
 
-                        stats.bytes_sent = max(stats.bytes_sent, entry["end"])
-                        stats.bytes_acked += len(chunk)
-                        stats.chunks_acked += 1
-                        stats.ack_ok += 1
-                        self._update_rates(stats, len(chunk), transfer_len, ack_time, entry["tx_time"])
+                        stats.ack_ok += len(completed_seqs)
+                        stats.ack_batches += 1
+                        stats.last_seq = last_completed_seq
+                        stats.last_transfer_len = transfer_len
+                        self._update_rates(
+                            stats,
+                            len(last_entry["chunk"]),
+                            transfer_len,
+                            ack_time,
+                            last_entry["tx_time"],
+                        )
                         if self.config.verbose_events:
                             self._emit(callback, "ack_ok", {
-                                "seq": ack_seq,
-                                "payload_len": len(chunk),
+                                "seq": last_completed_seq,
+                                "payload_len": len(last_entry["chunk"]),
                                 "transfer_len": transfer_len,
-                                "offset": entry["start"],
-                                "end": entry["end"],
+                                "offset": last_entry["start"],
+                                "end": last_entry["end"],
+                                "acked_count": len(completed_seqs),
                                 "window_used": len(outstanding),
                                 "stats": stats,
                             })

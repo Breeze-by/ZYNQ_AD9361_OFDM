@@ -32,6 +32,7 @@ The link now behaves like a selective-repeat sliding window:
 - ACKs may arrive out of order.
 - The host matches ACKs by `seq`, not by "oldest outstanding chunk only".
 - The board keeps a DMA queue and a small completed-history cache.
+- Successful `OK` ACKs are cumulative instead of one-per-packet.
 - Retransmitted chunks are deduplicated:
   - If a chunk is already completed, the board resends `OK`.
   - If a chunk is still active or queued, the board returns `PENDING`.
@@ -43,7 +44,9 @@ This removes the previous failure mode where `window_size > 4` caused "unexpecte
 
 `OK`
 
-- The chunk has completed the PS -> DMA -> PL transfer.
+- Cumulative ACK for successful DMA completions.
+- `seq` means the highest consecutively completed chunk sequence on the board.
+- The host treats every outstanding chunk with `chunk_seq <= ack.seq` as completed.
 
 `PENDING`
 
@@ -71,6 +74,7 @@ Board-side values:
   - Slot size = `131072 / 32 = 4096` bytes
   - `NET_DEFAULT_CHUNK_SIZE_BYTES = 1456`
   - `NET_MAX_RECOMMENDED_WINDOW_SIZE = 32`
+  - `NET_ACK_BATCH_COUNT = 10`
 
 Host defaults:
 
@@ -99,6 +103,7 @@ The DMA engine itself is normally faster than the observed end-to-end throughput
 - the queue depth is larger than before
 - the host window is allowed to exceed `1`
 - ACK handling is no longer strictly in-order
+- the board emits one cumulative `OK` ACK per batch instead of one `OK` per chunk
 - the host GUI no longer logs every packet by default
 - host progress updates are throttled to reduce `PC -> PS` overhead
 
