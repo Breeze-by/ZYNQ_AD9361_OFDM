@@ -7,8 +7,10 @@ static net_stats_t net_stats;
 static XTime stats_start_time;
 static XTime stats_last_print_time;
 static uint64_t last_rx_bytes;
+static uint64_t last_accepted_bytes;
 static uint64_t last_dma_bytes;
 static uint64_t last_rx_packets;
+static uint64_t last_accepted_packets;
 static uint64_t last_dma_done;
 
 static uint64_t stats_elapsed_us(XTime start_time, XTime end_time)
@@ -44,8 +46,10 @@ void NetStats_Init(void)
     XTime_GetTime(&stats_start_time);
     stats_last_print_time = stats_start_time;
     last_rx_bytes = 0U;
+    last_accepted_bytes = 0U;
     last_dma_bytes = 0U;
     last_rx_packets = 0U;
+    last_accepted_packets = 0U;
     last_dma_done = 0U;
 }
 
@@ -59,6 +63,12 @@ void NetStats_OnRxPacket(uint32_t packet_bytes, uint32_t payload_bytes)
     net_stats.rx_packets += 1U;
     net_stats.rx_bytes += packet_bytes;
     net_stats.rx_payload_bytes += payload_bytes;
+}
+
+void NetStats_OnAcceptedPacket(uint32_t payload_bytes)
+{
+    net_stats.accepted_packets += 1U;
+    net_stats.accepted_payload_bytes += payload_bytes;
 }
 
 void NetStats_OnBadMagic(void)
@@ -161,12 +171,16 @@ void NetStats_PrintPeriodic(void)
     uint64_t interval_us;
     uint64_t total_us;
     uint64_t interval_rx_bytes;
+    uint64_t interval_accepted_bytes;
     uint64_t interval_dma_bytes;
     uint64_t interval_rx_packets;
+    uint64_t interval_accepted_packets;
     uint64_t interval_dma_done;
     uint32_t rx_rate_x100_kib;
+    uint32_t accepted_rate_x100_kib;
     uint32_t dma_rate_x100_kib;
     uint32_t avg_rx_rate_x100_kib;
+    uint32_t avg_accepted_rate_x100_kib;
     uint32_t avg_dma_rate_x100_kib;
 
     XTime_GetTime(&now_time);
@@ -177,28 +191,38 @@ void NetStats_PrintPeriodic(void)
 
     total_us = stats_elapsed_us(stats_start_time, now_time);
     interval_rx_bytes = net_stats.rx_payload_bytes - last_rx_bytes;
+    interval_accepted_bytes = net_stats.accepted_payload_bytes - last_accepted_bytes;
     interval_dma_bytes = net_stats.dma_bytes_total - last_dma_bytes;
     interval_rx_packets = net_stats.rx_packets - last_rx_packets;
+    interval_accepted_packets = net_stats.accepted_packets - last_accepted_packets;
     interval_dma_done = net_stats.dma_done_count - last_dma_done;
     rx_rate_x100_kib = stats_rate_x100_kib(interval_rx_bytes, interval_us);
+    accepted_rate_x100_kib = stats_rate_x100_kib(interval_accepted_bytes, interval_us);
     dma_rate_x100_kib = stats_rate_x100_kib(interval_dma_bytes, interval_us);
     avg_rx_rate_x100_kib = stats_rate_x100_kib(net_stats.rx_payload_bytes, total_us);
+    avg_accepted_rate_x100_kib = stats_rate_x100_kib(net_stats.accepted_payload_bytes, total_us);
     avg_dma_rate_x100_kib = stats_rate_x100_kib(net_stats.dma_bytes_total, total_us);
 
     UART_Printf(
-        "STAT rx=%lu.%02lu dma=%lu.%02lu avg_rx=%lu.%02lu avg_dma=%lu.%02lu "
-        "rx_pkt=%lu dma_done=%lu q=%lu/%u qmax=%lu ack=%lu nack=%lu "
+        "STAT rx=%lu.%02lu acc=%lu.%02lu dma=%lu.%02lu "
+        "avg_rx=%lu.%02lu avg_acc=%lu.%02lu avg_dma=%lu.%02lu "
+        "rx_pkt=%lu acc_pkt=%lu dma_done=%lu q=%lu/%u qmax=%lu ack=%lu nack=%lu "
         "crc=%lu badlen=%lu badmagic=%lu busy=%lu pend=%lu dup=%lu drop=%lu dma_err=%lu "
         "agg=%lu agg_full=%lu agg_to=%lu agg_avg=%lu agg_min=%lu agg_max=%lu\r\n",
         (unsigned long)(rx_rate_x100_kib / 100U),
         (unsigned long)(rx_rate_x100_kib % 100U),
+        (unsigned long)(accepted_rate_x100_kib / 100U),
+        (unsigned long)(accepted_rate_x100_kib % 100U),
         (unsigned long)(dma_rate_x100_kib / 100U),
         (unsigned long)(dma_rate_x100_kib % 100U),
         (unsigned long)(avg_rx_rate_x100_kib / 100U),
         (unsigned long)(avg_rx_rate_x100_kib % 100U),
+        (unsigned long)(avg_accepted_rate_x100_kib / 100U),
+        (unsigned long)(avg_accepted_rate_x100_kib % 100U),
         (unsigned long)(avg_dma_rate_x100_kib / 100U),
         (unsigned long)(avg_dma_rate_x100_kib % 100U),
         (unsigned long)interval_rx_packets,
+        (unsigned long)interval_accepted_packets,
         (unsigned long)interval_dma_done,
         (unsigned long)net_stats.queue_occupancy_current,
         (unsigned)NET_DMA_QUEUE_CAPACITY,
@@ -222,7 +246,9 @@ void NetStats_PrintPeriodic(void)
 
     stats_last_print_time = now_time;
     last_rx_bytes = net_stats.rx_payload_bytes;
+    last_accepted_bytes = net_stats.accepted_payload_bytes;
     last_dma_bytes = net_stats.dma_bytes_total;
     last_rx_packets = net_stats.rx_packets;
+    last_accepted_packets = net_stats.accepted_packets;
     last_dma_done = net_stats.dma_done_count;
 }

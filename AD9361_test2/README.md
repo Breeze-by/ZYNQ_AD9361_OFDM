@@ -36,7 +36,11 @@ The link now uses a bounded sliding-window sender instead of the old stop-and-wa
   - If the queue is full and the sequence is new, the board returns `BUSY`.
 - Successful `OK` ACKs mean the payload was accepted into PS memory.
 
-The current implementation is intended for direct or normal LAN links where chunks are sent and received in sequence. The host treats `OK seq=N` as confirmation for all outstanding chunks with `seq <= N`. If the design must tolerate strong UDP reordering, the board should be changed to ACK a true contiguous-completed sequence or to emit per-chunk `OK` ACKs.
+With `NET_STRICT_IN_ORDER_RX=1`, the board only accepts `seq == expected_seq`
+into PS aggregation memory. Higher sequence numbers are not written into the
+DMA stream; they receive `PENDING` and are retried by the host. This keeps ACK
+v1 cumulative `OK seq=N` safe even when the board returns `BUSY` under buffer
+pressure.
 
 ## ACK Meanings
 
@@ -48,8 +52,8 @@ The current implementation is intended for direct or normal LAN links where chun
 
 `PENDING`
 
-- Reserved in the current aggregation path.
-- Duplicate accepted chunks are answered with `OK`.
+- The chunk is ahead of the board's next expected sequence and was not accepted.
+- The host retries it with a short backoff.
 
 `BUSY`
 
@@ -84,6 +88,7 @@ Board-side values:
   - `NET_ACK_COALESCE_PACKET_COUNT = 8`
   - `NET_ACK_COALESCE_TIMEOUT_US = 1000`
   - `NET_INPUT_POLL_BUDGET = 32`
+  - `NET_STRICT_IN_ORDER_RX = 1`
 
 Host defaults:
 
@@ -160,6 +165,20 @@ board `ack` should be lower than `rx_pkt` during clean transfers.
 main-loop pass. Xilinx `xemacpsif_input()` processes at most one queued packet per
 call in bare-metal `NO_SYS` mode, so batching reduces repeated per-packet main-loop
 work while keeping DMA/stat polling bounded.
+
+The board `STAT` line reports both offered UDP receive rate and accepted payload
+rate:
+
+- `rx` / `rx_pkt`
+  - UDP packets that reached the board receive callback, including packets later rejected as `BUSY` or `PENDING`
+- `acc` / `acc_pkt`
+  - payload actually accepted into PS aggregation memory
+- `dma`
+  - payload drained from PS aggregation blocks through AXI DMA
+
+For correctness, `acc` and `dma` are the important data-path rates. A high `rx`
+with much lower `acc` means the host is offering more traffic than the board can
+buffer or drain.
 
 Example throughput command:
 

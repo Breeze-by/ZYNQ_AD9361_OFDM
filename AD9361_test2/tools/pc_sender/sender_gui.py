@@ -485,7 +485,8 @@ class SenderGui:
             self.tx_packet_rate_var.set(f"{stats.packets_sent_per_second:.1f} pkt/s")
             self.ack_packet_rate_var.set(f"{stats.ack_received_per_second:.1f} pkt/s")
             self.window_average_var.set(
-                f"{stats.outstanding_window_avg:.1f} / {stats.outstanding_window_max}"
+                f"{stats.outstanding_window_avg:.1f} / {stats.outstanding_window_max} "
+                f"({stats.effective_window_size})"
             )
             self.idle_sleep_var.set(f"{stats.send_loop_sleep_time_s:.3f} s")
             self.empty_poll_var.set(str(stats.socket_timeout_wakeups))
@@ -511,6 +512,7 @@ class SenderGui:
                     f"inflight={payload.get('window_used', 0)} delivered={stats.delivered_rate_kib_s:.2f}KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"occ={stats.outstanding_window_avg:.1f}/{stats.outstanding_window_max} "
+                    f"win={stats.effective_window_size}/{self.sender.config.window_size if self.sender else 0} "
                     f"sleep={stats.send_loop_sleep_time_s:.3f}s empty={stats.socket_timeout_wakeups} "
                     f"busy={stats.ack_busy} pending={stats.ack_pending}"
                 )

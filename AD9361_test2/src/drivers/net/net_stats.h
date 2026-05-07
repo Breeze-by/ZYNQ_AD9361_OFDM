@@ -8,6 +8,8 @@ typedef struct {
     uint64_t rx_packets;
     uint64_t rx_bytes;
     uint64_t rx_payload_bytes;
+    uint64_t accepted_packets;
+    uint64_t accepted_payload_bytes;
     uint64_t bad_magic_count;
     uint64_t bad_length_count;
     uint64_t crc_error_count;
@@ -35,6 +37,7 @@ typedef struct {
 void NetStats_Init(void);
 const net_stats_t *NetStats_Get(void);
 void NetStats_OnRxPacket(uint32_t packet_bytes, uint32_t payload_bytes);
+void NetStats_OnAcceptedPacket(uint32_t payload_bytes);
 void NetStats_OnBadMagic(void);
 void NetStats_OnBadLength(void);
 void NetStats_OnCrcError(void);

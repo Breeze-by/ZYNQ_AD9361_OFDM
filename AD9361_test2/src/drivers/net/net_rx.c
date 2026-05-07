@@ -44,6 +44,7 @@ static int dma_busy;
 static uint32_t queue_occupancy_max;
 static uint64_t total_accepted_bytes;
 static uint32_t total_accepted_chunks;
+static uint32_t next_expected_seq;
 static int pending_ok_ack_valid;
 static ip_addr_t pending_ok_ack_addr;
 static u16_t pending_ok_ack_port;
@@ -216,6 +217,11 @@ static void net_record_accepted_chunk(uint32_t seq, uint32_t payload_len)
     entry->payload_len = payload_len;
     accepted_history_head_index =
         (accepted_history_head_index + 1U) % NET_COMPLETED_HISTORY_DEPTH;
+}
+
+static int net_seq_before(uint32_t seq_a, uint32_t seq_b)
+{
+    return ((int32_t)(seq_a - seq_b) < 0);
 }
 
 static int net_find_free_block(void)
@@ -466,6 +472,21 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
+#if NET_STRICT_IN_ORDER_RX
+    if (header.seq != next_expected_seq) {
+        if (net_seq_before(header.seq, next_expected_seq) != 0) {
+            NetStats_OnDuplicate();
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_OK,
+                (uint32_t)header.payload_len);
+        } else {
+            NetStats_OnPending();
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_PENDING, 0U);
+        }
+        pbuf_free(p);
+        return;
+    }
+#endif
+
     if (net_ensure_fill_block((uint32_t)header.payload_len) != 0) {
         NetStats_OnBusy();
         net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BUSY, 0U);
@@ -492,7 +513,11 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     XTime_GetTime(&block->last_write_time);
     total_accepted_bytes += header.payload_len;
     total_accepted_chunks += 1U;
+    NetStats_OnAcceptedPacket(header.payload_len);
     net_record_accepted_chunk(header.seq, header.payload_len);
+#if NET_STRICT_IN_ORDER_RX
+    next_expected_seq = header.seq + 1U;
+#endif
     net_queue_ok_ack(addr, port, header.seq, header.payload_len);
 
     if (net_should_report_packet_log() != 0) {
@@ -554,6 +579,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     queue_occupancy_max = 0U;
     total_accepted_bytes = 0U;
     total_accepted_chunks = 0U;
+    next_expected_seq = 0U;
     pending_ok_ack_valid = 0;
     pending_ok_ack_port = 0U;
     pending_ok_ack_seq = 0U;

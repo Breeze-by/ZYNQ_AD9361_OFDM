@@ -86,6 +86,7 @@ class SenderStats:
     outstanding_window_avg: float = 0.0
     outstanding_window_max: int = 0
     outstanding_window_samples: int = 0
+    effective_window_size: int = 0
 
 
 def parse_args():
@@ -299,8 +300,8 @@ class UdpSender:
 
         if status == ACK_STATUS_PENDING:
             stats.ack_pending += 1
-            entry["retry_deadline"] = ack_time + self.config.timeout
-            entry["retry_reason"] = "timeout"
+            entry["retry_deadline"] = ack_time + busy_retry_delay
+            entry["retry_reason"] = "pending"
             self._update_rates(stats, entry["payload_len"], transfer_len, ack_time, entry["tx_time"])
             if self.config.verbose_events:
                 self._emit(callback, "ack_status", {
@@ -352,6 +353,7 @@ class UdpSender:
     def _send_throughput(self, payload: bytes,
         callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         stats = SenderStats(total_size=len(payload))
+        stats.effective_window_size = self.config.window_size
         destination = (self.config.ip, self.config.port)
         total_chunks = (len(payload) + self.config.chunk_size - 1) // self.config.chunk_size
         packet_cache = [None] * total_chunks
@@ -370,12 +372,15 @@ class UdpSender:
         sock.setblocking(False)
         busy_retry_delay = max(min(self.config.timeout / 8.0, 0.02), 0.002)
         idle_sleep_s = 0.0005
+        effective_window_size = self.config.window_size
+        stable_ack_batches = 0
+        stats.effective_window_size = effective_window_size
 
         try:
             while base_seq < total_chunks:
                 made_progress = False
 
-                while next_seq < total_chunks and len(outstanding) < self.config.window_size:
+                while next_seq < total_chunks and len(outstanding) < effective_window_size:
                     if self._stop_requested:
                         self._emit(callback, "stopped", {"seq": next_seq, "bytes_sent": stats.bytes_sent})
                         stats.finished_at = time.time()
@@ -433,6 +438,16 @@ class UdpSender:
                     while base_seq < total_chunks and acked[base_seq]:
                         base_seq += 1
                     made_progress = True
+                    if status in (ACK_STATUS_BUSY, ACK_STATUS_PENDING):
+                        effective_window_size = max(1, max(effective_window_size // 2, 1))
+                        stable_ack_batches = 0
+                    elif completed > 0:
+                        stable_ack_batches += 1
+                        if (stable_ack_batches >= effective_window_size and
+                            effective_window_size < self.config.window_size):
+                            effective_window_size += 1
+                            stable_ack_batches = 0
+                    stats.effective_window_size = effective_window_size
                     if completed > 0:
                         self._emit_progress(callback, stats, len(outstanding))
 
@@ -459,6 +474,9 @@ class UdpSender:
                     stats.retries_used += 1
                     if reason == "timeout":
                         stats.timeout_count += 1
+                    effective_window_size = max(1, max(effective_window_size // 2, 1))
+                    stable_ack_batches = 0
+                    stats.effective_window_size = effective_window_size
                     made_progress = True
                     if self.config.verbose_events:
                         self._emit(callback, "timeout" if reason == "timeout" else "retry", {
@@ -495,6 +513,7 @@ class UdpSender:
             return self._send_throughput(payload, callback=callback)
 
         stats = SenderStats(total_size=len(payload))
+        stats.effective_window_size = self.config.window_size
         destination = (self.config.ip, self.config.port)
         chunks = list(iter_chunks(payload, self.config.chunk_size))
         total_chunks = len(chunks)
@@ -627,8 +646,8 @@ class UdpSender:
                         self._emit_progress(callback, stats, len(outstanding))
                     elif status == ACK_STATUS_PENDING:
                         stats.ack_pending += 1
-                        entry["retry_deadline"] = ack_time + self.config.timeout
-                        entry["retry_reason"] = "timeout"
+                        entry["retry_deadline"] = ack_time + busy_retry_delay
+                        entry["retry_reason"] = "pending"
                         self._update_rates(stats, len(chunk), transfer_len, ack_time, entry["tx_time"])
                         if self.config.verbose_events:
                             self._emit(callback, "ack_status", {
@@ -779,7 +798,8 @@ def run_cli(args) -> int:
                     f"deliv={stats.delivered_rate_kib_s:.2f} KiB/s ps_est={stats.estimated_ps_rate_kib_s:.2f} KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"rtt={stats.last_rtt_ms:.2f} ms retry={stats.retries_used} timeout={stats.timeout_count} "
-                    f"busy={stats.ack_busy} pending={stats.ack_pending} window={sender.config.window_size} "
+                    f"busy={stats.ack_busy} pending={stats.ack_pending} "
+                    f"window={stats.effective_window_size}/{sender.config.window_size} "
                     f"occ_avg={stats.outstanding_window_avg:.1f} occ_max={stats.outstanding_window_max} "
                     f"idle_sleep={stats.send_loop_sleep_time_s:.3f}s empty={stats.socket_timeout_wakeups}"
                 )
