@@ -13,6 +13,7 @@ typedef struct {
     int valid;
     uint32_t seq;
     uint32_t transfer_len;
+    uint8_t *buffer_ptr;
     ip_addr_t peer_addr;
     u16_t peer_port;
     XTime accept_time;
@@ -21,7 +22,7 @@ typedef struct {
 
 static struct udp_pcb *udp_control_pcb;
 static uint8_t *dma_tx_buffer;
-static uint32_t dma_tx_capacity_bytes;
+static uint32_t dma_tx_slot_capacity_bytes;
 
 static net_pending_chunk_t active_chunk;
 static net_pending_chunk_t tx_queue[NET_TX_QUEUE_DEPTH];
@@ -153,8 +154,8 @@ static void net_start_dma_transfer(void)
     Error = 0;
     queued_chunk = &tx_queue[queue_head_index];
 
-    Xil_DCacheFlushRange((UINTPTR)dma_tx_buffer, queued_chunk->transfer_len);
-    status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)dma_tx_buffer,
+    Xil_DCacheFlushRange((UINTPTR)queued_chunk->buffer_ptr, queued_chunk->transfer_len);
+    status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)queued_chunk->buffer_ptr,
         queued_chunk->transfer_len, XAXIDMA_DMA_TO_DEVICE);
     if (status != XST_SUCCESS) {
         UART_Printf("DMA start failed seq=%lu len=%lu status=%d\r\n",
@@ -247,11 +248,11 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
-    if ((header.payload_len == 0U) || ((uint32_t)header.payload_len > dma_tx_capacity_bytes)) {
+    if ((header.payload_len == 0U) || ((uint32_t)header.payload_len > dma_tx_slot_capacity_bytes)) {
         UART_Printf("UDP drop seq=%lu reason=payload_range payload=%u max=%lu\r\n",
             (unsigned long)header.seq,
             (unsigned)header.payload_len,
-            (unsigned long)dma_tx_capacity_bytes);
+            (unsigned long)dma_tx_slot_capacity_bytes);
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
         pbuf_free(p);
         return;
@@ -259,7 +260,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
 
     {
         net_pending_chunk_t *slot = &tx_queue[queue_tail_index];
-        uint8_t *slot_buffer = dma_tx_buffer + (queue_tail_index * dma_tx_capacity_bytes);
+        uint8_t *slot_buffer = dma_tx_buffer + (queue_tail_index * dma_tx_slot_capacity_bytes);
 
         pbuf_copy_partial(p, slot_buffer, header.payload_len, sizeof(header));
         actual_crc = Net_Protocol_Crc32(slot_buffer, header.payload_len);
@@ -281,6 +282,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         slot->valid = 1;
         slot->seq = header.seq;
         slot->transfer_len = aligned_len;
+        slot->buffer_ptr = slot_buffer;
         ip_addr_copy(slot->peer_addr, *addr);
         slot->peer_port = port;
         XTime_GetTime(&slot->accept_time);
@@ -328,7 +330,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     }
 
     dma_tx_buffer = tx_buffer;
-    dma_tx_capacity_bytes = tx_buffer_capacity_bytes;
+    dma_tx_slot_capacity_bytes = tx_buffer_capacity_bytes / NET_TX_QUEUE_DEPTH;
     active_chunk.valid = 0;
     memset(tx_queue, 0, sizeof(tx_queue));
     queue_head_index = 0U;
@@ -346,7 +348,10 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     has_recv_time = 0;
 
     udp_recv(udp_control_pcb, net_udp_receive_callback, NULL);
-    UART_Printf("UDP RX ready, max payload %u bytes\r\n", dma_tx_capacity_bytes);
+    UART_Printf("UDP RX ready, slot_count=%u slot_bytes=%u max_payload=%u\r\n",
+        (unsigned)NET_TX_QUEUE_DEPTH,
+        (unsigned)dma_tx_slot_capacity_bytes,
+        (unsigned)dma_tx_slot_capacity_bytes);
 
     return 0;
 }
