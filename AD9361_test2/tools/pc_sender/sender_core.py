@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import binascii
-import os
 import socket
 import struct
 import time
@@ -18,6 +17,7 @@ ACK_STATUS_BAD_LENGTH = 2
 ACK_STATUS_BAD_CHECKSUM = 3
 ACK_STATUS_BUSY = 4
 ACK_STATUS_DMA_ERROR = 5
+ACK_STATUS_PENDING = 6
 
 ACK_STATUS_NAMES = {
     ACK_STATUS_OK: "OK",
@@ -26,6 +26,7 @@ ACK_STATUS_NAMES = {
     ACK_STATUS_BAD_CHECKSUM: "BAD_CHECKSUM",
     ACK_STATUS_BUSY: "BUSY",
     ACK_STATUS_DMA_ERROR: "DMA_ERROR",
+    ACK_STATUS_PENDING: "PENDING",
 }
 
 DATA_HEADER_FORMAT = "<IIHHI"
@@ -38,11 +39,11 @@ ACK_SIZE = struct.calcsize(ACK_FORMAT)
 class SenderConfig:
     ip: str
     port: int = 5001
-    chunk_size: int = 1400
+    chunk_size: int = 1456
     timeout: float = 1.0
     retries: int = 10
     target_rate_kib_s: float = 0.0
-    window_size: int = 4
+    window_size: int = 16
 
 
 @dataclass
@@ -67,18 +68,19 @@ class SenderStats:
     current_rate_kib_s: float = 0.0
     average_rate_kib_s: float = 0.0
     estimated_ps_rate_kib_s: float = 0.0
+    ack_pending: int = 0
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="UDP stop-and-wait sender for AD9361_test2")
+    parser = argparse.ArgumentParser(description="UDP sliding-window sender for AD9361_test2")
     parser.add_argument("--ip", required=True, help="Zynq target IP address")
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
-    parser.add_argument("--chunk-size", type=int, default=1400, help="payload bytes per UDP chunk")
+    parser.add_argument("--chunk-size", type=int, default=1456, help="payload bytes per UDP chunk")
     parser.add_argument("--timeout", type=float, default=1.0, help="ACK timeout in seconds")
     parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
     parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
         help="optional offered load cap in KiB/s, 0 means unlimited")
-    parser.add_argument("--window-size", type=int, default=4,
+    parser.add_argument("--window-size", type=int, default=16,
         help="number of in-flight chunks allowed before waiting for ACKs")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
@@ -102,7 +104,7 @@ def build_packet(seq: int, payload: bytes) -> bytes:
     return header + payload
 
 
-def recv_ack(sock: socket.socket, expected_seq: int):
+def recv_any_ack(sock: socket.socket):
     data, _ = sock.recvfrom(2048)
     if len(data) < ACK_SIZE:
         raise RuntimeError("received short ACK")
@@ -110,10 +112,8 @@ def recv_ack(sock: socket.socket, expected_seq: int):
     magic, seq, status, _reserved, transfer_len = struct.unpack(ACK_FORMAT, data[:ACK_SIZE])
     if magic != ACK_MAGIC:
         raise RuntimeError(f"received invalid ACK magic 0x{magic:08X}")
-    if seq != expected_seq:
-        raise RuntimeError(f"received unexpected ACK seq {seq}, expected {expected_seq}")
 
-    return status, transfer_len
+    return seq, status, transfer_len
 
 
 def iter_chunks(payload: bytes, chunk_size: int):
@@ -168,7 +168,9 @@ class UdpSender:
         self._emit(callback, "start", {"total_size": stats.total_size, "config": self.config})
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(self.config.timeout)
+        poll_timeout = min(max(self.config.timeout / 8.0, 0.01), 0.05)
+        busy_retry_delay = max(min(self.config.timeout / 8.0, 0.02), 0.002)
+        sock.settimeout(poll_timeout)
 
         try:
             while base_seq < total_chunks:
@@ -190,6 +192,8 @@ class UdpSender:
                         "end": end,
                         "attempts": 1,
                         "tx_time": tx_time,
+                        "retry_deadline": tx_time + self.config.timeout,
+                        "retry_reason": "timeout",
                     }
                     self._emit(callback, "chunk_sent", {
                         "seq": seq,
@@ -205,19 +209,28 @@ class UdpSender:
                     if not outstanding:
                         continue
 
-                    expected_seq = min(outstanding.keys())
-                    status, transfer_len = recv_ack(sock, expected_seq)
+                    ack_seq, status, transfer_len = recv_any_ack(sock)
                     ack_time = time.time()
-                    entry = outstanding.pop(expected_seq)
+                    if ack_seq not in outstanding:
+                        self._emit(callback, "ack_ignored", {
+                            "seq": ack_seq,
+                            "status": status,
+                            "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                            "transfer_len": transfer_len,
+                        })
+                        continue
+
+                    entry = outstanding[ack_seq]
                     chunk = entry["chunk"]
                     rtt_ms = (ack_time - entry["tx_time"]) * 1000.0
-                    stats.last_seq = expected_seq
+                    stats.last_seq = ack_seq
                     stats.last_ack_status = status
                     stats.last_transfer_len = transfer_len
                     stats.last_rtt_ms = rtt_ms
 
                     if status == ACK_STATUS_OK:
-                        acked[expected_seq] = True
+                        outstanding.pop(ack_seq)
+                        acked[ack_seq] = True
                         while base_seq < total_chunks and acked[base_seq]:
                             base_seq += 1
 
@@ -229,7 +242,7 @@ class UdpSender:
                         stats.current_rate_kib_s = (len(chunk) / 1024.0) / max((ack_time - entry["tx_time"]), 1e-6)
                         stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / max((ack_time - entry["tx_time"]), 1e-6)
                         self._emit(callback, "ack_ok", {
-                            "seq": expected_seq,
+                            "seq": ack_seq,
                             "payload_len": len(chunk),
                             "transfer_len": transfer_len,
                             "offset": entry["start"],
@@ -237,8 +250,22 @@ class UdpSender:
                             "window_used": len(outstanding),
                             "stats": stats,
                         })
+                    elif status == ACK_STATUS_PENDING:
+                        stats.ack_pending += 1
+                        entry["retry_deadline"] = ack_time + self.config.timeout
+                        entry["retry_reason"] = "timeout"
+                        self._emit(callback, "ack_status", {
+                            "seq": ack_seq,
+                            "payload_len": len(chunk),
+                            "transfer_len": transfer_len,
+                            "status": status,
+                            "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                            "attempt": entry["attempts"],
+                            "rtt_ms": rtt_ms,
+                            "window_used": len(outstanding),
+                            "stats": stats,
+                        })
                     else:
-                        stats.retries_used += 1
                         if status == ACK_STATUS_BAD_MAGIC:
                             stats.ack_bad_magic += 1
                         elif status == ACK_STATUS_BAD_LENGTH:
@@ -251,7 +278,7 @@ class UdpSender:
                             stats.ack_dma_error += 1
 
                         self._emit(callback, "ack_status", {
-                            "seq": expected_seq,
+                            "seq": ack_seq,
                             "payload_len": len(chunk),
                             "transfer_len": transfer_len,
                             "status": status,
@@ -261,38 +288,45 @@ class UdpSender:
                             "window_used": len(outstanding),
                             "stats": stats,
                         })
-                        time.sleep(0.02)
                         if entry["attempts"] >= self.config.retries:
-                            raise RuntimeError(f"seq {expected_seq} exceeded retry limit")
-                        entry["attempts"] += 1
-                        entry["tx_time"] = time.time()
-                        sock.sendto(entry["packet"], destination)
-                        outstanding[expected_seq] = entry
-                        self._emit(callback, "chunk_sent", {
-                            "seq": expected_seq,
-                            "payload_len": len(chunk),
-                            "attempt": entry["attempts"],
-                            "offset": entry["start"],
-                            "end": entry["end"],
-                            "window_used": len(outstanding),
-                        })
+                            raise RuntimeError(f"seq {ack_seq} exceeded retry limit")
+                        if status == ACK_STATUS_BUSY:
+                            entry["retry_deadline"] = ack_time + busy_retry_delay
+                            entry["retry_reason"] = "busy"
+                        else:
+                            entry["retry_deadline"] = ack_time
+                            entry["retry_reason"] = "ack_status"
                 except socket.timeout:
                     if not outstanding:
                         continue
 
-                    oldest_seq = min(outstanding.keys())
-                    entry = outstanding[oldest_seq]
+                    now = time.time()
+                    expired_items = [
+                        (seq, entry)
+                        for seq, entry in outstanding.items()
+                        if now >= entry["retry_deadline"]
+                    ]
+                    if not expired_items:
+                        continue
+
+                    expired_items.sort(key=lambda item: (item[1]["retry_deadline"], item[0]))
+                    oldest_seq, entry = expired_items[0]
                     entry["attempts"] += 1
                     if entry["attempts"] > self.config.retries:
                         raise RuntimeError(f"seq {oldest_seq} exceeded retry limit")
-                    stats.timeout_count += 1
                     stats.retries_used += 1
-                    entry["tx_time"] = time.time()
+                    entry["tx_time"] = now
+                    entry["retry_deadline"] = now + self.config.timeout
+                    reason = entry.get("retry_reason", "timeout")
+                    entry["retry_reason"] = "timeout"
                     sock.sendto(entry["packet"], destination)
-                    self._emit(callback, "timeout", {
+                    if reason == "timeout":
+                        stats.timeout_count += 1
+                    self._emit(callback, "timeout" if reason == "timeout" else "retry", {
                         "seq": oldest_seq,
                         "payload_len": len(entry["chunk"]),
                         "attempt": entry["attempts"],
+                        "reason": reason,
                         "window_used": len(outstanding),
                     })
 
@@ -321,6 +355,11 @@ def run_cli(args) -> int:
                 f"seq={payload_dict['seq']} payload_len={payload_dict['payload_len']} "
                 f"timeout retry={payload_dict['attempt']}"
             )
+        elif event_name == "retry":
+            print(
+                f"seq={payload_dict['seq']} payload_len={payload_dict['payload_len']} "
+                f"retry reason={payload_dict['reason']} attempt={payload_dict['attempt']}"
+            )
         elif event_name == "ack_ok":
             stats = payload_dict["stats"]
             print(
@@ -335,13 +374,18 @@ def run_cli(args) -> int:
                 f"ack_status={payload_dict['status_name']} transfer_len={payload_dict['transfer_len']} "
                 f"retry={payload_dict['attempt']} rtt_ms={payload_dict['rtt_ms']:.2f}"
             )
+        elif event_name == "ack_ignored":
+            print(
+                f"ack_ignored seq={payload_dict['seq']} status={payload_dict['status_name']} "
+                f"transfer_len={payload_dict['transfer_len']}"
+            )
         elif event_name == "done":
             stats = payload_dict["stats"]
             elapsed = max(stats.finished_at - stats.started_at, 1e-6)
             print(
                 f"done bytes={stats.bytes_sent} elapsed={elapsed:.3f}s "
                 f"avg_rate={stats.average_rate_kib_s:.2f} KiB/s "
-                f"ack_ok={stats.ack_ok} timeouts={stats.timeout_count}"
+                f"ack_ok={stats.ack_ok} ack_pending={stats.ack_pending} timeouts={stats.timeout_count}"
             )
 
     sender.send(payload, callback=callback)

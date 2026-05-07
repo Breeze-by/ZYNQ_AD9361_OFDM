@@ -92,11 +92,11 @@ class SenderGui:
         self.file_info_var = tk.StringVar(value="未选择文件")
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
-        self.chunk_var = tk.StringVar(value="1400")
+        self.chunk_var = tk.StringVar(value="1456")
         self.timeout_var = tk.StringVar(value="1.0")
         self.retries_var = tk.StringVar(value="10")
         self.target_rate_var = tk.StringVar(value="0")
-        self.window_var = tk.StringVar(value="4")
+        self.window_var = tk.StringVar(value="16")
         self.test_size_var = tk.StringVar(value="4096")
 
         self.status_text_var = tk.StringVar(value="空闲")
@@ -445,6 +445,17 @@ class SenderGui:
             )
             return
 
+        if event_name == "retry":
+            self.retry_count_var.set(str(int(self.retry_count_var.get()) + 1))
+            self.status_text_var.set(f"Retry seq={payload['seq']} reason={payload['reason']}")
+            self.window_used_var.set(str(payload.get("window_used", 0)))
+            self._append_log(
+                f"Retry seq={payload['seq']} payload={payload['payload_len']}B "
+                f"attempt={payload['attempt']} reason={payload['reason']} "
+                f"inflight={payload.get('window_used', 0)}"
+            )
+            return
+
         if event_name == "ack_status":
             stats = payload["stats"]
             self.ack_status_var.set(payload["status_name"])
@@ -452,6 +463,8 @@ class SenderGui:
             self.retry_count_var.set(str(stats.retries_used))
             if payload["status_name"] == "BUSY":
                 self.busy_count_var.set(str(stats.ack_busy))
+            elif payload["status_name"] == "PENDING":
+                pass
             else:
                 error_total = (
                     stats.ack_bad_magic + stats.ack_bad_length +
