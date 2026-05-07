@@ -336,6 +336,20 @@ class SenderGui:
         self.test_size_var.set(str(mib * 1024 * 1024))
         self._update_mode_widgets()
 
+    def _format_eta(self, remaining_bytes: int, delivered_rate_kib_s: float) -> str:
+        if remaining_bytes <= 0:
+            return "00:00"
+        if delivered_rate_kib_s <= 0.0:
+            return "--:--"
+
+        remaining_seconds = int(remaining_bytes / (delivered_rate_kib_s * 1024.0))
+        hours = remaining_seconds // 3600
+        minutes = (remaining_seconds % 3600) // 60
+        seconds = remaining_seconds % 60
+        if hours > 0:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
     def _update_throughput_mode(self):
         if self.throughput_mode_var.get():
             self.verbose_var.set(False)
@@ -421,7 +435,7 @@ class SenderGui:
 
     def _reset_runtime_state(self, total_size: int):
         self.progress_var.set(0.0)
-        self.progress_text_var.set(f"0 / {total_size}")
+        self.progress_text_var.set(f"0 / {total_size} | ETA --:--")
         self.ack_status_var.set("N/A")
         self.seq_var.set("-")
         self.window_used_var.set("0")
@@ -463,14 +477,18 @@ class SenderGui:
 
     def _handle_event(self, event_name: str, payload: dict):
         if event_name == "start":
-            self.progress_text_var.set(f"0 / {payload['total_size']}")
+            self.progress_text_var.set(f"0 / {payload['total_size']} | ETA --:--")
             return
 
         if event_name == "progress":
             stats = payload["stats"]
             progress = 0.0 if stats.total_size == 0 else (stats.bytes_acked / stats.total_size) * 100.0
+            remaining_bytes = max(stats.total_size - stats.bytes_acked, 0)
+            eta_text = self._format_eta(remaining_bytes, stats.delivered_rate_kib_s)
             self.progress_var.set(progress)
-            self.progress_text_var.set(f"{stats.bytes_acked} / {stats.total_size}")
+            self.progress_text_var.set(
+                f"{stats.bytes_acked} / {stats.total_size} | ETA {eta_text}"
+            )
             self.seq_var.set(str(stats.last_seq))
             self.window_used_var.set(str(payload.get("window_used", 0)))
             self.rtt_var.set(f"{stats.last_rtt_ms:.2f} ms")

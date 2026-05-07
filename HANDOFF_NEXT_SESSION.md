@@ -33,6 +33,9 @@ The project is now stable after Phase 1/2/3 changes:
   - `UART_Printf()` buffer increased from 256 to 512 bytes
   - periodic stats are split into `STAT rate ...` and `STAT state ...`
   - this avoids truncating the trailing `\r\n` when stats fields grow
+  - stats now print only for intervals with RX/accepted/DMA activity
+  - each stats group is wrapped in separator lines
+- GUI progress text now includes estimated remaining transfer time (`ETA`)
 - Latest throughput tuning:
   - `TX_BUFFER_WORD_COUNT` increased from `16384` to `32768`
   - aggregation capacity increased from `8 * 16 KiB` to `16 * 16 KiB`

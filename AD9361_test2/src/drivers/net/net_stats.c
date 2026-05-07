@@ -196,12 +196,28 @@ void NetStats_PrintPeriodic(void)
     interval_rx_packets = net_stats.rx_packets - last_rx_packets;
     interval_accepted_packets = net_stats.accepted_packets - last_accepted_packets;
     interval_dma_done = net_stats.dma_done_count - last_dma_done;
+
+    if ((interval_rx_packets == 0U) &&
+        (interval_accepted_packets == 0U) &&
+        (interval_dma_done == 0U)) {
+        stats_last_print_time = now_time;
+        last_rx_bytes = net_stats.rx_payload_bytes;
+        last_accepted_bytes = net_stats.accepted_payload_bytes;
+        last_dma_bytes = net_stats.dma_bytes_total;
+        last_rx_packets = net_stats.rx_packets;
+        last_accepted_packets = net_stats.accepted_packets;
+        last_dma_done = net_stats.dma_done_count;
+        return;
+    }
+
     rx_rate_x100_kib = stats_rate_x100_kib(interval_rx_bytes, interval_us);
     accepted_rate_x100_kib = stats_rate_x100_kib(interval_accepted_bytes, interval_us);
     dma_rate_x100_kib = stats_rate_x100_kib(interval_dma_bytes, interval_us);
     avg_rx_rate_x100_kib = stats_rate_x100_kib(net_stats.rx_payload_bytes, total_us);
     avg_accepted_rate_x100_kib = stats_rate_x100_kib(net_stats.accepted_payload_bytes, total_us);
     avg_dma_rate_x100_kib = stats_rate_x100_kib(net_stats.dma_bytes_total, total_us);
+
+    UART_Printf("\r\n================ NET STAT ================\r\n");
 
     UART_Printf(
         "STAT rate rx=%lu.%02lu acc=%lu.%02lu dma=%lu.%02lu "
@@ -246,6 +262,8 @@ void NetStats_PrintPeriodic(void)
         (unsigned long)stats_avg_agg_bytes(),
         (unsigned long)net_stats.agg_min_block_bytes,
         (unsigned long)net_stats.agg_max_block_bytes);
+
+    UART_Printf("==========================================\r\n");
 
     stats_last_print_time = now_time;
     last_rx_bytes = net_stats.rx_payload_bytes;

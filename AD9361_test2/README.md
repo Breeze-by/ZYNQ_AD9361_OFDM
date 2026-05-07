@@ -181,7 +181,9 @@ UDP receive rate and accepted payload rate:
   - payload drained from PS aggregation blocks through AXI DMA
 
 `STAT state` reports queue occupancy, ACK/NACK totals, protocol errors, busy /
-pending / duplicate counters, DMA errors, and aggregation counters.
+pending / duplicate counters, DMA errors, and aggregation counters. The board
+prints these lines only when the current stats interval has receive or DMA
+activity, and wraps each stats group in separator lines for readability.
 
 For correctness, `acc` and `dma` are the important data-path rates. A high `rx`
 with much lower `acc` means the host is offering more traffic than the board can
