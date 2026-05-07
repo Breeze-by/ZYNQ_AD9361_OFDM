@@ -35,7 +35,6 @@ typedef struct {
 } net_stats_t;
 
 void NetStats_Init(void);
-const net_stats_t *NetStats_Get(void);
 void NetStats_OnRxPacket(uint32_t packet_bytes, uint32_t payload_bytes);
 void NetStats_OnAcceptedPacket(uint32_t payload_bytes);
 void NetStats_OnBadMagic(void);

@@ -35,16 +35,15 @@ typedef struct {
 
 static struct udp_pcb *udp_control_pcb;
 static uint8_t *dma_tx_buffer;
-static uint32_t dma_tx_capacity_bytes;
 static net_agg_block_t agg_blocks[NET_AGG_BLOCK_COUNT];
 static net_accepted_chunk_t accepted_history[NET_COMPLETED_HISTORY_DEPTH];
 static uint32_t accepted_history_head_index;
 static int fill_block_index;
 static int dma_block_index;
 static int dma_busy;
+static int dma_fatal_error;
 static uint32_t queue_occupancy_max;
 static uint64_t total_accepted_bytes;
-static uint32_t total_accepted_chunks;
 static uint32_t next_expected_seq;
 static uint32_t next_agg_submit_order;
 static int pending_ok_ack_valid;
@@ -95,6 +94,28 @@ static void net_update_queue_stats(void)
         queue_occupancy_max = current;
     }
     NetStats_SetQueue(current, queue_occupancy_max);
+}
+
+static void net_release_empty_fill_block(void)
+{
+    net_agg_block_t *block;
+
+    if (fill_block_index < 0) {
+        return;
+    }
+
+    block = &agg_blocks[fill_block_index];
+    if ((block->state != NET_AGG_BLOCK_FILLING) || (block->payload_len != 0U)) {
+        return;
+    }
+
+    block->state = NET_AGG_BLOCK_FREE;
+    block->transfer_len = 0U;
+    block->submit_order = 0U;
+    block->first_write_time = 0U;
+    block->last_write_time = 0U;
+    fill_block_index = -1;
+    net_update_queue_stats();
 }
 
 static void net_send_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
@@ -341,7 +362,7 @@ static void net_start_dma_transfer(void)
     int status;
     net_agg_block_t *block;
 
-    if (dma_busy != 0) {
+    if ((dma_busy != 0) || (dma_fatal_error != 0)) {
         return;
     }
 
@@ -363,10 +384,11 @@ static void net_start_dma_transfer(void)
             (unsigned long)block->transfer_len,
             status);
         NetStats_OnDmaError();
-        block->state = NET_AGG_BLOCK_FREE;
-        block->payload_len = 0U;
-        block->transfer_len = 0U;
-        block->submit_order = 0U;
+        dma_fatal_error = 1;
+        dma_block_index = ready_index;
+        dma_busy = 0;
+        TxDone = 0;
+        Error = 0;
         net_update_queue_stats();
         return;
     }
@@ -423,6 +445,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     uint32_t accepted_payload_len;
     net_agg_block_t *block;
     uint8_t *write_ptr;
+    u16_t copied_len;
     LWIP_UNUSED_ARG(arg);
     LWIP_UNUSED_ARG(pcb);
 
@@ -441,7 +464,14 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
-    pbuf_copy_partial(p, &header, sizeof(header), 0U);
+    copied_len = pbuf_copy_partial(p, &header, sizeof(header), 0U);
+    if (copied_len != sizeof(header)) {
+        UART_Printf("UDP drop reason=header_copy len=%lu\r\n", (unsigned long)p->tot_len);
+        NetStats_OnBadLength();
+        net_send_immediate_ack(addr, port, 0U, NET_ACK_STATUS_BAD_LENGTH, 0U);
+        pbuf_free(p);
+        return;
+    }
 
     if (header.magic != NET_DATA_MAGIC) {
         UART_Printf("UDP drop seq=%lu reason=bad_magic magic=0x%08lX\r\n",
@@ -475,6 +505,12 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
+    if (dma_fatal_error != 0) {
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_DMA_ERROR, 0U);
+        pbuf_free(p);
+        return;
+    }
+
     if (net_find_accepted_len(header.seq, &accepted_payload_len) != 0) {
         NetStats_OnDuplicate();
         net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_OK, accepted_payload_len);
@@ -482,7 +518,6 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
-#if NET_STRICT_IN_ORDER_RX
     if (header.seq != next_expected_seq) {
         if (net_seq_before(header.seq, next_expected_seq) != 0) {
             NetStats_OnDuplicate();
@@ -495,7 +530,6 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         pbuf_free(p);
         return;
     }
-#endif
 
     if (net_ensure_fill_block((uint32_t)header.payload_len) != 0) {
         NetStats_OnBusy();
@@ -506,7 +540,19 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
 
     block = &agg_blocks[fill_block_index];
     write_ptr = block->buffer_ptr + block->payload_len;
-    pbuf_copy_partial(p, write_ptr, header.payload_len, sizeof(header));
+    copied_len = pbuf_copy_partial(p, write_ptr, header.payload_len, sizeof(header));
+    if (copied_len != header.payload_len) {
+        UART_Printf("UDP drop seq=%lu reason=payload_copy copied=%u expected=%u\r\n",
+            (unsigned long)header.seq,
+            (unsigned)copied_len,
+            (unsigned)header.payload_len);
+        NetStats_OnBadLength();
+        net_release_empty_fill_block();
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+        pbuf_free(p);
+        return;
+    }
+
     actual_crc = Net_Protocol_Crc32(write_ptr, header.payload_len);
     if (actual_crc != header.payload_crc32) {
         UART_Printf("UDP drop seq=%lu reason=bad_crc rx=0x%08lX calc=0x%08lX\r\n",
@@ -514,6 +560,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             (unsigned long)header.payload_crc32,
             (unsigned long)actual_crc);
         NetStats_OnCrcError();
+        net_release_empty_fill_block();
         net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
         pbuf_free(p);
         return;
@@ -522,12 +569,9 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     block->payload_len += header.payload_len;
     XTime_GetTime(&block->last_write_time);
     total_accepted_bytes += header.payload_len;
-    total_accepted_chunks += 1U;
     NetStats_OnAcceptedPacket(header.payload_len);
     net_record_accepted_chunk(header.seq, header.payload_len);
-#if NET_STRICT_IN_ORDER_RX
     next_expected_seq = header.seq + 1U;
-#endif
     net_queue_ok_ack(addr, port, header.seq, header.payload_len);
 
     if (net_should_report_packet_log() != 0) {
@@ -572,7 +616,6 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     }
 
     dma_tx_buffer = tx_buffer;
-    dma_tx_capacity_bytes = tx_buffer_capacity_bytes;
     for (index = 0U; index < NET_AGG_BLOCK_COUNT; ++index) {
         agg_blocks[index].state = NET_AGG_BLOCK_FREE;
         agg_blocks[index].buffer_ptr = dma_tx_buffer + (index * NET_AGG_BLOCK_BYTES);
@@ -587,9 +630,9 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     fill_block_index = -1;
     dma_block_index = -1;
     dma_busy = 0;
+    dma_fatal_error = 0;
     queue_occupancy_max = 0U;
     total_accepted_bytes = 0U;
-    total_accepted_chunks = 0U;
     next_expected_seq = 0U;
     next_agg_submit_order = 0U;
     pending_ok_ack_valid = 0;
@@ -608,7 +651,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
         "UDP RX ready, agg_blocks=%u block_bytes=%u total_bytes=%lu max_payload=%u rec_window<=%u ack=on_accept\r\n",
         (unsigned)NET_AGG_BLOCK_COUNT,
         (unsigned)NET_AGG_BLOCK_BYTES,
-        (unsigned long)dma_tx_capacity_bytes,
+        (unsigned long)tx_buffer_capacity_bytes,
         (unsigned)NET_MAX_PAYLOAD_BYTES,
         (unsigned)NET_MAX_RECOMMENDED_WINDOW_SIZE);
 
@@ -620,6 +663,10 @@ void Net_RxPoll(void)
     NetStats_PrintPeriodic();
     net_check_agg_timeout();
     net_check_ack_timeout();
+
+    if (dma_fatal_error != 0) {
+        return;
+    }
 
     if (dma_busy == 0) {
         net_start_dma_transfer();
@@ -634,18 +681,11 @@ void Net_RxPoll(void)
             dma_block_index,
             (dma_block_index >= 0) ? (unsigned long)agg_blocks[dma_block_index].transfer_len : 0UL);
         NetStats_OnDmaError();
-        if (dma_block_index >= 0) {
-            agg_blocks[dma_block_index].state = NET_AGG_BLOCK_FREE;
-            agg_blocks[dma_block_index].payload_len = 0U;
-            agg_blocks[dma_block_index].transfer_len = 0U;
-            agg_blocks[dma_block_index].submit_order = 0U;
-        }
+        dma_fatal_error = 1;
         dma_busy = 0;
-        dma_block_index = -1;
         Error = 0;
         TxDone = 0;
         net_update_queue_stats();
-        net_start_dma_transfer();
         return;
     }
 

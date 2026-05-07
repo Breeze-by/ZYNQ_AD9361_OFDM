@@ -1,238 +1,286 @@
-# AD9361_test2 Data Path
+# AD9361_test2 当前数据链路说明
 
-This document describes the software-only part of the project. Only files under `AD9361_test2` are intended to be edited; BSP and hardware export directories remain generated artifacts.
+`AD9361_test2` 是本仓库的主要 Xilinx SDK 2018.3 裸机应用。它从 PC 接收按序 UDP 负载，完成协议校验后写入 PS 侧聚合缓冲，再通过 AXI DMA MM2S 送入 PL OFDM / AD9361 TX 路径。
 
-## Scope
+```text
+PC 发送端
+-> UDP 包：net_data_header_t + 负载
+-> Zynq PS lwIP RAW UDP 回调
+-> 包头 / 长度 / CRC32 校验
+-> 严格按序接收
+-> PS 侧聚合块
+-> AXI DMA MM2S
+-> PL OFDM / AD9361 TX 路径
+```
 
-- Board-side application: `src/`
-- Host sender tools: `tools/pc_sender/`
-- Do not edit: `AD9361_test2_bsp/`, `System_wrapper_hw_platform_0/`, `System_wrapper.hdf`
+通常只维护 `AD9361_test2/` 下的文件。BSP 和 Vivado 硬件导出目录是生成产物，除非明确调整 BSP 或硬件平台，否则不建议修改。
 
-## Runtime Pipeline
+## 重要文件
 
-The current transmit path is:
+```text
+src/app/main.c                         板端启动和主循环
+src/app/app_config.h                   cache、网络、DMA buffer 参数
+src/drivers/net/net_config.h           UDP、ACK、聚合和调参参数
+src/drivers/net/net_protocol.h/.c      协议结构体、CRC32、对齐工具
+src/drivers/net/net_init.h/.c          lwIP/GEM 初始化和输入轮询
+src/drivers/net/net_rx.h/.c            UDP RX、ACK、顺序控制、聚合、DMA 调度
+src/drivers/net/net_stats.h/.c         运行统计和串口 STAT 输出
+src/drivers/dma/AXI_DMA.*              AXI DMA 初始化和中断封装
+src/drivers/uart/PS_UART.*             串口输出封装
+tools/pc_sender/send_data.py           命令行入口
+tools/pc_sender/sender_core.py         滑动窗口发送核心
+tools/pc_sender/sender_gui.py          Tkinter GUI 发送工具
+```
 
-1. The PC sender splits the source bytes into numbered UDP chunks.
-2. Each chunk is sent as `net_data_header_t + payload`.
-3. lwIP receives the UDP packet on PS.
-4. `net_udp_receive_callback()` validates header, length, and CRC32.
-5. The payload is appended into the current PS-side DMA aggregation block.
-6. A block is submitted when it is full or when the flush timeout expires.
-7. `Net_RxPoll()` starts one longer MM2S DMA transfer for each READY block.
-8. `TxIntrHandler()` marks completion.
-9. `Net_RxPoll()` releases the completed block and starts the next queued block.
+## 板端启动流程
 
-ACK v1 is now sent after the packet is safely accepted into PS memory, not after DMA completion. lwIP owns the short-lived RX `pbuf`; after validation, the application copies payload directly into a persistent DMA aggregation block.
+`main.c` 的主要流程：
 
-## Sliding Window and ACK Model
+1. 启用 I-cache，关闭 D-cache。
+2. 初始化 GPIO、SPI 和 AD9361 参数。
+3. 初始化 UART、GIC、AXI DMA 和 DMA 中断。
+4. 初始化 lwIP/GEM，使用静态 IPv4 地址。
+5. 绑定 UDP 端口 `5001`。
+6. 初始化网络接收和 PS 侧聚合缓冲。
+7. 进入主循环：
 
-The link now uses a bounded sliding-window sender instead of the old stop-and-wait path:
+```c
+while (1) {
+    Net_Poll();
+    Net_RxPoll();
+}
+```
 
-- The host may have multiple in-flight chunks.
-- The board keeps DMA aggregation blocks and a small accepted-history cache.
-- Retransmitted chunks are deduplicated:
-  - If a chunk is already completed, the board resends `OK`.
-  - If a chunk is still active or queued, the board returns `PENDING`.
-  - If the queue is full and the sequence is new, the board returns `BUSY`.
-- Successful `OK` ACKs mean the payload was accepted into PS memory.
+`Net_Poll()` 每次最多处理 `NET_INPUT_POLL_BUDGET` 个以太网输入包。`Net_RxPoll()` 负责统计输出、ACK 超时 flush、聚合块超时 flush、DMA 启动和 DMA 完成回收。
 
-With `NET_STRICT_IN_ORDER_RX=1`, the board only accepts `seq == expected_seq`
-into PS aggregation memory. Higher sequence numbers are not written into the
-DMA stream; they receive `PENDING` and are retried by the host. This keeps ACK
-v1 cumulative `OK seq=N` safe even when the board returns `BUSY` under buffer
-pressure.
+## 网络默认参数
 
-Aggregation blocks also carry a submit-order number. `Net_RxPoll()` starts DMA
-from the oldest READY block, not from the lowest array index, so recycled low
-index blocks cannot overtake older queued blocks.
+定义位置：`src/app/app_config.h` 和 `src/drivers/net/net_config.h`。
 
-## ACK Meanings
+```text
+MAC      02:00:00:00:00:01
+IP       192.168.1.50
+Netmask  255.255.255.0
+Gateway  192.168.1.1
+UDP port 5001
+```
 
-`OK`
+PC 必须和板端在同一网段，例如 `192.168.1.10/24`。
 
-- ACK for successful packet acceptance into PS aggregation memory.
-- The host treats every outstanding chunk with `chunk_seq <= ack.seq` as completed.
-- This assumes the normal direct-link case where accepted chunks progress through the board in sequence.
+## UDP 协议
 
-`PENDING`
+多字节字段均为 little-endian。Python 发送端和 Zynq A9 裸机端使用一致的结构体布局。
 
-- The chunk is ahead of the board's next expected sequence and was not accepted.
-- The host retries it with a short backoff.
+数据包头：
 
-`BUSY`
+```c
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;
+    uint16_t payload_len;
+    uint16_t reserved;
+    uint32_t payload_crc32;
+} net_data_header_t;
+```
 
-- The board queue is full and the chunk was not accepted.
-- The host retries later with a short backoff.
+ACK 包：
 
-`BAD_MAGIC`, `BAD_LENGTH`, `BAD_CHECKSUM`, `DMA_ERROR`
+```c
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;
+    uint16_t status;
+    uint16_t reserved;
+    uint32_t transfer_len;
+} net_ack_packet_t;
+```
 
-- Hard failures for that transmission attempt.
+常量：
 
-## Key Tuning Parameters
+```text
+DATA magic       0x4E455430
+ACK magic        0x41434B30
+数据包头长度     16 bytes
+ACK 长度         16 bytes
+```
 
-Board-side values:
+ACK 状态：
 
-- `src/app/app_config.h`
-  - `APP_ENABLE_ICACHE = 1`
-  - `APP_ENABLE_DCACHE = 0`
-  - `TX_BUFFER_WORD_COUNT = 32768`
-  - Total DMA TX buffer = `32768 * 8 = 262144` bytes
-- `src/drivers/net/net_config.h`
-  - `NET_AGG_ENABLE = 1`
-  - `NET_AGG_BLOCK_COUNT = 16`
-  - `NET_AGG_BLOCK_BYTES = 16384`
-  - `NET_AGG_MIN_FLUSH_BYTES = 8192`
-  - `NET_AGG_FLUSH_TIMEOUT_US = 15000`
-  - `NET_AGG_IDLE_FLUSH_TIMEOUT_US = 100000`
-  - Total aggregation buffer = `16 * 16384 = 262144` bytes
-  - `NET_DEFAULT_CHUNK_SIZE_BYTES = 1456`
-  - `NET_MAX_RECOMMENDED_WINDOW_SIZE = 64`
-  - `NET_CRC32_USE_TABLE = 1`
-  - `NET_ACK_COALESCE_ENABLE = 1`
-  - `NET_ACK_COALESCE_PACKET_COUNT = 8`
-  - `NET_ACK_COALESCE_TIMEOUT_US = 1000`
-  - `NET_INPUT_POLL_BUDGET = 32`
-  - `NET_STRICT_IN_ORDER_RX = 1`
+```text
+0 OK            包已写入 PS 聚合缓冲
+1 BAD_MAGIC     magic 错误
+2 BAD_LENGTH    包长度或负载长度错误
+3 BAD_CHECKSUM  CRC32 校验失败
+4 BUSY          板端聚合缓冲满，本包未接收
+5 DMA_ERROR     DMA 错误
+6 PENDING       本包序号超前，本包未接收
+```
 
-Host defaults:
+## 顺序和可靠性
 
-- `chunk_size = 1456`
-- `window_size = 64`
-- `socket_buffer_bytes = 4194304`
-- `progress_interval_ms = 100`
-- `verbose_events = false`
-- `throughput_mode = true` in the GUI
+当前 ACK v1 使用累计确认语义。为了保证累计 ACK 安全，板端强制严格按序接收：
 
-`1456` is chosen to keep `16-byte application header + 1456-byte payload = 1472-byte UDP payload`, which stays within the common Ethernet MTU without IP fragmentation.
+- 板端只接收 `seq == expected_seq` 的包。
+- 接收成功后负载写入当前聚合块，然后 `expected_seq++`。
+- `seq > expected_seq` 的包返回 `PENDING`，不会写入聚合缓冲。
+- 聚合缓冲无可写空间时返回 `BUSY`，不会写入聚合缓冲。
+- 已经接收过的重复包返回 `OK`。
+- 主机收到 `OK seq=N` 后，可认为当前未确认队列中 `seq <= N` 的包已被板端接收。
 
-## Throughput Limits
+DMA 聚合块的顺序也有显式保证。每个 `READY` 聚合块都带有递增的提交序号，`Net_RxPoll()` 总是选择最早提交的 `READY` 聚合块启动 DMA。这样，回收后的低下标聚合块不会插队到旧 `READY` 聚合块前面。
 
-The dominant software limits are usually:
+因此，`BUSY`、`PENDING` 和重传只会导致等待或重发，不会造成 PS 到 PL 的数据乱序。
 
-- lwIP receive and `pbuf` handling
-- CRC32 calculation per packet
-- payload copy into DMA slots
-- aggregation block fill/flush behavior
-- ACK turnaround
-- board-side aggregation capacity and host retry behavior
-- UART logging overhead if verbose logs are enabled
+## 聚合和 DMA
 
-The DMA engine itself is normally faster than the observed end-to-end throughput. For that reason:
+当前板端参数：
 
-- packet-level UART logging stays disabled by default
-- the board aggregates multiple UDP chunks before DMA
-- the host window is allowed to exceed `1`
-- ACK is sent on PS buffer acceptance rather than DMA completion
-- the host GUI no longer logs every packet by default
-- host progress updates are throttled to reduce `PC -> PS` overhead
+```text
+TX_BUFFER_BASE                 0x01200000
+TX_BUFFER_WORD_COUNT           32768
+TX 缓冲区大小                  262144 字节
 
-## Throughput Metrics
+NET_AGG_BLOCK_BYTES            16384
+NET_AGG_BLOCK_COUNT            16
+聚合缓冲总容量                 262144 字节
+NET_AGG_MIN_FLUSH_BYTES        8192
+NET_AGG_FLUSH_TIMEOUT_US       15000
+NET_AGG_IDLE_FLUSH_TIMEOUT_US  100000
+```
 
-Host-side metrics now use two different meanings:
+负载会按接收顺序追加到当前聚合块。聚合块进入 READY 的条件：
 
-- `Delivered`
-  - confirmed payload throughput based on `bytes_acked / total_elapsed_time`
-  - this is the best high-level measure of real end-to-end throughput
-- `Last ACK Rate`
-  - single-chunk rate derived from `transfer_len / ACK_RTT`
-  - useful for latency inspection, but not equal to sustained throughput
+- 聚合块已满；
+- 聚合块至少达到 `NET_AGG_MIN_FLUSH_BYTES`，且达到 `NET_AGG_FLUSH_TIMEOUT_US`；
+- 或聚合块空闲达到 `NET_AGG_IDLE_FLUSH_TIMEOUT_US`。
 
-In `--throughput-mode`, the host uses a dedicated tight sender path. It keeps
-packet bytes cached while they are outstanding, fills the configured window
-aggressively, drains all currently available ACKs with a non-blocking socket,
-and only emits aggregate progress at the configured interval. This keeps the
-test from being paced by per-packet logging or by a long `recvfrom` timeout.
+DMA 传输长度按 8 字节对齐，不足部分补 0。
 
-Additional host-side throughput diagnostics:
+## Cache 策略
 
-- `tx_pkt`
-  - host UDP packets sent per second, including retransmissions
-- `ack_rx`
-  - ACK packets received per second
-- `occ_avg` / `occ_max`
-  - sampled outstanding-window occupancy average and maximum
-- `idle_sleep`
-  - total time spent sleeping because no ACK/retry/send work was immediately available
-- `empty`
-  - count of empty non-blocking receive polls / timeout wakeups
+当前 cache 策略：
 
-Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per second. It reports interval and average RX/DMA rates, packet and DMA completion counts, aggregation block occupancy, ACK/NACK counts, protocol errors, duplicate/pending/busy counts, and aggregation counters. After aggregation is working, `dma_done` should be much lower than `rx_pkt`, while `agg_avg` should be much larger than one UDP chunk.
+```c
+#define APP_ENABLE_ICACHE 1
+#define APP_ENABLE_DCACHE 0
+```
 
-Board-side CRC now uses a 256-entry table instead of the older bit-at-a-time
-loop. Normal `OK` ACKs are also coalesced while preserving ACK v1 cumulative
-semantics: the board sends one `OK seq=N` after `8` accepted packets or after
-`1000 us`, whichever comes first. Error, duplicate, and `BUSY` ACKs are still
-sent immediately after flushing any pending `OK`. With coalescing enabled,
-board `ack` should be lower than `rx_pkt` during clean transfers.
+I-cache 已启用，D-cache 保持关闭，以避免 DMA coherency 风险。DMA MM2S 启动前仍保留 `Xil_DCacheFlushRange()` 调用，便于后续如需启用 D-cache 时继续维护一致性路径。
 
-`Net_Poll()` also drains up to `NET_INPUT_POLL_BUDGET` queued Ethernet packets per
-main-loop pass. Xilinx `xemacpsif_input()` processes at most one queued packet per
-call in bare-metal `NO_SYS` mode, so batching reduces repeated per-packet main-loop
-work while keeping DMA/stat polling bounded.
+## PC 发送端
 
-The board prints two short `STAT` lines each period. `STAT rate` reports offered
-UDP receive rate and accepted payload rate:
-
-- `rx` / `rx_pkt`
-  - UDP packets that reached the board receive callback, including packets later rejected as `BUSY` or `PENDING`
-- `acc` / `acc_pkt`
-  - payload actually accepted into PS aggregation memory
-- `dma`
-  - payload drained from PS aggregation blocks through AXI DMA
-
-`STAT state` reports queue occupancy, ACK/NACK totals, protocol errors, busy /
-pending / duplicate counters, DMA errors, and aggregation counters. The board
-prints these lines only when the current stats interval has receive or DMA
-activity, and wraps each stats group in separator lines for readability.
-
-For correctness, `acc` and `dma` are the important data-path rates. A high `rx`
-with much lower `acc` means the host is offering more traffic than the board can
-buffer or drain.
-
-Example throughput command:
+推荐命令行吞吐测试：
 
 ```bash
 python tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1456 --window-size 64 --throughput-mode
 ```
 
-The same test can be run from the GUI by selecting `Test Data`, keeping `Throughput Mode` enabled, clicking `64 MiB`, and pressing `Start`.
+发送文件：
 
-## Recommended Operating Range
+```bash
+python tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1456 --window-size 64 --throughput-mode
+```
 
-Start with:
+GUI：
 
-- `chunk_size = 1456`
-- `window_size = 64`
-- `target_rate_kib_s = 0`
+```bash
+python tools/pc_sender/sender_gui.py
+```
 
-If stable, try:
+推荐 GUI 配置：
 
-1. Keep `window_size = 64` as the current recommended upper bound.
-2. If you go above `64`, first confirm `busy=0` and the aggregation buffers are not persistently full.
+```text
+模式：测试数据（GUI 中为 Test Data）
+吞吐模式：启用（GUI 中为 Throughput Mode）
+逐包日志：关闭（GUI 中为 Verbose Packet Events）
+每包负载字节数：1456（GUI 中为 Chunk Bytes）
+窗口大小：64（GUI 中为 Window Size）
+进度刷新间隔：1000 ms（GUI 中为 Progress ms）
+测试数据大小：64 MiB 或 256 MiB
+```
 
-Only increase `chunk_size` if you also re-check the MTU budget. Going above `1456` payload bytes will usually trigger IP fragmentation and often reduces real throughput.
+吞吐模式使用非阻塞 ACK 读取、未确认包缓存和自适应有效窗口。`BUSY` 和超时会降低有效窗口；`PENDING` 只做轻微退避，因为它表示顺序压力，而不是数据已丢失。
 
-## Important Files
+默认每包负载大小是 `1456` 字节。加上 16 字节应用层包头后，UDP 负载为 `1472` 字节，可避免普通 1500 MTU 下的 IP 分片。
 
-- Board entry: `src/app/main.c`
-- Network init: `src/drivers/net/net_init.c`
-- RX queue, DMA scheduling, ACK logic: `src/drivers/net/net_rx.c`
-- Board-side stats: `src/drivers/net/net_stats.c`, `src/drivers/net/net_stats.h`
-- Protocol structs and CRC helpers: `src/drivers/net/net_protocol.h`, `src/drivers/net/net_protocol.c`
-- DMA IRQ wrapper: `src/drivers/dma/AXI_DMA.c`
-- Host sender core: `tools/pc_sender/sender_core.py`
-- Host GUI: `tools/pc_sender/sender_gui.py`
+## 运行统计
 
-## Practical Notes
+板端只有在当前统计周期内存在接收、已接收或 DMA 活动时才打印统计。每组统计带分隔线：
 
-- The board now acknowledges after PS-side buffer acceptance, not after DMA completion.
-- `PENDING` is reserved; duplicate accepted chunks are answered with `OK`.
-- If throughput is still limited, inspect board UART stats first:
-  - aggregation block occupancy
-  - `agg_avg`
-  - `dma_done` versus `rx_pkt`
-  - `busy` count
-  - `err` count
+```text
+================ NET STAT ================
+STAT rate rx=... acc=... dma=... avg_rx=... avg_acc=... avg_dma=... rx_pkt=... acc_pkt=... dma_done=...
+STAT state q=.../... qmax=... ack=... nack=... crc=... badlen=... badmagic=... busy=... pend=... dup=... drop=... dma_err=... agg=... agg_full=... agg_to=... agg_avg=... agg_min=... agg_max=...
+==========================================
+```
 
-High `busy` means the aggregation buffer is full for the offered load.
-If `agg_avg` remains near one chunk, the sender is still not feeding PS fast enough or the flush timeout is too small.
+关键字段：
+
+```text
+rx / rx_pkt       UDP 回调看到的输入负载速率和包数，包含之后被 BUSY/PENDING 拒收的包
+acc / acc_pkt     实际写入 PS 聚合缓冲的负载速率和包数
+dma / dma_done    AXI DMA 从聚合块送出的负载速率和 DMA 完成次数
+q / qmax          当前和历史最大非空聚合块占用
+ack / nack        已发送 ACK 总数和非 OK ACK 总数
+busy              因聚合缓冲满而拒收的包数
+pend              因序号超前而拒收的包数
+dup               重复包数
+crc               CRC32 错误数
+drop              协议错误或资源不足导致的丢弃数
+dma_err           DMA 错误数
+agg               已提交聚合块数
+agg_full          因聚合块填满而提交的次数
+agg_to            因超时而提交的次数
+agg_avg/min/max   聚合块负载大小统计
+```
+
+判断真实吞吐时，应比较主机 `delivered`、板端 `acc` 和板端 `dma`。`rx` 是输入尝试流量，在主机发送过快时可能高于 `acc`。
+
+## 当前性能
+
+当前测试环境下，干净传输的端到端吞吐约为 `1.1-1.2 MiB/s`：
+
+```text
+PC delivered ~= PS acc ~= PS dma
+crc=0
+drop=0
+dma_err=0
+timeouts=0
+agg_avg 接近 16 KiB
+```
+
+目前聚合块已接近满块，主机和板端统计也能对齐。剩余持续吞吐瓶颈更可能在 PS UDP 聚合之后，例如 AXI DMA / PL 消费行为，或 PL 侧 AXI-Stream 反压。
+
+## 构建和运行
+
+推荐环境：`Xilinx SDK 2018.3`。
+
+1. 打开 Xilinx SDK 2018.3。
+2. 使用仓库根目录作为工作空间。
+3. 如需要，导入 `System_wrapper_hw_platform_0`、`AD9361_test2_bsp` 和 `AD9361_test2`。
+4. 构建 `AD9361_test2_bsp`。
+5. 构建 `AD9361_test2`。
+6. 使用 `System_wrapper_hw_platform_0/System_wrapper.bit` 配置 FPGA。
+7. 下载并运行 `AD9361_test2.elf`。
+8. 打开串口，波特率 `115200`。
+9. 确认 Ethernet 启动输出，并 ping `192.168.1.50`。
+10. 使用命令行或 GUI 发送数据。
+
+正常启动输出应包含：
+
+```text
+Ethernet ready
+MAC : 02:00:00:00:00:01
+IP  : 192.168.1.50
+UDP : listen on port 5001
+UDP RX ready, agg_blocks=16 block_bytes=16384 total_bytes=262144 max_payload=8192 rec_window<=64 ack=on_accept
+```
+
+## 注意事项
+
+- 板端在负载写入 PS 聚合缓冲后 ACK，不等待 DMA 完成。
+- `BUSY` 和 `PENDING` 都表示对应包未被接收，主机需要重发。
+- 一旦检测到 DMA 启动失败或 DMA 中断错误，板端进入失败停止状态，保留现有聚合块，不再继续向 PL 推送后续数据；新来的包会收到 `DMA_ERROR`。
+- 默认关闭逐包 UART 日志。
+- BSP 和硬件导出目录不应随意修改。
+- 如果后续需要继续提高吞吐，建议先测量 DMA 是否持续忙碌，以及 PL 是否对 AXI-Stream 施加反压。

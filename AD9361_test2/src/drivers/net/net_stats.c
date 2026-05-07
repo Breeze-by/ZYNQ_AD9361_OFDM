@@ -53,11 +53,6 @@ void NetStats_Init(void)
     last_dma_done = 0U;
 }
 
-const net_stats_t *NetStats_Get(void)
-{
-    return &net_stats;
-}
-
 void NetStats_OnRxPacket(uint32_t packet_bytes, uint32_t payload_bytes)
 {
     net_stats.rx_packets += 1U;

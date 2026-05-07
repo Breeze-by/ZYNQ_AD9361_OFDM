@@ -1,6 +1,5 @@
 #include "net_protocol.h"
 
-#if NET_CRC32_USE_TABLE
 static const uint32_t crc32_table[256] = {
     0x00000000U, 0x77073096U, 0xEE0E612CU, 0x990951BAU,
     0x076DC419U, 0x706AF48FU, 0xE963A535U, 0x9E6495A3U,
@@ -67,31 +66,15 @@ static const uint32_t crc32_table[256] = {
     0xB3667A2EU, 0xC4614AB8U, 0x5D681B02U, 0x2A6F2B94U,
     0xB40BBE37U, 0xC30C8EA1U, 0x5A05DF1BU, 0x2D02EF8DU
 };
-#endif
 
 uint32_t Net_Protocol_Crc32(const uint8_t *data, uint32_t length)
 {
     uint32_t crc = 0xFFFFFFFFU;
     uint32_t i;
 
-#if NET_CRC32_USE_TABLE
     for (i = 0; i < length; ++i) {
         crc = (crc >> 8) ^ crc32_table[(crc ^ data[i]) & 0xFFU];
     }
-#else
-    for (i = 0; i < length; ++i) {
-        uint32_t bit;
-
-        crc ^= data[i];
-        for (bit = 0; bit < 8U; ++bit) {
-            if ((crc & 1U) != 0U) {
-                crc = (crc >> 1) ^ 0xEDB88320U;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-#endif
 
     return ~crc;
 }

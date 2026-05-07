@@ -29,6 +29,10 @@ SDK.log
 *.gcda
 *.gcov
 
+# Python runtime cache
+__pycache__/
+*.py[cod]
+
 # Keep BSP exported headers/sources/libs under version control
 !AD9361_test2_bsp/ps7_cortexa9_0/include/
 !AD9361_test2_bsp/ps7_cortexa9_0/include/**
