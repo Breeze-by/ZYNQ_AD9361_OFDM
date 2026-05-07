@@ -24,29 +24,27 @@ The current transmit path is:
 
 There is no second application-level "UDP buffer to DMA buffer" copy stage. lwIP owns the short-lived RX `pbuf`; after validation, the application copies payload directly into the persistent DMA slot buffer.
 
-## Reliability Model
+## Sliding Window and ACK Model
 
-The link now behaves like a selective-repeat sliding window:
+The link now uses a bounded sliding-window sender instead of the old stop-and-wait path:
 
 - The host may have multiple in-flight chunks.
-- ACKs may arrive out of order.
-- The host matches ACKs by `seq`, not by "oldest outstanding chunk only".
 - The board keeps a DMA queue and a small completed-history cache.
-- Successful `OK` ACKs are cumulative instead of one-per-packet.
 - Retransmitted chunks are deduplicated:
   - If a chunk is already completed, the board resends `OK`.
   - If a chunk is still active or queued, the board returns `PENDING`.
   - If the queue is full and the sequence is new, the board returns `BUSY`.
+- Successful `OK` ACKs are batched and cumulative from the host's point of view.
 
-This removes the previous failure mode where `window_size > 4` caused "unexpected ACK sequence" errors on the host.
+The current implementation is intended for direct or normal LAN links where chunks are sent and received in sequence. The host treats `OK seq=N` as confirmation for all outstanding chunks with `seq <= N`. If the design must tolerate strong UDP reordering, the board should be changed to ACK a true contiguous-completed sequence or to emit per-chunk `OK` ACKs.
 
 ## ACK Meanings
 
 `OK`
 
-- Cumulative ACK for successful DMA completions.
-- `seq` means the highest consecutively completed chunk sequence on the board.
+- Batched ACK for successful DMA completions.
 - The host treats every outstanding chunk with `chunk_seq <= ack.seq` as completed.
+- This assumes the normal direct-link case where accepted chunks progress through the board in sequence.
 
 `PENDING`
 
@@ -67,6 +65,8 @@ This removes the previous failure mode where `window_size > 4` caused "unexpecte
 Board-side values:
 
 - `src/app/app_config.h`
+  - `APP_ENABLE_ICACHE = 1`
+  - `APP_ENABLE_DCACHE = 0`
   - `TX_BUFFER_WORD_COUNT = 16384`
   - Total DMA TX buffer = `16384 * 8 = 131072` bytes
 - `src/drivers/net/net_config.h`
@@ -83,6 +83,7 @@ Host defaults:
 - `socket_buffer_bytes = 4194304`
 - `progress_interval_ms = 100`
 - `verbose_events = false`
+- `throughput_mode = false`
 
 `1456` is chosen to keep `16-byte application header + 1456-byte payload = 1472-byte UDP payload`, which stays within the common Ethernet MTU without IP fragmentation.
 
@@ -118,7 +119,13 @@ Host-side metrics now use two different meanings:
   - single-chunk rate derived from `transfer_len / ACK_RTT`
   - useful for latency inspection, but not equal to sustained throughput
 
-Board-side `STAT ... rate=...` is based on the receive gap between adjacent packets reaching PS. If `qmax` remains near `1`, the DMA engine is not the bottleneck; the host path is feeding PS too slowly.
+Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per second. It reports interval and average RX/DMA rates, packet and DMA completion counts, queue depth, ACK/NACK counts, protocol errors, duplicate/pending/busy counts, and reserved aggregation counters. If `qmax` remains near `1`, the DMA engine is not the bottleneck; the host path is feeding PS too slowly.
+
+Example throughput command:
+
+```bash
+python tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1456 --window-size 32 --throughput-mode
+```
 
 ## Recommended Operating Range
 
@@ -140,6 +147,7 @@ Only increase `chunk_size` if you also re-check the MTU budget. Going above `145
 - Board entry: `src/app/main.c`
 - Network init: `src/drivers/net/net_init.c`
 - RX queue, DMA scheduling, ACK logic: `src/drivers/net/net_rx.c`
+- Board-side stats: `src/drivers/net/net_stats.c`, `src/drivers/net/net_stats.h`
 - Protocol structs and CRC helpers: `src/drivers/net/net_protocol.h`, `src/drivers/net/net_protocol.c`
 - DMA IRQ wrapper: `src/drivers/dma/AXI_DMA.c`
 - Host sender core: `tools/pc_sender/sender_core.py`

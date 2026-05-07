@@ -47,6 +47,7 @@ class SenderConfig:
     socket_buffer_bytes: int = 4 * 1024 * 1024
     progress_interval_s: float = 0.1
     verbose_events: bool = False
+    throughput_mode: bool = False
 
 
 @dataclass
@@ -94,6 +95,8 @@ def parse_args():
         help="minimum GUI/CLI progress update interval in ms")
     parser.add_argument("--verbose-events", action="store_true",
         help="print or emit per-packet events instead of throttled summaries")
+    parser.add_argument("--throughput-mode", action="store_true",
+        help="suppress packet events and print lightweight aggregate progress")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -425,8 +428,12 @@ def run_cli(args) -> int:
         target_rate_kib_s=args.target_rate_kib_s,
         window_size=args.window_size,
         socket_buffer_bytes=args.socket_buffer_bytes,
-        progress_interval_s=max(args.progress_interval_ms, 10) / 1000.0,
-        verbose_events=args.verbose_events,
+        progress_interval_s=(
+            max(args.progress_interval_ms, 1000) if args.throughput_mode
+            else max(args.progress_interval_ms, 10)
+        ) / 1000.0,
+        verbose_events=False if args.throughput_mode else args.verbose_events,
+        throughput_mode=args.throughput_mode,
     ))
 
     def callback(event_name: str, payload_dict: dict):
@@ -461,11 +468,20 @@ def run_cli(args) -> int:
             )
         elif event_name == "progress":
             stats = payload_dict["stats"]
-            print(
-                f"progress acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
-                f"inflight={payload_dict['window_used']} delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
-                f"rtt={stats.last_rtt_ms:.2f} ms busy={stats.ack_busy} pending={stats.ack_pending}"
-            )
+            if args.throughput_mode:
+                print(
+                    f"THR acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
+                    f"inflight={payload_dict['window_used']} send={stats.average_rate_kib_s:.2f} KiB/s "
+                    f"deliv={stats.delivered_rate_kib_s:.2f} KiB/s ps_est={stats.estimated_ps_rate_kib_s:.2f} KiB/s "
+                    f"rtt={stats.last_rtt_ms:.2f} ms retry={stats.retries_used} timeout={stats.timeout_count} "
+                    f"busy={stats.ack_busy} pending={stats.ack_pending} window={sender.config.window_size}"
+                )
+            else:
+                print(
+                    f"progress acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
+                    f"inflight={payload_dict['window_used']} delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
+                    f"rtt={stats.last_rtt_ms:.2f} ms busy={stats.ack_busy} pending={stats.ack_pending}"
+                )
         elif event_name == "done":
             stats = payload_dict["stats"]
             elapsed = max(stats.finished_at - stats.started_at, 1e-6)

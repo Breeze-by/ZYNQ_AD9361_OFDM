@@ -28,8 +28,17 @@ int main(void)
     uint8_t *TxBufferPtr;
     int32_t val;
 
+#if APP_ENABLE_ICACHE
+    Xil_ICacheEnable();
+#else
     Xil_ICacheDisable();
+#endif
+
+#if APP_ENABLE_DCACHE
+    Xil_DCacheEnable();
+#else
     Xil_DCacheDisable();
+#endif
 
     gpio_initial();
 
