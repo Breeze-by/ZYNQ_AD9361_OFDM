@@ -204,11 +204,9 @@ void NetStats_PrintPeriodic(void)
     avg_dma_rate_x100_kib = stats_rate_x100_kib(net_stats.dma_bytes_total, total_us);
 
     UART_Printf(
-        "STAT rx=%lu.%02lu acc=%lu.%02lu dma=%lu.%02lu "
+        "STAT rate rx=%lu.%02lu acc=%lu.%02lu dma=%lu.%02lu "
         "avg_rx=%lu.%02lu avg_acc=%lu.%02lu avg_dma=%lu.%02lu "
-        "rx_pkt=%lu acc_pkt=%lu dma_done=%lu q=%lu/%u qmax=%lu ack=%lu nack=%lu "
-        "crc=%lu badlen=%lu badmagic=%lu busy=%lu pend=%lu dup=%lu drop=%lu dma_err=%lu "
-        "agg=%lu agg_full=%lu agg_to=%lu agg_avg=%lu agg_min=%lu agg_max=%lu\r\n",
+        "rx_pkt=%lu acc_pkt=%lu dma_done=%lu\r\n",
         (unsigned long)(rx_rate_x100_kib / 100U),
         (unsigned long)(rx_rate_x100_kib % 100U),
         (unsigned long)(accepted_rate_x100_kib / 100U),
@@ -223,7 +221,12 @@ void NetStats_PrintPeriodic(void)
         (unsigned long)(avg_dma_rate_x100_kib % 100U),
         (unsigned long)interval_rx_packets,
         (unsigned long)interval_accepted_packets,
-        (unsigned long)interval_dma_done,
+        (unsigned long)interval_dma_done);
+
+    UART_Printf(
+        "STAT state q=%lu/%u qmax=%lu ack=%lu nack=%lu "
+        "crc=%lu badlen=%lu badmagic=%lu busy=%lu pend=%lu dup=%lu drop=%lu dma_err=%lu "
+        "agg=%lu agg_full=%lu agg_to=%lu agg_avg=%lu agg_min=%lu agg_max=%lu\r\n",
         (unsigned long)net_stats.queue_occupancy_current,
         (unsigned)NET_DMA_QUEUE_CAPACITY,
         (unsigned long)net_stats.queue_occupancy_max,

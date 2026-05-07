@@ -102,7 +102,7 @@ void UART_SendString(const char *str)
  */
 int UART_Printf(const char *fmt, ...)
 {
-    char buffer[256];
+    char buffer[512];
     va_list args;
     int len;
 

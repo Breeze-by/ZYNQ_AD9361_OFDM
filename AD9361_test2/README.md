@@ -166,8 +166,8 @@ main-loop pass. Xilinx `xemacpsif_input()` processes at most one queued packet p
 call in bare-metal `NO_SYS` mode, so batching reduces repeated per-packet main-loop
 work while keeping DMA/stat polling bounded.
 
-The board `STAT` line reports both offered UDP receive rate and accepted payload
-rate:
+The board prints two short `STAT` lines each period. `STAT rate` reports offered
+UDP receive rate and accepted payload rate:
 
 - `rx` / `rx_pkt`
   - UDP packets that reached the board receive callback, including packets later rejected as `BUSY` or `PENDING`
@@ -175,6 +175,9 @@ rate:
   - payload actually accepted into PS aggregation memory
 - `dma`
   - payload drained from PS aggregation blocks through AXI DMA
+
+`STAT state` reports queue occupancy, ACK/NACK totals, protocol errors, busy /
+pending / duplicate counters, DMA errors, and aggregation counters.
 
 For correctness, `acc` and `dma` are the important data-path rates. A high `rx`
 with much lower `acc` means the host is offering more traffic than the board can
