@@ -79,6 +79,11 @@ Board-side values:
   - Total aggregation buffer = `8 * 16384 = 131072` bytes
   - `NET_DEFAULT_CHUNK_SIZE_BYTES = 1456`
   - `NET_MAX_RECOMMENDED_WINDOW_SIZE = 64`
+  - `NET_CRC32_USE_TABLE = 1`
+  - `NET_ACK_COALESCE_ENABLE = 1`
+  - `NET_ACK_COALESCE_PACKET_COUNT = 8`
+  - `NET_ACK_COALESCE_TIMEOUT_US = 1000`
+  - `NET_INPUT_POLL_BUDGET = 32`
 
 Host defaults:
 
@@ -143,6 +148,18 @@ Additional host-side throughput diagnostics:
   - count of empty non-blocking receive polls / timeout wakeups
 
 Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per second. It reports interval and average RX/DMA rates, packet and DMA completion counts, aggregation block occupancy, ACK/NACK counts, protocol errors, duplicate/pending/busy counts, and aggregation counters. After aggregation is working, `dma_done` should be much lower than `rx_pkt`, while `agg_avg` should be much larger than one UDP chunk.
+
+Board-side CRC now uses a 256-entry table instead of the older bit-at-a-time
+loop. Normal `OK` ACKs are also coalesced while preserving ACK v1 cumulative
+semantics: the board sends one `OK seq=N` after `8` accepted packets or after
+`1000 us`, whichever comes first. Error, duplicate, and `BUSY` ACKs are still
+sent immediately after flushing any pending `OK`. With coalescing enabled,
+board `ack` should be lower than `rx_pkt` during clean transfers.
+
+`Net_Poll()` also drains up to `NET_INPUT_POLL_BUDGET` queued Ethernet packets per
+main-loop pass. Xilinx `xemacpsif_input()` processes at most one queued packet per
+call in bare-metal `NO_SYS` mode, so batching reduces repeated per-packet main-loop
+work while keeping DMA/stat polling bounded.
 
 Example throughput command:
 

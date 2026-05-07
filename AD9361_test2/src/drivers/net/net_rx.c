@@ -44,6 +44,13 @@ static int dma_busy;
 static uint32_t queue_occupancy_max;
 static uint64_t total_accepted_bytes;
 static uint32_t total_accepted_chunks;
+static int pending_ok_ack_valid;
+static ip_addr_t pending_ok_ack_addr;
+static u16_t pending_ok_ack_port;
+static uint32_t pending_ok_ack_seq;
+static uint32_t pending_ok_ack_transfer_len;
+static uint32_t pending_ok_ack_count;
+static XTime pending_ok_ack_first_time;
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
@@ -113,6 +120,75 @@ static void net_send_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
     udp_sendto(udp_control_pcb, ack_pbuf, addr, port);
     NetStats_OnAck(status);
     pbuf_free(ack_pbuf);
+}
+
+static void net_flush_pending_ok_ack(void)
+{
+#if NET_ACK_COALESCE_ENABLE
+    if (pending_ok_ack_valid == 0) {
+        return;
+    }
+
+    net_send_ack(&pending_ok_ack_addr, pending_ok_ack_port, pending_ok_ack_seq,
+        NET_ACK_STATUS_OK, pending_ok_ack_transfer_len);
+    pending_ok_ack_valid = 0;
+    pending_ok_ack_count = 0U;
+    pending_ok_ack_seq = 0U;
+    pending_ok_ack_transfer_len = 0U;
+    pending_ok_ack_first_time = 0U;
+#endif
+}
+
+static void net_send_immediate_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
+    net_ack_status_t status, uint32_t transfer_len)
+{
+    net_flush_pending_ok_ack();
+    net_send_ack(addr, port, seq, status, transfer_len);
+}
+
+static void net_queue_ok_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
+    uint32_t transfer_len)
+{
+#if NET_ACK_COALESCE_ENABLE
+    if ((pending_ok_ack_valid != 0) &&
+        ((pending_ok_ack_port != port) || !ip_addr_cmp(&pending_ok_ack_addr, addr))) {
+        net_flush_pending_ok_ack();
+    }
+
+    if (pending_ok_ack_valid == 0) {
+        XTime_GetTime(&pending_ok_ack_first_time);
+        pending_ok_ack_addr = *addr;
+        pending_ok_ack_port = port;
+        pending_ok_ack_count = 0U;
+        pending_ok_ack_valid = 1;
+    }
+
+    pending_ok_ack_seq = seq;
+    pending_ok_ack_transfer_len = transfer_len;
+    pending_ok_ack_count += 1U;
+
+    if (pending_ok_ack_count >= NET_ACK_COALESCE_PACKET_COUNT) {
+        net_flush_pending_ok_ack();
+    }
+#else
+    net_send_ack(addr, port, seq, NET_ACK_STATUS_OK, transfer_len);
+#endif
+}
+
+static void net_check_ack_timeout(void)
+{
+#if NET_ACK_COALESCE_ENABLE
+    XTime now_time;
+
+    if (pending_ok_ack_valid == 0) {
+        return;
+    }
+
+    XTime_GetTime(&now_time);
+    if (net_elapsed_us(pending_ok_ack_first_time, now_time) >= NET_ACK_COALESCE_TIMEOUT_US) {
+        net_flush_pending_ok_ack();
+    }
+#endif
 }
 
 static int net_find_accepted_len(uint32_t seq, uint32_t *payload_len)
@@ -344,7 +420,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     if (p->tot_len < sizeof(header)) {
         UART_Printf("UDP drop reason=short_packet len=%lu\r\n", (unsigned long)p->tot_len);
         NetStats_OnBadLength();
-        net_send_ack(addr, port, 0U, NET_ACK_STATUS_BAD_LENGTH, 0U);
+        net_send_immediate_ack(addr, port, 0U, NET_ACK_STATUS_BAD_LENGTH, 0U);
         pbuf_free(p);
         return;
     }
@@ -356,7 +432,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             (unsigned long)header.seq,
             (unsigned long)header.magic);
         NetStats_OnBadMagic();
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_MAGIC, 0U);
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_MAGIC, 0U);
         pbuf_free(p);
         return;
     }
@@ -367,7 +443,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             (unsigned long)p->tot_len,
             (unsigned)header.payload_len);
         NetStats_OnBadLength();
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
         pbuf_free(p);
         return;
     }
@@ -378,21 +454,21 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             (unsigned)header.payload_len,
             (unsigned)NET_MAX_PAYLOAD_BYTES);
         NetStats_OnBadLength();
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
         pbuf_free(p);
         return;
     }
 
     if (net_find_accepted_len(header.seq, &accepted_payload_len) != 0) {
         NetStats_OnDuplicate();
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, accepted_payload_len);
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_OK, accepted_payload_len);
         pbuf_free(p);
         return;
     }
 
     if (net_ensure_fill_block((uint32_t)header.payload_len) != 0) {
         NetStats_OnBusy();
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BUSY, 0U);
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BUSY, 0U);
         pbuf_free(p);
         return;
     }
@@ -407,7 +483,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             (unsigned long)header.payload_crc32,
             (unsigned long)actual_crc);
         NetStats_OnCrcError();
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
         pbuf_free(p);
         return;
     }
@@ -417,7 +493,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     total_accepted_bytes += header.payload_len;
     total_accepted_chunks += 1U;
     net_record_accepted_chunk(header.seq, header.payload_len);
-    net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, header.payload_len);
+    net_queue_ok_ack(addr, port, header.seq, header.payload_len);
 
     if (net_should_report_packet_log() != 0) {
         UART_Printf("UDP accept seq=%lu payload=%u block=%d fill=%lu total=%lu\r\n",
@@ -478,6 +554,12 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     queue_occupancy_max = 0U;
     total_accepted_bytes = 0U;
     total_accepted_chunks = 0U;
+    pending_ok_ack_valid = 0;
+    pending_ok_ack_port = 0U;
+    pending_ok_ack_seq = 0U;
+    pending_ok_ack_transfer_len = 0U;
+    pending_ok_ack_count = 0U;
+    pending_ok_ack_first_time = 0U;
     TxDone = 0;
     Error = 0;
 
@@ -499,6 +581,7 @@ void Net_RxPoll(void)
 {
     NetStats_PrintPeriodic();
     net_check_agg_timeout();
+    net_check_ack_timeout();
 
     if (dma_busy == 0) {
         net_start_dma_transfer();

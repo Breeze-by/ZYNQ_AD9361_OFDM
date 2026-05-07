@@ -57,7 +57,13 @@ int Net_Init(const unsigned char *mac_address)
 
 void Net_Poll(void)
 {
+    uint32_t poll_count;
+
     if (ethernet_ready != 0) {
-        xemacif_input(&server_netif);
+        for (poll_count = 0U; poll_count < NET_INPUT_POLL_BUDGET; ++poll_count) {
+            if (xemacif_input(&server_netif) <= 0) {
+                break;
+            }
+        }
     }
 }
