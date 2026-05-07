@@ -23,14 +23,20 @@ static struct udp_pcb *udp_control_pcb;
 static uint8_t *dma_tx_buffer;
 static uint32_t dma_tx_capacity_bytes;
 
-static net_pending_chunk_t pending_chunk;
 static net_pending_chunk_t active_chunk;
+static net_pending_chunk_t tx_queue[NET_TX_QUEUE_DEPTH];
+static uint32_t queue_head_index;
+static uint32_t queue_tail_index;
+static uint32_t queue_count;
+static uint32_t queue_max_depth;
 static uint32_t last_completed_seq;
 static uint32_t last_completed_len;
 static int has_last_completed_seq;
 static int dma_busy;
 static uint64_t total_completed_bytes;
 static uint32_t total_completed_chunks;
+static uint32_t total_busy_acks;
+static uint32_t total_error_acks;
 static XTime active_dma_start_time;
 static XTime first_recv_time;
 static XTime last_recv_time;
@@ -73,6 +79,41 @@ static void net_print_rate_line(const char *prefix, uint32_t seq, uint32_t trans
         (unsigned long)total_completed_bytes);
 }
 
+static int net_should_report_packet_log(void)
+{
+#if NET_VERBOSE_PACKET_LOG
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+static int net_should_report_stats(void)
+{
+    if (total_completed_chunks <= 4U) {
+        return 1;
+    }
+
+    return ((total_completed_chunks % NET_STATS_REPORT_INTERVAL) == 0U);
+}
+
+static void net_print_stats_summary(uint64_t recv_gap_us, uint32_t recent_rate_x100_kib,
+    uint32_t avg_rate_x100_kib)
+{
+    UART_Printf(
+        "STAT chunks=%lu total=%lu qmax=%lu busy=%lu err=%lu gap_us=%lu rate=%lu.%02lu avg=%lu.%02lu\r\n",
+        (unsigned long)total_completed_chunks,
+        (unsigned long)total_completed_bytes,
+        (unsigned long)queue_max_depth,
+        (unsigned long)total_busy_acks,
+        (unsigned long)total_error_acks,
+        (unsigned long)recv_gap_us,
+        (unsigned long)(recent_rate_x100_kib / 100U),
+        (unsigned long)(recent_rate_x100_kib % 100U),
+        (unsigned long)(avg_rate_x100_kib / 100U),
+        (unsigned long)(avg_rate_x100_kib % 100U));
+}
+
 static void net_send_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
     net_ack_status_t status, uint32_t transfer_len)
 {
@@ -102,31 +143,42 @@ static void net_send_ack(const ip_addr_t *addr, u16_t port, uint32_t seq,
 static void net_start_dma_transfer(void)
 {
     int status;
+    net_pending_chunk_t *queued_chunk;
 
-    TxDone = 0;
-    Error = 0;
-
-    Xil_DCacheFlushRange((UINTPTR)dma_tx_buffer, pending_chunk.transfer_len);
-    status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)dma_tx_buffer,
-        pending_chunk.transfer_len, XAXIDMA_DMA_TO_DEVICE);
-    if (status != XST_SUCCESS) {
-        UART_Printf("DMA start failed seq=%lu len=%lu status=%d\r\n",
-            (unsigned long)pending_chunk.seq,
-            (unsigned long)pending_chunk.transfer_len,
-            status);
-        net_send_ack(&pending_chunk.peer_addr, pending_chunk.peer_port, pending_chunk.seq,
-            NET_ACK_STATUS_DMA_ERROR, pending_chunk.transfer_len);
-        pending_chunk.valid = 0;
+    if (queue_count == 0U) {
         return;
     }
 
-    UART_Printf("DMA start seq=%lu len=%lu\r\n",
-        (unsigned long)pending_chunk.seq,
-        (unsigned long)pending_chunk.transfer_len);
+    TxDone = 0;
+    Error = 0;
+    queued_chunk = &tx_queue[queue_head_index];
+
+    Xil_DCacheFlushRange((UINTPTR)dma_tx_buffer, queued_chunk->transfer_len);
+    status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)dma_tx_buffer,
+        queued_chunk->transfer_len, XAXIDMA_DMA_TO_DEVICE);
+    if (status != XST_SUCCESS) {
+        UART_Printf("DMA start failed seq=%lu len=%lu status=%d\r\n",
+            (unsigned long)queued_chunk->seq,
+            (unsigned long)queued_chunk->transfer_len,
+            status);
+        total_error_acks += 1U;
+        net_send_ack(&queued_chunk->peer_addr, queued_chunk->peer_port, queued_chunk->seq,
+            NET_ACK_STATUS_DMA_ERROR, queued_chunk->transfer_len);
+        queued_chunk->valid = 0;
+        queue_head_index = (queue_head_index + 1U) % NET_TX_QUEUE_DEPTH;
+        queue_count -= 1U;
+        return;
+    }
+
+    if (net_should_report_packet_log() != 0) {
+        UART_Printf("DMA start seq=%lu len=%lu q=%lu\r\n",
+            (unsigned long)queued_chunk->seq,
+            (unsigned long)queued_chunk->transfer_len,
+            (unsigned long)queue_count);
+    }
     XTime_GetTime(&active_dma_start_time);
 
-    active_chunk = pending_chunk;
-    pending_chunk.valid = 0;
+    active_chunk = *queued_chunk;
     dma_busy = 1;
 }
 
@@ -162,19 +214,24 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     }
 
     if (has_last_completed_seq != 0 && header.seq == last_completed_seq) {
-        UART_Printf("UDP duplicate seq=%lu ack_resend len=%lu\r\n",
-            (unsigned long)header.seq,
-            (unsigned long)last_completed_len);
+        if (net_should_report_packet_log() != 0) {
+            UART_Printf("UDP duplicate seq=%lu ack_resend len=%lu\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)last_completed_len);
+        }
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, last_completed_len);
         pbuf_free(p);
         return;
     }
 
-    if (dma_busy != 0 || pending_chunk.valid != 0) {
-        UART_Printf("UDP busy seq=%lu dma_busy=%d pending=%d\r\n",
-            (unsigned long)header.seq,
-            dma_busy,
-            pending_chunk.valid);
+    if (queue_count >= NET_TX_QUEUE_DEPTH) {
+        total_busy_acks += 1U;
+        if (net_should_report_packet_log() != 0) {
+            UART_Printf("UDP busy seq=%lu q=%lu/%u\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)queue_count,
+                (unsigned)NET_TX_QUEUE_DEPTH);
+        }
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BUSY, 0U);
         pbuf_free(p);
         return;
@@ -200,43 +257,57 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
-    pbuf_copy_partial(p, dma_tx_buffer, header.payload_len, sizeof(header));
-    actual_crc = Net_Protocol_Crc32(dma_tx_buffer, header.payload_len);
-    if (actual_crc != header.payload_crc32) {
-        UART_Printf("UDP drop seq=%lu reason=bad_crc rx=0x%08lX calc=0x%08lX\r\n",
-            (unsigned long)header.seq,
-            (unsigned long)header.payload_crc32,
-            (unsigned long)actual_crc);
-        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
-        pbuf_free(p);
-        return;
-    }
+    {
+        net_pending_chunk_t *slot = &tx_queue[queue_tail_index];
+        uint8_t *slot_buffer = dma_tx_buffer + (queue_tail_index * dma_tx_capacity_bytes);
 
-    aligned_len = Net_Protocol_Align8(header.payload_len);
-    if (aligned_len > header.payload_len) {
-        memset(&dma_tx_buffer[header.payload_len], 0, aligned_len - header.payload_len);
-    }
+        pbuf_copy_partial(p, slot_buffer, header.payload_len, sizeof(header));
+        actual_crc = Net_Protocol_Crc32(slot_buffer, header.payload_len);
+        if (actual_crc != header.payload_crc32) {
+            UART_Printf("UDP drop seq=%lu reason=bad_crc rx=0x%08lX calc=0x%08lX\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)header.payload_crc32,
+                (unsigned long)actual_crc);
+            net_send_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
+            pbuf_free(p);
+            return;
+        }
 
-    pending_chunk.valid = 1;
-    pending_chunk.seq = header.seq;
-    pending_chunk.transfer_len = aligned_len;
-    ip_addr_copy(pending_chunk.peer_addr, *addr);
-    pending_chunk.peer_port = port;
-    XTime_GetTime(&pending_chunk.accept_time);
-    if (has_recv_time == 0) {
-        first_recv_time = pending_chunk.accept_time;
-        pending_chunk.recv_gap_us = 0U;
-        has_recv_time = 1;
-    } else {
-        pending_chunk.recv_gap_us = net_elapsed_us(last_recv_time, pending_chunk.accept_time);
-    }
-    last_recv_time = pending_chunk.accept_time;
+        aligned_len = Net_Protocol_Align8(header.payload_len);
+        if (aligned_len > header.payload_len) {
+            memset(&slot_buffer[header.payload_len], 0, aligned_len - header.payload_len);
+        }
 
-    UART_Printf("UDP recv seq=%lu payload=%u aligned=%lu from_port=%u\r\n",
-        (unsigned long)header.seq,
-        (unsigned)header.payload_len,
-        (unsigned long)aligned_len,
-        (unsigned)port);
+        slot->valid = 1;
+        slot->seq = header.seq;
+        slot->transfer_len = aligned_len;
+        ip_addr_copy(slot->peer_addr, *addr);
+        slot->peer_port = port;
+        XTime_GetTime(&slot->accept_time);
+        if (has_recv_time == 0) {
+            first_recv_time = slot->accept_time;
+            slot->recv_gap_us = 0U;
+            has_recv_time = 1;
+        } else {
+            slot->recv_gap_us = net_elapsed_us(last_recv_time, slot->accept_time);
+        }
+        last_recv_time = slot->accept_time;
+
+        queue_tail_index = (queue_tail_index + 1U) % NET_TX_QUEUE_DEPTH;
+        queue_count += 1U;
+        if (queue_count > queue_max_depth) {
+            queue_max_depth = queue_count;
+        }
+
+        if (net_should_report_packet_log() != 0) {
+            UART_Printf("UDP recv seq=%lu payload=%u aligned=%lu from_port=%u q=%lu\r\n",
+                (unsigned long)header.seq,
+                (unsigned)header.payload_len,
+                (unsigned long)aligned_len,
+                (unsigned)port,
+                (unsigned long)queue_count);
+        }
+    }
 
     pbuf_free(p);
 }
@@ -258,14 +329,20 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
 
     dma_tx_buffer = tx_buffer;
     dma_tx_capacity_bytes = tx_buffer_capacity_bytes;
-    pending_chunk.valid = 0;
     active_chunk.valid = 0;
+    memset(tx_queue, 0, sizeof(tx_queue));
+    queue_head_index = 0U;
+    queue_tail_index = 0U;
+    queue_count = 0U;
+    queue_max_depth = 0U;
     has_last_completed_seq = 0;
     dma_busy = 0;
     TxDone = 0;
     Error = 0;
     total_completed_bytes = 0U;
     total_completed_chunks = 0U;
+    total_busy_acks = 0U;
+    total_error_acks = 0U;
     has_recv_time = 0;
 
     udp_recv(udp_control_pcb, net_udp_receive_callback, NULL);
@@ -276,7 +353,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
 
 void Net_RxPoll(void)
 {
-    if (dma_busy == 0 && pending_chunk.valid != 0) {
+    if (dma_busy == 0 && queue_count != 0U) {
         net_start_dma_transfer();
     }
 
@@ -288,10 +365,16 @@ void Net_RxPoll(void)
         UART_Printf("DMA error seq=%lu len=%lu\r\n",
             (unsigned long)active_chunk.seq,
             (unsigned long)active_chunk.transfer_len);
+        total_error_acks += 1U;
         net_send_ack(&active_chunk.peer_addr, active_chunk.peer_port, active_chunk.seq,
             NET_ACK_STATUS_DMA_ERROR, active_chunk.transfer_len);
         dma_busy = 0;
         active_chunk.valid = 0;
+        tx_queue[queue_head_index].valid = 0;
+        queue_head_index = (queue_head_index + 1U) % NET_TX_QUEUE_DEPTH;
+        if (queue_count != 0U) {
+            queue_count -= 1U;
+        }
         Error = 0;
         TxDone = 0;
         return;
@@ -320,12 +403,21 @@ void Net_RxPoll(void)
 
         net_send_ack(&active_chunk.peer_addr, active_chunk.peer_port, active_chunk.seq,
             NET_ACK_STATUS_OK, active_chunk.transfer_len);
-        net_print_rate_line("ACK", active_chunk.seq, active_chunk.transfer_len,
-            dma_elapsed_us, app_elapsed_us, active_chunk.recv_gap_us,
-            recent_rate_x100_kib, avg_rate_x100_kib);
+        if (net_should_report_packet_log() != 0) {
+            net_print_rate_line("ACK", active_chunk.seq, active_chunk.transfer_len,
+                dma_elapsed_us, app_elapsed_us, active_chunk.recv_gap_us,
+                recent_rate_x100_kib, avg_rate_x100_kib);
+        } else if (net_should_report_stats() != 0) {
+            net_print_stats_summary(active_chunk.recv_gap_us, recent_rate_x100_kib, avg_rate_x100_kib);
+        }
 
         dma_busy = 0;
         active_chunk.valid = 0;
+        tx_queue[queue_head_index].valid = 0;
+        queue_head_index = (queue_head_index + 1U) % NET_TX_QUEUE_DEPTH;
+        if (queue_count != 0U) {
+            queue_count -= 1U;
+        }
         TxDone = 0;
         Error = 0;
     }

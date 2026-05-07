@@ -6,7 +6,7 @@ import socket
 import struct
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 
 DATA_MAGIC = 0x4E455430
@@ -38,10 +38,11 @@ ACK_SIZE = struct.calcsize(ACK_FORMAT)
 class SenderConfig:
     ip: str
     port: int = 5001
-    chunk_size: int = 1024
+    chunk_size: int = 1400
     timeout: float = 1.0
     retries: int = 10
     target_rate_kib_s: float = 0.0
+    window_size: int = 4
 
 
 @dataclass
@@ -72,11 +73,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UDP stop-and-wait sender for AD9361_test2")
     parser.add_argument("--ip", required=True, help="Zynq target IP address")
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
-    parser.add_argument("--chunk-size", type=int, default=1024, help="payload bytes per UDP chunk")
+    parser.add_argument("--chunk-size", type=int, default=1400, help="payload bytes per UDP chunk")
     parser.add_argument("--timeout", type=float, default=1.0, help="ACK timeout in seconds")
     parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
     parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
         help="optional offered load cap in KiB/s, 0 means unlimited")
+    parser.add_argument("--window-size", type=int, default=4,
+        help="number of in-flight chunks allowed before waiting for ACKs")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -149,9 +152,17 @@ class UdpSender:
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         stats = SenderStats(total_size=len(payload))
         destination = (self.config.ip, self.config.port)
+        chunks = list(iter_chunks(payload, self.config.chunk_size))
+        total_chunks = len(chunks)
+        acked = [False] * total_chunks
+        outstanding: Dict[int, dict] = {}
+        base_seq = 0
+        next_seq = 0
 
         if self.config.chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
+        if self.config.window_size <= 0:
+            raise ValueError("window_size must be positive")
 
         stats.started_at = time.time()
         self._emit(callback, "start", {"total_size": stats.total_size, "config": self.config})
@@ -160,91 +171,130 @@ class UdpSender:
         sock.settimeout(self.config.timeout)
 
         try:
-            for seq, chunk, start, end in iter_chunks(payload, self.config.chunk_size):
-                packet = build_packet(seq, chunk)
-                attempts = 0
-
-                while True:
+            while base_seq < total_chunks:
+                while next_seq < total_chunks and len(outstanding) < self.config.window_size:
                     if self._stop_requested:
-                        self._emit(callback, "stopped", {"seq": seq, "bytes_sent": stats.bytes_sent})
+                        self._emit(callback, "stopped", {"seq": next_seq, "bytes_sent": stats.bytes_sent})
                         stats.finished_at = time.time()
                         return stats
 
+                    seq, chunk, start, end = chunks[next_seq]
                     self._apply_rate_limit(stats.bytes_sent + len(chunk), stats.started_at)
-                    attempts += 1
-                    if attempts > self.config.retries:
-                        raise RuntimeError(f"seq {seq} exceeded retry limit")
-
                     tx_time = time.time()
+                    packet = build_packet(seq, chunk)
                     sock.sendto(packet, destination)
+                    outstanding[seq] = {
+                        "packet": packet,
+                        "chunk": chunk,
+                        "start": start,
+                        "end": end,
+                        "attempts": 1,
+                        "tx_time": tx_time,
+                    }
                     self._emit(callback, "chunk_sent", {
                         "seq": seq,
                         "payload_len": len(chunk),
-                        "attempt": attempts,
+                        "attempt": 1,
                         "offset": start,
                         "end": end,
+                        "window_used": len(outstanding),
                     })
+                    next_seq += 1
 
-                    try:
-                        status, transfer_len = recv_ack(sock, seq)
-                    except socket.timeout:
-                        stats.timeout_count += 1
-                        stats.retries_used += 1
-                        self._emit(callback, "timeout", {
-                            "seq": seq,
-                            "payload_len": len(chunk),
-                            "attempt": attempts,
-                        })
+                try:
+                    if not outstanding:
                         continue
 
+                    expected_seq = min(outstanding.keys())
+                    status, transfer_len = recv_ack(sock, expected_seq)
                     ack_time = time.time()
-                    rtt_ms = (ack_time - tx_time) * 1000.0
-                    stats.last_seq = seq
+                    entry = outstanding.pop(expected_seq)
+                    chunk = entry["chunk"]
+                    rtt_ms = (ack_time - entry["tx_time"]) * 1000.0
+                    stats.last_seq = expected_seq
                     stats.last_ack_status = status
                     stats.last_transfer_len = transfer_len
                     stats.last_rtt_ms = rtt_ms
 
                     if status == ACK_STATUS_OK:
-                        stats.bytes_sent = end
+                        acked[expected_seq] = True
+                        while base_seq < total_chunks and acked[base_seq]:
+                            base_seq += 1
+
+                        stats.bytes_sent = max(stats.bytes_sent, entry["end"])
                         stats.chunks_acked += 1
                         stats.ack_ok += 1
                         elapsed = max(ack_time - stats.started_at, 1e-6)
                         stats.average_rate_kib_s = (stats.bytes_sent / 1024.0) / elapsed
-                        stats.current_rate_kib_s = (len(chunk) / 1024.0) / max((ack_time - tx_time), 1e-6)
-                        stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / max((ack_time - tx_time), 1e-6)
+                        stats.current_rate_kib_s = (len(chunk) / 1024.0) / max((ack_time - entry["tx_time"]), 1e-6)
+                        stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / max((ack_time - entry["tx_time"]), 1e-6)
                         self._emit(callback, "ack_ok", {
-                            "seq": seq,
+                            "seq": expected_seq,
                             "payload_len": len(chunk),
                             "transfer_len": transfer_len,
-                            "offset": start,
-                            "end": end,
+                            "offset": entry["start"],
+                            "end": entry["end"],
+                            "window_used": len(outstanding),
                             "stats": stats,
                         })
-                        break
+                    else:
+                        stats.retries_used += 1
+                        if status == ACK_STATUS_BAD_MAGIC:
+                            stats.ack_bad_magic += 1
+                        elif status == ACK_STATUS_BAD_LENGTH:
+                            stats.ack_bad_length += 1
+                        elif status == ACK_STATUS_BAD_CHECKSUM:
+                            stats.ack_bad_checksum += 1
+                        elif status == ACK_STATUS_BUSY:
+                            stats.ack_busy += 1
+                        elif status == ACK_STATUS_DMA_ERROR:
+                            stats.ack_dma_error += 1
 
+                        self._emit(callback, "ack_status", {
+                            "seq": expected_seq,
+                            "payload_len": len(chunk),
+                            "transfer_len": transfer_len,
+                            "status": status,
+                            "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                            "attempt": entry["attempts"],
+                            "rtt_ms": rtt_ms,
+                            "window_used": len(outstanding),
+                            "stats": stats,
+                        })
+                        time.sleep(0.02)
+                        if entry["attempts"] >= self.config.retries:
+                            raise RuntimeError(f"seq {expected_seq} exceeded retry limit")
+                        entry["attempts"] += 1
+                        entry["tx_time"] = time.time()
+                        sock.sendto(entry["packet"], destination)
+                        outstanding[expected_seq] = entry
+                        self._emit(callback, "chunk_sent", {
+                            "seq": expected_seq,
+                            "payload_len": len(chunk),
+                            "attempt": entry["attempts"],
+                            "offset": entry["start"],
+                            "end": entry["end"],
+                            "window_used": len(outstanding),
+                        })
+                except socket.timeout:
+                    if not outstanding:
+                        continue
+
+                    oldest_seq = min(outstanding.keys())
+                    entry = outstanding[oldest_seq]
+                    entry["attempts"] += 1
+                    if entry["attempts"] > self.config.retries:
+                        raise RuntimeError(f"seq {oldest_seq} exceeded retry limit")
+                    stats.timeout_count += 1
                     stats.retries_used += 1
-                    if status == ACK_STATUS_BAD_MAGIC:
-                        stats.ack_bad_magic += 1
-                    elif status == ACK_STATUS_BAD_LENGTH:
-                        stats.ack_bad_length += 1
-                    elif status == ACK_STATUS_BAD_CHECKSUM:
-                        stats.ack_bad_checksum += 1
-                    elif status == ACK_STATUS_BUSY:
-                        stats.ack_busy += 1
-                    elif status == ACK_STATUS_DMA_ERROR:
-                        stats.ack_dma_error += 1
-
-                    self._emit(callback, "ack_status", {
-                        "seq": seq,
-                        "payload_len": len(chunk),
-                        "transfer_len": transfer_len,
-                        "status": status,
-                        "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
-                        "attempt": attempts,
-                        "rtt_ms": rtt_ms,
-                        "stats": stats,
+                    entry["tx_time"] = time.time()
+                    sock.sendto(entry["packet"], destination)
+                    self._emit(callback, "timeout", {
+                        "seq": oldest_seq,
+                        "payload_len": len(entry["chunk"]),
+                        "attempt": entry["attempts"],
+                        "window_used": len(outstanding),
                     })
-                    time.sleep(0.05)
 
             stats.finished_at = time.time()
             self._emit(callback, "done", {"stats": stats})
@@ -262,6 +312,7 @@ def run_cli(args) -> int:
         timeout=args.timeout,
         retries=args.retries,
         target_rate_kib_s=args.target_rate_kib_s,
+        window_size=args.window_size,
     ))
 
     def callback(event_name: str, payload_dict: dict):
@@ -295,4 +346,3 @@ def run_cli(args) -> int:
 
     sender.send(payload, callback=callback)
     return 0
-

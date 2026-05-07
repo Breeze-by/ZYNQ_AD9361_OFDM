@@ -15,10 +15,11 @@ from sender_core import (
 
 
 class Sparkline(tk.Canvas):
-    def __init__(self, master, max_points=60, line_color="#1f77b4", **kwargs):
+    def __init__(self, master, max_points=90, line_color="#1f77b4", unit="", **kwargs):
         super().__init__(master, highlightthickness=0, **kwargs)
         self.max_points = max_points
         self.line_color = line_color
+        self.unit = unit
         self.points = []
         self.bind("<Configure>", lambda _event: self.redraw())
 
@@ -36,22 +37,43 @@ class Sparkline(tk.Canvas):
         self.delete("all")
         width = max(self.winfo_width(), 10)
         height = max(self.winfo_height(), 10)
-        self.create_rectangle(0, 0, width, height, outline="#D0D7DE", fill="#FAFBFC")
+        left_pad = 48
+        right_pad = 12
+        top_pad = 16
+        bottom_pad = 22
+        plot_width = max(width - left_pad - right_pad, 10)
+        plot_height = max(height - top_pad - bottom_pad, 10)
+
+        self.create_rectangle(0, 0, width, height, outline="#D0D7DE", fill="#FCFCFD")
+        self.create_rectangle(left_pad, top_pad, left_pad + plot_width, top_pad + plot_height,
+            outline="#E5E7EB", fill="#FFFFFF")
 
         if len(self.points) < 2:
+            self.create_text(width - 10, 10, anchor="ne", text=f"0 {self.unit}", fill="#555555")
             return
 
         max_value = max(self.points)
         if max_value <= 0.0:
             max_value = 1.0
 
-        x_step = width / max(len(self.points) - 1, 1)
+        for tick_index in range(4):
+            fraction = tick_index / 3.0
+            y = top_pad + plot_height - (fraction * plot_height)
+            tick_value = max_value * fraction
+            self.create_line(left_pad, y, left_pad + plot_width, y, fill="#EEF2F7")
+            self.create_text(left_pad - 6, y, anchor="e", text=f"{tick_value:.0f}", fill="#6B7280")
+
+        x_step = plot_width / max(len(self.points) - 1, 1)
         coords = []
         for index, value in enumerate(self.points):
-            x = index * x_step
-            y = height - (value / max_value) * (height - 6) - 3
+            x = left_pad + index * x_step
+            y = top_pad + plot_height - (value / max_value) * plot_height
             coords.extend([x, y])
         self.create_line(*coords, fill=self.line_color, width=2, smooth=True)
+        self.create_text(width - 10, 10, anchor="ne",
+            text=f"{self.points[-1]:.2f} {self.unit}", fill=self.line_color)
+        self.create_text(width - 10, height - 8, anchor="se",
+            text=f"max {max_value:.2f}", fill="#6B7280")
 
 
 class SenderGui:
@@ -70,16 +92,18 @@ class SenderGui:
         self.file_info_var = tk.StringVar(value="未选择文件")
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
-        self.chunk_var = tk.StringVar(value="1024")
+        self.chunk_var = tk.StringVar(value="1400")
         self.timeout_var = tk.StringVar(value="1.0")
         self.retries_var = tk.StringVar(value="10")
         self.target_rate_var = tk.StringVar(value="0")
+        self.window_var = tk.StringVar(value="4")
         self.test_size_var = tk.StringVar(value="4096")
 
         self.status_text_var = tk.StringVar(value="空闲")
         self.progress_text_var = tk.StringVar(value="0 / 0")
         self.ack_status_var = tk.StringVar(value="N/A")
         self.seq_var = tk.StringVar(value="-")
+        self.window_used_var = tk.StringVar(value="0")
         self.rtt_var = tk.StringVar(value="0.00 ms")
         self.current_rate_var = tk.StringVar(value="0.00 KiB/s")
         self.avg_rate_var = tk.StringVar(value="0.00 KiB/s")
@@ -181,6 +205,7 @@ class SenderGui:
             ("ACK 超时(s)", self.timeout_var),
             ("最大重试", self.retries_var),
             ("限速(KiB/s)", self.target_rate_var),
+            ("窗口大小", self.window_var),
         ]
 
         for row_index, (label_text, variable) in enumerate(fields):
@@ -219,6 +244,7 @@ class SenderGui:
             ("当前状态", self.status_text_var),
             ("最近 ACK 状态", self.ack_status_var),
             ("最近 Seq", self.seq_var),
+            ("当前 Inflight", self.window_used_var),
             ("最近 RTT", self.rtt_var),
             ("当前发送速率", self.current_rate_var),
             ("平均发送速率", self.avg_rate_var),
@@ -256,7 +282,8 @@ class SenderGui:
             chart_grid.columnconfigure(index, weight=1)
             chart_grid.rowconfigure(0, weight=1)
             ttk.Label(frame, text=title_text).pack(anchor=tk.W)
-            chart = Sparkline(frame, height=160, bg="white", line_color=color)
+            unit = "KiB/s" if index < 2 else "ms"
+            chart = Sparkline(frame, height=190, bg="white", line_color=color, unit=unit)
             chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
             charts.append(chart)
 
@@ -314,6 +341,7 @@ class SenderGui:
                 timeout=float(self.timeout_var.get().strip()),
                 retries=int(self.retries_var.get().strip()),
                 target_rate_kib_s=float(self.target_rate_var.get().strip()),
+                window_size=int(self.window_var.get().strip()),
             )
         except Exception as exc:
             messagebox.showerror("参数错误", str(exc))
@@ -362,6 +390,7 @@ class SenderGui:
         self.progress_text_var.set(f"0 / {total_size}")
         self.ack_status_var.set("N/A")
         self.seq_var.set("-")
+        self.window_used_var.set("0")
         self.rtt_var.set("0.00 ms")
         self.current_rate_var.set("0.00 KiB/s")
         self.avg_rate_var.set("0.00 KiB/s")
@@ -399,22 +428,27 @@ class SenderGui:
         if event_name == "chunk_sent":
             self.seq_var.set(str(payload["seq"]))
             self.status_text_var.set(f"发送 seq={payload['seq']} attempt={payload['attempt']}")
+            self.window_used_var.set(str(payload.get("window_used", 0)))
             self._append_log(
-                f"TX seq={payload['seq']} payload={payload['payload_len']}B attempt={payload['attempt']}"
+                f"TX seq={payload['seq']} payload={payload['payload_len']}B attempt={payload['attempt']} "
+                f"inflight={payload.get('window_used', 0)}"
             )
             return
 
         if event_name == "timeout":
             self.timeout_count_var.set(str(int(self.timeout_count_var.get()) + 1))
             self.status_text_var.set(f"Timeout seq={payload['seq']}")
+            self.window_used_var.set(str(payload.get("window_used", 0)))
             self._append_log(
-                f"Timeout seq={payload['seq']} payload={payload['payload_len']}B retry={payload['attempt']}"
+                f"Timeout seq={payload['seq']} payload={payload['payload_len']}B retry={payload['attempt']} "
+                f"inflight={payload.get('window_used', 0)}"
             )
             return
 
         if event_name == "ack_status":
             stats = payload["stats"]
             self.ack_status_var.set(payload["status_name"])
+            self.window_used_var.set(str(payload.get("window_used", 0)))
             self.retry_count_var.set(str(stats.retries_used))
             if payload["status_name"] == "BUSY":
                 self.busy_count_var.set(str(stats.ack_busy))
@@ -428,7 +462,8 @@ class SenderGui:
             self.rtt_var.set(f"{payload['rtt_ms']:.2f} ms")
             self._append_log(
                 f"ACK {payload['status_name']} seq={payload['seq']} transfer_len={payload['transfer_len']} "
-                f"rtt={payload['rtt_ms']:.2f}ms attempt={payload['attempt']}"
+                f"rtt={payload['rtt_ms']:.2f}ms attempt={payload['attempt']} "
+                f"inflight={payload.get('window_used', 0)}"
             )
             return
 
@@ -439,6 +474,7 @@ class SenderGui:
             self.progress_text_var.set(f"{stats.bytes_sent} / {stats.total_size}")
             self.ack_status_var.set("OK")
             self.seq_var.set(str(payload["seq"]))
+            self.window_used_var.set(str(payload.get("window_used", 0)))
             self.rtt_var.set(f"{stats.last_rtt_ms:.2f} ms")
             self.current_rate_var.set(f"{stats.current_rate_kib_s:.2f} KiB/s")
             self.avg_rate_var.set(f"{stats.average_rate_kib_s:.2f} KiB/s")
@@ -460,7 +496,7 @@ class SenderGui:
                 f"ACK OK seq={payload['seq']} transfer_len={payload['transfer_len']} "
                 f"progress={stats.bytes_sent}/{stats.total_size} "
                 f"send={stats.current_rate_kib_s:.2f}KiB/s ps={stats.estimated_ps_rate_kib_s:.2f}KiB/s "
-                f"rtt={stats.last_rtt_ms:.2f}ms"
+                f"rtt={stats.last_rtt_ms:.2f}ms inflight={payload.get('window_used', 0)}"
             )
             return
 
