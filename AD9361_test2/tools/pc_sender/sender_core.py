@@ -438,8 +438,12 @@ class UdpSender:
                     while base_seq < total_chunks and acked[base_seq]:
                         base_seq += 1
                     made_progress = True
-                    if status in (ACK_STATUS_BUSY, ACK_STATUS_PENDING):
+                    if status == ACK_STATUS_BUSY:
                         effective_window_size = max(1, max(effective_window_size // 2, 1))
+                        stable_ack_batches = 0
+                    elif status == ACK_STATUS_PENDING:
+                        if effective_window_size > 1:
+                            effective_window_size -= 1
                         stable_ack_batches = 0
                     elif completed > 0:
                         stable_ack_batches += 1

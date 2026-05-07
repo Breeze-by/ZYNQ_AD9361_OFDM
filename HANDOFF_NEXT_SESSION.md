@@ -25,6 +25,7 @@ The project is now stable after Phase 1/2/3 changes:
   - `NET_STRICT_IN_ORDER_RX=1`
   - board accepts only `seq == expected_seq` into aggregation memory
   - higher sequence numbers return `PENDING` and are not written to DMA stream
+  - READY aggregation blocks are selected for DMA by submit order, not array index
   - host treats `PENDING` as a short-backoff retry
   - host throughput mode now uses AIMD-style adaptive effective window on `BUSY`, `PENDING`, and timeout
   - board `STAT` now includes `acc` / `acc_pkt` for accepted payload rate, distinct from offered `rx` / `rx_pkt`
@@ -32,6 +33,11 @@ The project is now stable after Phase 1/2/3 changes:
   - `UART_Printf()` buffer increased from 256 to 512 bytes
   - periodic stats are split into `STAT rate ...` and `STAT state ...`
   - this avoids truncating the trailing `\r\n` when stats fields grow
+- Latest throughput tuning:
+  - `TX_BUFFER_WORD_COUNT` increased from `16384` to `32768`
+  - aggregation capacity increased from `8 * 16 KiB` to `16 * 16 KiB`
+  - `NET_AGG_FLUSH_TIMEOUT_US` increased from `1000` to `3000`
+  - host AIMD treats `PENDING` as a mild sequencing/backoff signal, not a hard congestion event
 
 Latest user test after GUI/window update:
 
@@ -223,6 +229,15 @@ crc = 0
 busy should be much lower after adaptive window settles
 pending may appear briefly when strict ordering rejects ahead-of-gap packets
 dma_err = 0
+```
+
+After the latest tuning, also check:
+
+```text
+q denominator should show /16
+agg_avg should move closer to 16016
+busy should be lower than the previous high-BUSY run
+PC delivered should remain close to PS acc
 ```
 
 If throughput improves significantly, continue tuning `NET_ACK_COALESCE_PACKET_COUNT`

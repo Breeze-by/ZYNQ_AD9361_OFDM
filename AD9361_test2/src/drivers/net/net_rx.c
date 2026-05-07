@@ -22,6 +22,7 @@ typedef struct {
     uint8_t *buffer_ptr;
     uint32_t payload_len;
     uint32_t transfer_len;
+    uint32_t submit_order;
     XTime first_write_time;
     XTime last_write_time;
 } net_agg_block_t;
@@ -45,6 +46,7 @@ static uint32_t queue_occupancy_max;
 static uint64_t total_accepted_bytes;
 static uint32_t total_accepted_chunks;
 static uint32_t next_expected_seq;
+static uint32_t next_agg_submit_order;
 static int pending_ok_ack_valid;
 static ip_addr_t pending_ok_ack_addr;
 static u16_t pending_ok_ack_port;
@@ -250,6 +252,7 @@ static void net_submit_fill_block(int timeout_flush)
     if (block->payload_len == 0U) {
         block->state = NET_AGG_BLOCK_FREE;
         fill_block_index = -1;
+        block->submit_order = 0U;
         net_update_queue_stats();
         return;
     }
@@ -260,6 +263,7 @@ static void net_submit_fill_block(int timeout_flush)
     }
 
     block->transfer_len = aligned_len;
+    block->submit_order = next_agg_submit_order++;
     block->state = NET_AGG_BLOCK_READY;
     NetStats_OnAggSubmit(block->payload_len);
     if (timeout_flush != 0) {
@@ -316,14 +320,19 @@ static int net_ensure_fill_block(uint32_t append_len)
 static int net_find_ready_block(void)
 {
     uint32_t index;
+    uint32_t best_order = 0U;
+    int best_index = -1;
 
     for (index = 0U; index < NET_AGG_BLOCK_COUNT; ++index) {
         if (agg_blocks[index].state == NET_AGG_BLOCK_READY) {
-            return (int)index;
+            if ((best_index < 0) || (agg_blocks[index].submit_order < best_order)) {
+                best_order = agg_blocks[index].submit_order;
+                best_index = (int)index;
+            }
         }
     }
 
-    return -1;
+    return best_index;
 }
 
 static void net_start_dma_transfer(void)
@@ -357,6 +366,7 @@ static void net_start_dma_transfer(void)
         block->state = NET_AGG_BLOCK_FREE;
         block->payload_len = 0U;
         block->transfer_len = 0U;
+        block->submit_order = 0U;
         net_update_queue_stats();
         return;
     }
@@ -568,6 +578,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
         agg_blocks[index].buffer_ptr = dma_tx_buffer + (index * NET_AGG_BLOCK_BYTES);
         agg_blocks[index].payload_len = 0U;
         agg_blocks[index].transfer_len = 0U;
+        agg_blocks[index].submit_order = 0U;
         agg_blocks[index].first_write_time = 0U;
         agg_blocks[index].last_write_time = 0U;
     }
@@ -580,6 +591,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     total_accepted_bytes = 0U;
     total_accepted_chunks = 0U;
     next_expected_seq = 0U;
+    next_agg_submit_order = 0U;
     pending_ok_ack_valid = 0;
     pending_ok_ack_port = 0U;
     pending_ok_ack_seq = 0U;
@@ -626,6 +638,7 @@ void Net_RxPoll(void)
             agg_blocks[dma_block_index].state = NET_AGG_BLOCK_FREE;
             agg_blocks[dma_block_index].payload_len = 0U;
             agg_blocks[dma_block_index].transfer_len = 0U;
+            agg_blocks[dma_block_index].submit_order = 0U;
         }
         dma_busy = 0;
         dma_block_index = -1;
@@ -642,6 +655,7 @@ void Net_RxPoll(void)
             agg_blocks[dma_block_index].state = NET_AGG_BLOCK_FREE;
             agg_blocks[dma_block_index].payload_len = 0U;
             agg_blocks[dma_block_index].transfer_len = 0U;
+            agg_blocks[dma_block_index].submit_order = 0U;
         }
         dma_busy = 0;
         dma_block_index = -1;

@@ -42,6 +42,10 @@ DMA stream; they receive `PENDING` and are retried by the host. This keeps ACK
 v1 cumulative `OK seq=N` safe even when the board returns `BUSY` under buffer
 pressure.
 
+Aggregation blocks also carry a submit-order number. `Net_RxPoll()` starts DMA
+from the oldest READY block, not from the lowest array index, so recycled low
+index blocks cannot overtake older queued blocks.
+
 ## ACK Meanings
 
 `OK`
@@ -71,16 +75,16 @@ Board-side values:
 - `src/app/app_config.h`
   - `APP_ENABLE_ICACHE = 1`
   - `APP_ENABLE_DCACHE = 0`
-  - `TX_BUFFER_WORD_COUNT = 16384`
-  - Total DMA TX buffer = `16384 * 8 = 131072` bytes
+  - `TX_BUFFER_WORD_COUNT = 32768`
+  - Total DMA TX buffer = `32768 * 8 = 262144` bytes
 - `src/drivers/net/net_config.h`
   - `NET_AGG_ENABLE = 1`
-  - `NET_AGG_BLOCK_COUNT = 8`
+  - `NET_AGG_BLOCK_COUNT = 16`
   - `NET_AGG_BLOCK_BYTES = 16384`
   - `NET_AGG_MIN_FLUSH_BYTES = 8192`
-  - `NET_AGG_FLUSH_TIMEOUT_US = 1000`
+  - `NET_AGG_FLUSH_TIMEOUT_US = 3000`
   - `NET_AGG_IDLE_FLUSH_TIMEOUT_US = 100000`
-  - Total aggregation buffer = `8 * 16384 = 131072` bytes
+  - Total aggregation buffer = `16 * 16384 = 262144` bytes
   - `NET_DEFAULT_CHUNK_SIZE_BYTES = 1456`
   - `NET_MAX_RECOMMENDED_WINDOW_SIZE = 64`
   - `NET_CRC32_USE_TABLE = 1`
