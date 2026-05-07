@@ -133,6 +133,28 @@ void NetStats_SetQueue(uint32_t current, uint32_t max_seen)
     }
 }
 
+void NetStats_OnAggSubmit(uint32_t block_bytes)
+{
+    net_stats.agg_block_submit_count += 1U;
+    net_stats.agg_bytes_total += block_bytes;
+    if ((net_stats.agg_min_block_bytes == 0U) || (block_bytes < net_stats.agg_min_block_bytes)) {
+        net_stats.agg_min_block_bytes = block_bytes;
+    }
+    if (block_bytes > net_stats.agg_max_block_bytes) {
+        net_stats.agg_max_block_bytes = block_bytes;
+    }
+}
+
+void NetStats_OnAggFlushFull(void)
+{
+    net_stats.agg_flush_full_count += 1U;
+}
+
+void NetStats_OnAggFlushTimeout(void)
+{
+    net_stats.agg_flush_timeout_count += 1U;
+}
+
 void NetStats_PrintPeriodic(void)
 {
     XTime now_time;
@@ -167,7 +189,7 @@ void NetStats_PrintPeriodic(void)
         "STAT rx=%lu.%02lu dma=%lu.%02lu avg_rx=%lu.%02lu avg_dma=%lu.%02lu "
         "rx_pkt=%lu dma_done=%lu q=%lu/%u qmax=%lu ack=%lu nack=%lu "
         "crc=%lu badlen=%lu badmagic=%lu busy=%lu pend=%lu dup=%lu drop=%lu dma_err=%lu "
-        "agg_avg=%lu agg_min=%lu agg_max=%lu\r\n",
+        "agg=%lu agg_full=%lu agg_to=%lu agg_avg=%lu agg_min=%lu agg_max=%lu\r\n",
         (unsigned long)(rx_rate_x100_kib / 100U),
         (unsigned long)(rx_rate_x100_kib % 100U),
         (unsigned long)(dma_rate_x100_kib / 100U),
@@ -179,7 +201,7 @@ void NetStats_PrintPeriodic(void)
         (unsigned long)interval_rx_packets,
         (unsigned long)interval_dma_done,
         (unsigned long)net_stats.queue_occupancy_current,
-        (unsigned)NET_TX_QUEUE_DEPTH,
+        (unsigned)NET_DMA_QUEUE_CAPACITY,
         (unsigned long)net_stats.queue_occupancy_max,
         (unsigned long)net_stats.ack_tx_count,
         (unsigned long)net_stats.nack_tx_count,
@@ -191,6 +213,9 @@ void NetStats_PrintPeriodic(void)
         (unsigned long)net_stats.duplicate_count,
         (unsigned long)net_stats.dropped_count,
         (unsigned long)net_stats.dma_error_count,
+        (unsigned long)net_stats.agg_block_submit_count,
+        (unsigned long)net_stats.agg_flush_full_count,
+        (unsigned long)net_stats.agg_flush_timeout_count,
         (unsigned long)stats_avg_agg_bytes(),
         (unsigned long)net_stats.agg_min_block_bytes,
         (unsigned long)net_stats.agg_max_block_bytes);

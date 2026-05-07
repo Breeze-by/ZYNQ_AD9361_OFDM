@@ -47,6 +47,9 @@ void NetStats_OnDmaDone(uint32_t dma_bytes);
 void NetStats_OnDmaError(void);
 void NetStats_OnAck(net_ack_status_t status);
 void NetStats_SetQueue(uint32_t current, uint32_t max_seen);
+void NetStats_OnAggSubmit(uint32_t block_bytes);
+void NetStats_OnAggFlushFull(void);
+void NetStats_OnAggFlushTimeout(void);
 void NetStats_PrintPeriodic(void);
 
 #endif /* AD9361_TEST2_NET_STATS_H_ */
