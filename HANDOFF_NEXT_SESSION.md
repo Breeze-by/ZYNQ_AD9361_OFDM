@@ -36,7 +36,7 @@ The project is now stable after Phase 1/2/3 changes:
 - Latest throughput tuning:
   - `TX_BUFFER_WORD_COUNT` increased from `16384` to `32768`
   - aggregation capacity increased from `8 * 16 KiB` to `16 * 16 KiB`
-  - `NET_AGG_FLUSH_TIMEOUT_US` increased from `1000` to `3000`
+  - `NET_AGG_FLUSH_TIMEOUT_US` increased from `1000` to `15000`
   - host AIMD treats `PENDING` as a mild sequencing/backoff signal, not a hard congestion event
 
 Latest user test after GUI/window update:
