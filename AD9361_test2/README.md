@@ -76,6 +76,9 @@ Host defaults:
 
 - `chunk_size = 1456`
 - `window_size = 16`
+- `socket_buffer_bytes = 4194304`
+- `progress_interval_ms = 100`
+- `verbose_events = false`
 
 `1456` is chosen to keep `16-byte application header + 1456-byte payload = 1472-byte UDP payload`, which stays within the common Ethernet MTU without IP fragmentation.
 
@@ -96,6 +99,21 @@ The DMA engine itself is normally faster than the observed end-to-end throughput
 - the queue depth is larger than before
 - the host window is allowed to exceed `1`
 - ACK handling is no longer strictly in-order
+- the host GUI no longer logs every packet by default
+- host progress updates are throttled to reduce `PC -> PS` overhead
+
+## Throughput Metrics
+
+Host-side metrics now use two different meanings:
+
+- `Delivered`
+  - confirmed payload throughput based on `bytes_acked / total_elapsed_time`
+  - this is the best high-level measure of real end-to-end throughput
+- `Last ACK Rate`
+  - single-chunk rate derived from `transfer_len / ACK_RTT`
+  - useful for latency inspection, but not equal to sustained throughput
+
+Board-side `STAT ... rate=...` is based on the receive gap between adjacent packets reaching PS. If `qmax` remains near `1`, the DMA engine is not the bottleneck; the host path is feeding PS too slowly.
 
 ## Recommended Operating Range
 

@@ -6,12 +6,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from sender_core import (
-    ACK_STATUS_NAMES,
-    SenderConfig,
-    UdpSender,
-    load_payload,
-)
+from sender_core import SenderConfig, UdpSender, load_payload
 
 
 class Sparkline(tk.Canvas):
@@ -45,8 +40,10 @@ class Sparkline(tk.Canvas):
         plot_height = max(height - top_pad - bottom_pad, 10)
 
         self.create_rectangle(0, 0, width, height, outline="#D0D7DE", fill="#FCFCFD")
-        self.create_rectangle(left_pad, top_pad, left_pad + plot_width, top_pad + plot_height,
-            outline="#E5E7EB", fill="#FFFFFF")
+        self.create_rectangle(
+            left_pad, top_pad, left_pad + plot_width, top_pad + plot_height,
+            outline="#E5E7EB", fill="#FFFFFF"
+        )
 
         if len(self.points) < 2:
             self.create_text(width - 10, 10, anchor="ne", text=f"0 {self.unit}", fill="#555555")
@@ -70,10 +67,10 @@ class Sparkline(tk.Canvas):
             y = top_pad + plot_height - (value / max_value) * plot_height
             coords.extend([x, y])
         self.create_line(*coords, fill=self.line_color, width=2, smooth=True)
-        self.create_text(width - 10, 10, anchor="ne",
-            text=f"{self.points[-1]:.2f} {self.unit}", fill=self.line_color)
-        self.create_text(width - 10, height - 8, anchor="se",
-            text=f"max {max_value:.2f}", fill="#6B7280")
+        self.create_text(
+            width - 10, 10, anchor="ne", text=f"{self.points[-1]:.2f} {self.unit}", fill=self.line_color
+        )
+        self.create_text(width - 10, height - 8, anchor="se", text=f"max {max_value:.2f}", fill="#6B7280")
 
 
 class SenderGui:
@@ -86,10 +83,11 @@ class SenderGui:
         self.event_queue = queue.Queue()
         self.sender_thread = None
         self.sender = None
+        self.last_summary_log_time = 0.0
 
         self.mode_var = tk.StringVar(value="file")
         self.file_path_var = tk.StringVar()
-        self.file_info_var = tk.StringVar(value="未选择文件")
+        self.file_info_var = tk.StringVar(value="No file selected")
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
         self.chunk_var = tk.StringVar(value="1456")
@@ -98,8 +96,11 @@ class SenderGui:
         self.target_rate_var = tk.StringVar(value="0")
         self.window_var = tk.StringVar(value="16")
         self.test_size_var = tk.StringVar(value="4096")
+        self.socket_buffer_var = tk.StringVar(value=str(4 * 1024 * 1024))
+        self.progress_interval_var = tk.StringVar(value="100")
+        self.verbose_var = tk.BooleanVar(value=False)
 
-        self.status_text_var = tk.StringVar(value="空闲")
+        self.status_text_var = tk.StringVar(value="Idle")
         self.progress_text_var = tk.StringVar(value="0 / 0")
         self.ack_status_var = tk.StringVar(value="N/A")
         self.seq_var = tk.StringVar(value="-")
@@ -113,9 +114,9 @@ class SenderGui:
         self.retry_count_var = tk.StringVar(value="0")
         self.busy_count_var = tk.StringVar(value="0")
         self.error_count_var = tk.StringVar(value="0")
+        self.pending_count_var = tk.StringVar(value="0")
 
         self.progress_var = tk.DoubleVar(value=0.0)
-        self.last_update_time = time.time()
         self.sent_speed_chart = None
         self.ps_speed_chart = None
         self.rtt_chart = None
@@ -134,18 +135,15 @@ class SenderGui:
         root_frame = ttk.Frame(self.root, padding=12)
         root_frame.pack(fill=tk.BOTH, expand=True)
 
-        title = ttk.Label(
+        ttk.Label(
             root_frame,
-            text="AD9361_test2 上位机发射端",
+            text="AD9361_test2 Host Sender",
             font=("Microsoft YaHei", 18, "bold"),
-        )
-        title.pack(anchor=tk.W)
-
-        subtitle = ttk.Label(
+        ).pack(anchor=tk.W)
+        ttk.Label(
             root_frame,
-            text="支持发送常见二进制源文件（jpg / png / bin / mp4 / ts / txt 等），支持测试数据发送、速率限制、ACK 状态监控和实时吞吐显示。",
-        )
-        subtitle.pack(anchor=tk.W, pady=(4, 10))
+            text="Default mode is optimized for throughput: progress is throttled and packet-level logs are disabled.",
+        ).pack(anchor=tk.W, pady=(4, 10))
 
         top_split = ttk.Panedwindow(root_frame, orient=tk.HORIZONTAL)
         top_split.pack(fill=tk.BOTH, expand=False)
@@ -167,93 +165,96 @@ class SenderGui:
         self._build_log_panel(bottom_frame)
 
     def _build_config_panel(self, parent):
-        source_box = ttk.LabelFrame(parent, text="发送源", padding=12)
+        source_box = ttk.LabelFrame(parent, text="Source", padding=12)
         source_box.pack(fill=tk.X)
 
         mode_frame = ttk.Frame(source_box)
         mode_frame.pack(fill=tk.X)
-        ttk.Radiobutton(mode_frame, text="文件发送", value="file", variable=self.mode_var,
+        ttk.Radiobutton(mode_frame, text="File", value="file", variable=self.mode_var,
             command=self._update_mode_widgets).pack(side=tk.LEFT)
-        ttk.Radiobutton(mode_frame, text="测试数据", value="test", variable=self.mode_var,
+        ttk.Radiobutton(mode_frame, text="Test Data", value="test", variable=self.mode_var,
             command=self._update_mode_widgets).pack(side=tk.LEFT, padx=(12, 0))
 
         file_row = ttk.Frame(source_box)
         file_row.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(file_row, text="文件路径", width=10).pack(side=tk.LEFT)
+        ttk.Label(file_row, text="Path", width=12).pack(side=tk.LEFT)
         self.file_entry = ttk.Entry(file_row, textvariable=self.file_path_var)
         self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(file_row, text="浏览", command=self._browse_file).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(file_row, text="Browse", command=self._browse_file).pack(side=tk.LEFT, padx=(8, 0))
 
         info_row = ttk.Frame(source_box)
         info_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(info_row, text="文件信息", width=10).pack(side=tk.LEFT)
+        ttk.Label(info_row, text="Info", width=12).pack(side=tk.LEFT)
         ttk.Label(info_row, textvariable=self.file_info_var).pack(side=tk.LEFT)
 
         test_row = ttk.Frame(source_box)
         test_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(test_row, text="测试字节数", width=10).pack(side=tk.LEFT)
+        ttk.Label(test_row, text="Test Bytes", width=12).pack(side=tk.LEFT)
         self.test_entry = ttk.Entry(test_row, textvariable=self.test_size_var, width=16)
         self.test_entry.pack(side=tk.LEFT)
 
-        net_box = ttk.LabelFrame(parent, text="网络与发送参数", padding=12)
+        net_box = ttk.LabelFrame(parent, text="Network and Sender", padding=12)
         net_box.pack(fill=tk.X, pady=(12, 0))
 
         fields = [
-            ("目标 IP", self.ip_var),
-            ("目标端口", self.port_var),
-            ("Chunk 大小", self.chunk_var),
-            ("ACK 超时(s)", self.timeout_var),
-            ("最大重试", self.retries_var),
-            ("限速(KiB/s)", self.target_rate_var),
-            ("窗口大小", self.window_var),
+            ("Target IP", self.ip_var),
+            ("Target Port", self.port_var),
+            ("Chunk Bytes", self.chunk_var),
+            ("ACK Timeout(s)", self.timeout_var),
+            ("Max Retries", self.retries_var),
+            ("Rate Limit KiB/s", self.target_rate_var),
+            ("Window Size", self.window_var),
+            ("Socket Buffer", self.socket_buffer_var),
+            ("Progress ms", self.progress_interval_var),
         ]
 
         for row_index, (label_text, variable) in enumerate(fields):
             row = ttk.Frame(net_box)
             row.pack(fill=tk.X, pady=(0, 8) if row_index < len(fields) - 1 else (0, 0))
-            ttk.Label(row, text=label_text, width=12).pack(side=tk.LEFT)
+            ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
             ttk.Entry(row, textvariable=variable, width=18).pack(side=tk.LEFT)
 
-        helper = ttk.Label(
+        ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Label(
             net_box,
-            text="限速=0 表示不主动限速。停止等待协议下，真实吞吐还会受 ACK 往返时间限制。",
+            text="Keep verbose events disabled when measuring throughput.",
             foreground="#555555",
-        )
-        helper.pack(anchor=tk.W, pady=(8, 0))
+        ).pack(anchor=tk.W, pady=(6, 0))
 
-        action_box = ttk.LabelFrame(parent, text="控制", padding=12)
+        action_box = ttk.LabelFrame(parent, text="Control", padding=12)
         action_box.pack(fill=tk.X, pady=(12, 0))
 
         button_row = ttk.Frame(action_box)
         button_row.pack(fill=tk.X)
-        self.send_button = ttk.Button(button_row, text="一键发送", command=self._start_send)
+        self.send_button = ttk.Button(button_row, text="Start", command=self._start_send)
         self.send_button.pack(side=tk.LEFT)
-        self.stop_button = ttk.Button(button_row, text="停止", command=self._stop_send, state=tk.DISABLED)
+        self.stop_button = ttk.Button(button_row, text="Stop", command=self._stop_send, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(button_row, text="清空日志", command=self._clear_log).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(button_row, text="Clear Log", command=self._clear_log).pack(side=tk.LEFT, padx=(8, 0))
 
         self.progress_bar = ttk.Progressbar(action_box, variable=self.progress_var, maximum=100.0)
         self.progress_bar.pack(fill=tk.X, pady=(10, 0))
         ttk.Label(action_box, textvariable=self.progress_text_var).pack(anchor=tk.W, pady=(6, 0))
 
     def _build_metrics_panel(self, parent):
-        status_box = ttk.LabelFrame(parent, text="状态概览", padding=12)
+        status_box = ttk.LabelFrame(parent, text="Metrics", padding=12)
         status_box.pack(fill=tk.BOTH, expand=True)
 
         metrics = [
-            ("当前状态", self.status_text_var),
-            ("最近 ACK 状态", self.ack_status_var),
-            ("最近 Seq", self.seq_var),
-            ("当前 Inflight", self.window_used_var),
-            ("最近 RTT", self.rtt_var),
-            ("当前发送速率", self.current_rate_var),
-            ("平均发送速率", self.avg_rate_var),
-            ("估计 PS 侧速率", self.ps_rate_var),
-            ("ACK OK 数", self.ack_ok_var),
-            ("Timeout 数", self.timeout_count_var),
-            ("重试次数", self.retry_count_var),
-            ("BUSY 次数", self.busy_count_var),
-            ("错误 ACK 次数", self.error_count_var),
+            ("Status", self.status_text_var),
+            ("Last ACK", self.ack_status_var),
+            ("Last Seq", self.seq_var),
+            ("Inflight", self.window_used_var),
+            ("RTT", self.rtt_var),
+            ("Delivered", self.current_rate_var),
+            ("Avg Sent", self.avg_rate_var),
+            ("Last ACK Rate", self.ps_rate_var),
+            ("ACK OK", self.ack_ok_var),
+            ("Pending", self.pending_count_var),
+            ("Timeouts", self.timeout_count_var),
+            ("Retries", self.retry_count_var),
+            ("Busy", self.busy_count_var),
+            ("Errors", self.error_count_var),
         ]
 
         for label_text, variable in metrics:
@@ -263,15 +264,15 @@ class SenderGui:
             ttk.Label(row, textvariable=variable, font=("Consolas", 10)).pack(side=tk.LEFT)
 
     def _build_chart_panel(self, parent):
-        chart_box = ttk.LabelFrame(parent, text="实时可视化", padding=12)
+        chart_box = ttk.LabelFrame(parent, text="Charts", padding=12)
         chart_box.pack(fill=tk.BOTH, expand=True)
 
         chart_grid = ttk.Frame(chart_box)
         chart_grid.pack(fill=tk.BOTH, expand=True)
 
         chart_defs = [
-            ("发送速率 KiB/s", "#1976D2"),
-            ("估计 PS 侧速率 KiB/s", "#2E7D32"),
+            ("Delivered KiB/s", "#1976D2"),
+            ("Last ACK KiB/s", "#2E7D32"),
             ("RTT ms", "#EF6C00"),
         ]
 
@@ -290,7 +291,7 @@ class SenderGui:
         self.sent_speed_chart, self.ps_speed_chart, self.rtt_chart = charts
 
     def _build_log_panel(self, parent):
-        log_box = ttk.LabelFrame(parent, text="事件日志", padding=12)
+        log_box = ttk.LabelFrame(parent, text="Event Log", padding=12)
         log_box.pack(fill=tk.BOTH, expand=True)
 
         self.log_text = tk.Text(log_box, height=16, wrap="none")
@@ -302,25 +303,17 @@ class SenderGui:
 
     def _update_mode_widgets(self):
         mode = self.mode_var.get()
-        file_state = tk.NORMAL if mode == "file" else tk.DISABLED
-        test_state = tk.NORMAL if mode == "test" else tk.DISABLED
-        self.file_entry.configure(state=file_state)
-        self.test_entry.configure(state=test_state)
+        self.file_entry.configure(state=tk.NORMAL if mode == "file" else tk.DISABLED)
+        self.test_entry.configure(state=tk.NORMAL if mode == "test" else tk.DISABLED)
 
     def _browse_file(self):
-        file_path = filedialog.askopenfilename(
-            title="选择要发送的文件",
-            filetypes=[
-                ("常见媒体和二进制", "*.jpg *.jpeg *.png *.bmp *.gif *.bin *.mp4 *.mov *.avi *.ts *.txt *.csv *.json"),
-                ("所有文件", "*.*"),
-            ],
-        )
+        file_path = filedialog.askopenfilename(title="Select file to send", filetypes=[("All files", "*.*")])
         if not file_path:
             return
 
         path = Path(file_path)
         self.file_path_var.set(file_path)
-        suffix = path.suffix.lower() if path.suffix else "(无扩展名)"
+        suffix = path.suffix.lower() if path.suffix else "(no extension)"
         self.file_info_var.set(f"{path.name} | {suffix} | {path.stat().st_size} bytes")
 
     def _append_log(self, message: str):
@@ -330,6 +323,14 @@ class SenderGui:
 
     def _clear_log(self):
         self.log_text.delete("1.0", tk.END)
+
+    def _build_payload(self) -> bytes:
+        if self.mode_var.get() == "file":
+            file_path = self.file_path_var.get().strip()
+            if not file_path:
+                raise ValueError("Select a file first")
+            return load_payload(file_path=file_path)
+        return load_payload(test_size=int(self.test_size_var.get().strip()))
 
     def _start_send(self):
         try:
@@ -342,30 +343,32 @@ class SenderGui:
                 retries=int(self.retries_var.get().strip()),
                 target_rate_kib_s=float(self.target_rate_var.get().strip()),
                 window_size=int(self.window_var.get().strip()),
+                socket_buffer_bytes=int(self.socket_buffer_var.get().strip()),
+                progress_interval_s=max(int(self.progress_interval_var.get().strip()), 10) / 1000.0,
+                verbose_events=bool(self.verbose_var.get()),
             )
         except Exception as exc:
-            messagebox.showerror("参数错误", str(exc))
+            messagebox.showerror("Parameter Error", str(exc))
             return
 
         self._reset_runtime_state(len(payload))
         self.sender = UdpSender(config)
         self.send_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
-        self.status_text_var.set("发送中")
-        self._append_log(f"开始发送，目标 {config.ip}:{config.port}，总字节 {len(payload)}")
-
-        self.sender_thread = threading.Thread(
-            target=self._worker_send,
-            args=(payload,),
-            daemon=True,
+        self.status_text_var.set("Sending")
+        self._append_log(
+            f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
+            f"chunk={config.chunk_size} window={config.window_size}"
         )
+
+        self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)
         self.sender_thread.start()
 
     def _stop_send(self):
         if self.sender is not None:
             self.sender.stop()
-            self.status_text_var.set("正在停止")
-            self._append_log("收到停止请求")
+            self.status_text_var.set("Stopping")
+            self._append_log("Stop requested")
 
     def _worker_send(self, payload: bytes):
         try:
@@ -375,15 +378,6 @@ class SenderGui:
 
     def _sender_callback(self, event_name: str, payload: dict):
         self.event_queue.put((event_name, payload))
-
-    def _build_payload(self) -> bytes:
-        mode = self.mode_var.get()
-        if mode == "file":
-            file_path = self.file_path_var.get().strip()
-            if not file_path:
-                raise ValueError("请先选择文件")
-            return load_payload(file_path=file_path)
-        return load_payload(test_size=int(self.test_size_var.get().strip()))
 
     def _reset_runtime_state(self, total_size: int):
         self.progress_var.set(0.0)
@@ -396,6 +390,7 @@ class SenderGui:
         self.avg_rate_var.set("0.00 KiB/s")
         self.ps_rate_var.set("0.00 KiB/s")
         self.ack_ok_var.set("0")
+        self.pending_count_var.set("0")
         self.timeout_count_var.set("0")
         self.retry_count_var.set("0")
         self.busy_count_var.set("0")
@@ -403,6 +398,7 @@ class SenderGui:
         self.sent_speed_chart.reset()
         self.ps_speed_chart.reset()
         self.rtt_chart.reset()
+        self.last_summary_log_time = 0.0
 
     def _on_done(self):
         self.send_button.configure(state=tk.NORMAL)
@@ -425,74 +421,19 @@ class SenderGui:
             self.progress_text_var.set(f"0 / {payload['total_size']}")
             return
 
-        if event_name == "chunk_sent":
-            self.seq_var.set(str(payload["seq"]))
-            self.status_text_var.set(f"发送 seq={payload['seq']} attempt={payload['attempt']}")
-            self.window_used_var.set(str(payload.get("window_used", 0)))
-            self._append_log(
-                f"TX seq={payload['seq']} payload={payload['payload_len']}B attempt={payload['attempt']} "
-                f"inflight={payload.get('window_used', 0)}"
-            )
-            return
-
-        if event_name == "timeout":
-            self.timeout_count_var.set(str(int(self.timeout_count_var.get()) + 1))
-            self.status_text_var.set(f"Timeout seq={payload['seq']}")
-            self.window_used_var.set(str(payload.get("window_used", 0)))
-            self._append_log(
-                f"Timeout seq={payload['seq']} payload={payload['payload_len']}B retry={payload['attempt']} "
-                f"inflight={payload.get('window_used', 0)}"
-            )
-            return
-
-        if event_name == "retry":
-            self.retry_count_var.set(str(int(self.retry_count_var.get()) + 1))
-            self.status_text_var.set(f"Retry seq={payload['seq']} reason={payload['reason']}")
-            self.window_used_var.set(str(payload.get("window_used", 0)))
-            self._append_log(
-                f"Retry seq={payload['seq']} payload={payload['payload_len']}B "
-                f"attempt={payload['attempt']} reason={payload['reason']} "
-                f"inflight={payload.get('window_used', 0)}"
-            )
-            return
-
-        if event_name == "ack_status":
+        if event_name == "progress":
             stats = payload["stats"]
-            self.ack_status_var.set(payload["status_name"])
-            self.window_used_var.set(str(payload.get("window_used", 0)))
-            self.retry_count_var.set(str(stats.retries_used))
-            if payload["status_name"] == "BUSY":
-                self.busy_count_var.set(str(stats.ack_busy))
-            elif payload["status_name"] == "PENDING":
-                pass
-            else:
-                error_total = (
-                    stats.ack_bad_magic + stats.ack_bad_length +
-                    stats.ack_bad_checksum + stats.ack_dma_error
-                )
-                self.error_count_var.set(str(error_total))
-            self.status_text_var.set(f"ACK {payload['status_name']} seq={payload['seq']}")
-            self.rtt_var.set(f"{payload['rtt_ms']:.2f} ms")
-            self._append_log(
-                f"ACK {payload['status_name']} seq={payload['seq']} transfer_len={payload['transfer_len']} "
-                f"rtt={payload['rtt_ms']:.2f}ms attempt={payload['attempt']} "
-                f"inflight={payload.get('window_used', 0)}"
-            )
-            return
-
-        if event_name == "ack_ok":
-            stats = payload["stats"]
-            progress = 0.0 if stats.total_size == 0 else (stats.bytes_sent / stats.total_size) * 100.0
+            progress = 0.0 if stats.total_size == 0 else (stats.bytes_acked / stats.total_size) * 100.0
             self.progress_var.set(progress)
-            self.progress_text_var.set(f"{stats.bytes_sent} / {stats.total_size}")
-            self.ack_status_var.set("OK")
-            self.seq_var.set(str(payload["seq"]))
+            self.progress_text_var.set(f"{stats.bytes_acked} / {stats.total_size}")
+            self.seq_var.set(str(stats.last_seq))
             self.window_used_var.set(str(payload.get("window_used", 0)))
             self.rtt_var.set(f"{stats.last_rtt_ms:.2f} ms")
-            self.current_rate_var.set(f"{stats.current_rate_kib_s:.2f} KiB/s")
+            self.current_rate_var.set(f"{stats.delivered_rate_kib_s:.2f} KiB/s")
             self.avg_rate_var.set(f"{stats.average_rate_kib_s:.2f} KiB/s")
             self.ps_rate_var.set(f"{stats.estimated_ps_rate_kib_s:.2f} KiB/s")
             self.ack_ok_var.set(str(stats.ack_ok))
+            self.pending_count_var.set(str(stats.ack_pending))
             self.timeout_count_var.set(str(stats.timeout_count))
             self.retry_count_var.set(str(stats.retries_used))
             self.busy_count_var.set(str(stats.ack_busy))
@@ -501,38 +442,108 @@ class SenderGui:
                 stats.ack_bad_checksum + stats.ack_dma_error
             )
             self.error_count_var.set(str(error_total))
-            self.status_text_var.set(f"ACK OK seq={payload['seq']}")
-            self.sent_speed_chart.add_point(stats.current_rate_kib_s)
+            self.status_text_var.set("Sending")
+
+            self.sent_speed_chart.add_point(stats.delivered_rate_kib_s)
             self.ps_speed_chart.add_point(stats.estimated_ps_rate_kib_s)
             self.rtt_chart.add_point(stats.last_rtt_ms)
-            self._append_log(
-                f"ACK OK seq={payload['seq']} transfer_len={payload['transfer_len']} "
-                f"progress={stats.bytes_sent}/{stats.total_size} "
-                f"send={stats.current_rate_kib_s:.2f}KiB/s ps={stats.estimated_ps_rate_kib_s:.2f}KiB/s "
-                f"rtt={stats.last_rtt_ms:.2f}ms inflight={payload.get('window_used', 0)}"
+
+            now = time.time()
+            if self.verbose_var.get() or (now - self.last_summary_log_time) >= 0.5:
+                self.last_summary_log_time = now
+                self._append_log(
+                    f"PROGRESS acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
+                    f"inflight={payload.get('window_used', 0)} delivered={stats.delivered_rate_kib_s:.2f}KiB/s "
+                    f"busy={stats.ack_busy} pending={stats.ack_pending}"
+                )
+            return
+
+        if event_name == "chunk_sent":
+            if self.verbose_var.get():
+                self.status_text_var.set(f"TX seq={payload['seq']}")
+                self._append_log(
+                    f"TX seq={payload['seq']} payload={payload['payload_len']}B "
+                    f"attempt={payload['attempt']} inflight={payload.get('window_used', 0)}"
+                )
+            return
+
+        if event_name == "timeout":
+            self.timeout_count_var.set(str(int(self.timeout_count_var.get()) + 1))
+            self.status_text_var.set(f"Timeout seq={payload['seq']}")
+            if self.verbose_var.get():
+                self._append_log(
+                    f"TIMEOUT seq={payload['seq']} payload={payload['payload_len']}B retry={payload['attempt']}"
+                )
+            return
+
+        if event_name == "retry":
+            self.retry_count_var.set(str(int(self.retry_count_var.get()) + 1))
+            self.status_text_var.set(f"Retry seq={payload['seq']}")
+            if self.verbose_var.get():
+                self._append_log(
+                    f"RETRY seq={payload['seq']} payload={payload['payload_len']}B "
+                    f"attempt={payload['attempt']} reason={payload['reason']}"
+                )
+            return
+
+        if event_name == "ack_status":
+            stats = payload["stats"]
+            self.ack_status_var.set(payload["status_name"])
+            self.pending_count_var.set(str(stats.ack_pending))
+            self.busy_count_var.set(str(stats.ack_busy))
+            error_total = (
+                stats.ack_bad_magic + stats.ack_bad_length +
+                stats.ack_bad_checksum + stats.ack_dma_error
             )
+            self.error_count_var.set(str(error_total))
+            self.status_text_var.set(f"ACK {payload['status_name']} seq={payload['seq']}")
+            if self.verbose_var.get():
+                self._append_log(
+                    f"ACK {payload['status_name']} seq={payload['seq']} transfer_len={payload['transfer_len']} "
+                    f"attempt={payload['attempt']} rtt={payload['rtt_ms']:.2f}ms"
+                )
+            return
+
+        if event_name == "ack_ok":
+            if self.verbose_var.get():
+                stats = payload["stats"]
+                self.ack_status_var.set("OK")
+                self.status_text_var.set(f"ACK OK seq={payload['seq']}")
+                self._append_log(
+                    f"ACK OK seq={payload['seq']} progress={stats.bytes_acked}/{stats.total_size} "
+                    f"delivered={stats.delivered_rate_kib_s:.2f}KiB/s"
+                )
+            return
+
+        if event_name == "ack_ignored":
+            if self.verbose_var.get():
+                self._append_log(
+                    f"ACK IGNORED seq={payload['seq']} status={payload['status_name']} "
+                    f"transfer_len={payload['transfer_len']}"
+                )
             return
 
         if event_name == "done":
             stats = payload["stats"]
-            self.status_text_var.set("发送完成")
+            self.status_text_var.set("Done")
             self._append_log(
-                f"完成，总字节={stats.bytes_sent} avg={stats.average_rate_kib_s:.2f}KiB/s "
-                f"ACK_OK={stats.ack_ok} timeout={stats.timeout_count}"
+                f"DONE acked={stats.bytes_acked} sent={stats.bytes_sent} "
+                f"avg_sent={stats.average_rate_kib_s:.2f}KiB/s delivered={stats.delivered_rate_kib_s:.2f}KiB/s "
+                f"ack_ok={stats.ack_ok} timeouts={stats.timeout_count}"
             )
             self._on_done()
             return
 
         if event_name == "stopped":
-            self.status_text_var.set("已停止")
-            self._append_log(f"已停止，已发送字节={payload['bytes_sent']}")
+            self.status_text_var.set("Stopped")
+            self._append_log(f"Stopped bytes_sent={payload['bytes_sent']}")
             self._on_done()
             return
 
         if event_name == "error":
-            self.status_text_var.set("错误")
-            self._append_log(f"错误：{payload['message']}")
-            messagebox.showerror("发送失败", payload["message"])
+            self.status_text_var.set("Error")
+            self._append_log(f"ERROR {payload['message']}")
+            messagebox.showerror("Send Failed", payload["message"])
             self._on_done()
 
 

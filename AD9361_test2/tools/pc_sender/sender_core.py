@@ -44,12 +44,16 @@ class SenderConfig:
     retries: int = 10
     target_rate_kib_s: float = 0.0
     window_size: int = 16
+    socket_buffer_bytes: int = 4 * 1024 * 1024
+    progress_interval_s: float = 0.1
+    verbose_events: bool = False
 
 
 @dataclass
 class SenderStats:
     total_size: int = 0
     bytes_sent: int = 0
+    bytes_acked: int = 0
     chunks_acked: int = 0
     retries_used: int = 0
     ack_ok: int = 0
@@ -69,6 +73,7 @@ class SenderStats:
     average_rate_kib_s: float = 0.0
     estimated_ps_rate_kib_s: float = 0.0
     ack_pending: int = 0
+    delivered_rate_kib_s: float = 0.0
 
 
 def parse_args():
@@ -82,6 +87,12 @@ def parse_args():
         help="optional offered load cap in KiB/s, 0 means unlimited")
     parser.add_argument("--window-size", type=int, default=16,
         help="number of in-flight chunks allowed before waiting for ACKs")
+    parser.add_argument("--socket-buffer-bytes", type=int, default=4 * 1024 * 1024,
+        help="host socket send/recv buffer size")
+    parser.add_argument("--progress-interval-ms", type=int, default=100,
+        help="minimum GUI/CLI progress update interval in ms")
+    parser.add_argument("--verbose-events", action="store_true",
+        help="print or emit per-packet events instead of throttled summaries")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -131,6 +142,7 @@ class UdpSender:
     def __init__(self, config: SenderConfig):
         self.config = config
         self._stop_requested = False
+        self._last_progress_emit = 0.0
 
     def stop(self):
         self._stop_requested = True
@@ -149,6 +161,36 @@ class UdpSender:
         if sleep_time > 0.0:
             time.sleep(sleep_time)
 
+    def _update_rates(self, stats: SenderStats, payload_len: int, transfer_len: int, ack_time: float, tx_time: float):
+        elapsed = max(ack_time - stats.started_at, 1e-6)
+        ack_elapsed = max(ack_time - tx_time, 1e-6)
+
+        stats.last_rtt_ms = ack_elapsed * 1000.0
+        stats.current_rate_kib_s = (payload_len / 1024.0) / ack_elapsed
+        stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / ack_elapsed
+        stats.average_rate_kib_s = (stats.bytes_sent / 1024.0) / elapsed
+        stats.delivered_rate_kib_s = (stats.bytes_acked / 1024.0) / elapsed
+
+    def _should_emit_progress(self, now: float) -> bool:
+        if self.config.verbose_events:
+            return True
+        if (now - self._last_progress_emit) >= self.config.progress_interval_s:
+            self._last_progress_emit = now
+            return True
+        return False
+
+    def _emit_progress(self, callback: Optional[Callable[[str, dict], None]], stats: SenderStats,
+        window_used: int, force: bool = False):
+        now = time.monotonic()
+        if not force and not self._should_emit_progress(now):
+            return
+        if force:
+            self._last_progress_emit = now
+        self._emit(callback, "progress", {
+            "window_used": window_used,
+            "stats": stats,
+        })
+
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         stats = SenderStats(total_size=len(payload))
         destination = (self.config.ip, self.config.port)
@@ -165,9 +207,12 @@ class UdpSender:
             raise ValueError("window_size must be positive")
 
         stats.started_at = time.time()
+        self._last_progress_emit = 0.0
         self._emit(callback, "start", {"total_size": stats.total_size, "config": self.config})
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.config.socket_buffer_bytes)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.config.socket_buffer_bytes)
         poll_timeout = min(max(self.config.timeout / 8.0, 0.01), 0.05)
         busy_retry_delay = max(min(self.config.timeout / 8.0, 0.02), 0.002)
         sock.settimeout(poll_timeout)
@@ -195,14 +240,15 @@ class UdpSender:
                         "retry_deadline": tx_time + self.config.timeout,
                         "retry_reason": "timeout",
                     }
-                    self._emit(callback, "chunk_sent", {
-                        "seq": seq,
-                        "payload_len": len(chunk),
-                        "attempt": 1,
-                        "offset": start,
-                        "end": end,
-                        "window_used": len(outstanding),
-                    })
+                    if self.config.verbose_events:
+                        self._emit(callback, "chunk_sent", {
+                            "seq": seq,
+                            "payload_len": len(chunk),
+                            "attempt": 1,
+                            "offset": start,
+                            "end": end,
+                            "window_used": len(outstanding),
+                        })
                     next_seq += 1
 
                 try:
@@ -226,7 +272,6 @@ class UdpSender:
                     stats.last_seq = ack_seq
                     stats.last_ack_status = status
                     stats.last_transfer_len = transfer_len
-                    stats.last_rtt_ms = rtt_ms
 
                     if status == ACK_STATUS_OK:
                         outstanding.pop(ack_seq)
@@ -235,36 +280,38 @@ class UdpSender:
                             base_seq += 1
 
                         stats.bytes_sent = max(stats.bytes_sent, entry["end"])
+                        stats.bytes_acked += len(chunk)
                         stats.chunks_acked += 1
                         stats.ack_ok += 1
-                        elapsed = max(ack_time - stats.started_at, 1e-6)
-                        stats.average_rate_kib_s = (stats.bytes_sent / 1024.0) / elapsed
-                        stats.current_rate_kib_s = (len(chunk) / 1024.0) / max((ack_time - entry["tx_time"]), 1e-6)
-                        stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / max((ack_time - entry["tx_time"]), 1e-6)
-                        self._emit(callback, "ack_ok", {
-                            "seq": ack_seq,
-                            "payload_len": len(chunk),
-                            "transfer_len": transfer_len,
-                            "offset": entry["start"],
-                            "end": entry["end"],
-                            "window_used": len(outstanding),
-                            "stats": stats,
-                        })
+                        self._update_rates(stats, len(chunk), transfer_len, ack_time, entry["tx_time"])
+                        if self.config.verbose_events:
+                            self._emit(callback, "ack_ok", {
+                                "seq": ack_seq,
+                                "payload_len": len(chunk),
+                                "transfer_len": transfer_len,
+                                "offset": entry["start"],
+                                "end": entry["end"],
+                                "window_used": len(outstanding),
+                                "stats": stats,
+                            })
+                        self._emit_progress(callback, stats, len(outstanding))
                     elif status == ACK_STATUS_PENDING:
                         stats.ack_pending += 1
                         entry["retry_deadline"] = ack_time + self.config.timeout
                         entry["retry_reason"] = "timeout"
-                        self._emit(callback, "ack_status", {
-                            "seq": ack_seq,
-                            "payload_len": len(chunk),
-                            "transfer_len": transfer_len,
-                            "status": status,
-                            "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
-                            "attempt": entry["attempts"],
-                            "rtt_ms": rtt_ms,
-                            "window_used": len(outstanding),
-                            "stats": stats,
-                        })
+                        self._update_rates(stats, len(chunk), transfer_len, ack_time, entry["tx_time"])
+                        if self.config.verbose_events:
+                            self._emit(callback, "ack_status", {
+                                "seq": ack_seq,
+                                "payload_len": len(chunk),
+                                "transfer_len": transfer_len,
+                                "status": status,
+                                "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                                "attempt": entry["attempts"],
+                                "rtt_ms": rtt_ms,
+                                "window_used": len(outstanding),
+                                "stats": stats,
+                            })
                     else:
                         if status == ACK_STATUS_BAD_MAGIC:
                             stats.ack_bad_magic += 1
@@ -277,17 +324,18 @@ class UdpSender:
                         elif status == ACK_STATUS_DMA_ERROR:
                             stats.ack_dma_error += 1
 
-                        self._emit(callback, "ack_status", {
-                            "seq": ack_seq,
-                            "payload_len": len(chunk),
-                            "transfer_len": transfer_len,
-                            "status": status,
-                            "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
-                            "attempt": entry["attempts"],
-                            "rtt_ms": rtt_ms,
-                            "window_used": len(outstanding),
-                            "stats": stats,
-                        })
+                        if self.config.verbose_events:
+                            self._emit(callback, "ack_status", {
+                                "seq": ack_seq,
+                                "payload_len": len(chunk),
+                                "transfer_len": transfer_len,
+                                "status": status,
+                                "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                                "attempt": entry["attempts"],
+                                "rtt_ms": rtt_ms,
+                                "window_used": len(outstanding),
+                                "stats": stats,
+                            })
                         if entry["attempts"] >= self.config.retries:
                             raise RuntimeError(f"seq {ack_seq} exceeded retry limit")
                         if status == ACK_STATUS_BUSY:
@@ -322,15 +370,18 @@ class UdpSender:
                     sock.sendto(entry["packet"], destination)
                     if reason == "timeout":
                         stats.timeout_count += 1
-                    self._emit(callback, "timeout" if reason == "timeout" else "retry", {
-                        "seq": oldest_seq,
-                        "payload_len": len(entry["chunk"]),
-                        "attempt": entry["attempts"],
-                        "reason": reason,
-                        "window_used": len(outstanding),
-                    })
+                    if self.config.verbose_events:
+                        self._emit(callback, "timeout" if reason == "timeout" else "retry", {
+                            "seq": oldest_seq,
+                            "payload_len": len(entry["chunk"]),
+                            "attempt": entry["attempts"],
+                            "reason": reason,
+                            "window_used": len(outstanding),
+                        })
+                    self._emit_progress(callback, stats, len(outstanding))
 
             stats.finished_at = time.time()
+            self._emit_progress(callback, stats, len(outstanding), force=True)
             self._emit(callback, "done", {"stats": stats})
             return stats
         finally:
@@ -347,6 +398,9 @@ def run_cli(args) -> int:
         retries=args.retries,
         target_rate_kib_s=args.target_rate_kib_s,
         window_size=args.window_size,
+        socket_buffer_bytes=args.socket_buffer_bytes,
+        progress_interval_s=max(args.progress_interval_ms, 10) / 1000.0,
+        verbose_events=args.verbose_events,
     ))
 
     def callback(event_name: str, payload_dict: dict):
@@ -379,12 +433,19 @@ def run_cli(args) -> int:
                 f"ack_ignored seq={payload_dict['seq']} status={payload_dict['status_name']} "
                 f"transfer_len={payload_dict['transfer_len']}"
             )
+        elif event_name == "progress":
+            stats = payload_dict["stats"]
+            print(
+                f"progress acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
+                f"inflight={payload_dict['window_used']} delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
+                f"rtt={stats.last_rtt_ms:.2f} ms busy={stats.ack_busy} pending={stats.ack_pending}"
+            )
         elif event_name == "done":
             stats = payload_dict["stats"]
             elapsed = max(stats.finished_at - stats.started_at, 1e-6)
             print(
-                f"done bytes={stats.bytes_sent} elapsed={elapsed:.3f}s "
-                f"avg_rate={stats.average_rate_kib_s:.2f} KiB/s "
+                f"done sent={stats.bytes_sent} acked={stats.bytes_acked} elapsed={elapsed:.3f}s "
+                f"avg_sent={stats.average_rate_kib_s:.2f} KiB/s delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
                 f"ack_ok={stats.ack_ok} ack_pending={stats.ack_pending} timeouts={stats.timeout_count}"
             )
 
