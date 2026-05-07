@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import binascii
+import errno
 import socket
 import struct
 import time
@@ -76,6 +77,15 @@ class SenderStats:
     ack_pending: int = 0
     delivered_rate_kib_s: float = 0.0
     ack_batches: int = 0
+    packets_sent: int = 0
+    ack_received: int = 0
+    packets_sent_per_second: float = 0.0
+    ack_received_per_second: float = 0.0
+    send_loop_sleep_time_s: float = 0.0
+    socket_timeout_wakeups: int = 0
+    outstanding_window_avg: float = 0.0
+    outstanding_window_max: int = 0
+    outstanding_window_samples: int = 0
 
 
 def parse_args():
@@ -142,6 +152,14 @@ def iter_chunks(payload: bytes, chunk_size: int):
         offset = next_offset
 
 
+def is_socket_would_block(exc: OSError) -> bool:
+    return exc.errno in (
+        errno.EAGAIN,
+        errno.EWOULDBLOCK,
+        getattr(errno, "WSAEWOULDBLOCK", 10035),
+    )
+
+
 class UdpSender:
     def __init__(self, config: SenderConfig):
         self.config = config
@@ -174,6 +192,15 @@ class UdpSender:
         stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / ack_elapsed
         stats.average_rate_kib_s = (stats.bytes_sent / 1024.0) / elapsed
         stats.delivered_rate_kib_s = (stats.bytes_acked / 1024.0) / elapsed
+        stats.packets_sent_per_second = stats.packets_sent / elapsed
+        stats.ack_received_per_second = stats.ack_received / elapsed
+
+    def _sample_outstanding(self, stats: SenderStats, window_used: int):
+        stats.outstanding_window_samples += 1
+        samples = stats.outstanding_window_samples
+        stats.outstanding_window_avg += (window_used - stats.outstanding_window_avg) / samples
+        if window_used > stats.outstanding_window_max:
+            stats.outstanding_window_max = window_used
 
     def _should_emit_progress(self, now: float) -> bool:
         if self.config.verbose_events:
@@ -195,7 +222,278 @@ class UdpSender:
             "stats": stats,
         })
 
+    def _build_cached_packet(self, payload: bytes, packet_cache: list, seq: int):
+        packet = packet_cache[seq]
+        start = seq * self.config.chunk_size
+        end = min(start + self.config.chunk_size, len(payload))
+        if packet is None:
+            packet = build_packet(seq, payload[start:end])
+            packet_cache[seq] = packet
+        return packet, start, end
+
+    def _process_ack(self, ack_seq: int, status: int, transfer_len: int, ack_time: float,
+        outstanding: Dict[int, dict], acked: list, packet_cache: list, stats: SenderStats,
+        callback: Optional[Callable[[str, dict], None]], busy_retry_delay: float) -> int:
+        stats.ack_received += 1
+
+        if ack_seq not in outstanding:
+            self._emit(callback, "ack_ignored", {
+                "seq": ack_seq,
+                "status": status,
+                "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                "transfer_len": transfer_len,
+            })
+            return 0
+
+        entry = outstanding[ack_seq]
+        rtt_ms = (ack_time - entry["tx_time"]) * 1000.0
+        stats.last_seq = ack_seq
+        stats.last_ack_status = status
+        stats.last_transfer_len = transfer_len
+
+        if status == ACK_STATUS_OK:
+            completed_seqs = sorted(seq for seq in outstanding.keys() if seq <= ack_seq)
+            if not completed_seqs:
+                self._emit(callback, "ack_ignored", {
+                    "seq": ack_seq,
+                    "status": status,
+                    "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                    "transfer_len": transfer_len,
+                })
+                return 0
+
+            last_completed_seq = completed_seqs[-1]
+            last_entry = outstanding[last_completed_seq]
+
+            for completed_seq in completed_seqs:
+                completed_entry = outstanding.pop(completed_seq)
+                acked[completed_seq] = True
+                packet_cache[completed_seq] = None
+                stats.bytes_sent = max(stats.bytes_sent, completed_entry["end"])
+                stats.bytes_acked += completed_entry["payload_len"]
+                stats.chunks_acked += 1
+
+            stats.ack_ok += len(completed_seqs)
+            stats.ack_batches += 1
+            stats.last_seq = last_completed_seq
+            stats.last_transfer_len = transfer_len
+            self._update_rates(
+                stats,
+                last_entry["payload_len"],
+                transfer_len,
+                ack_time,
+                last_entry["tx_time"],
+            )
+            if self.config.verbose_events:
+                self._emit(callback, "ack_ok", {
+                    "seq": last_completed_seq,
+                    "payload_len": last_entry["payload_len"],
+                    "transfer_len": transfer_len,
+                    "offset": last_entry["start"],
+                    "end": last_entry["end"],
+                    "acked_count": len(completed_seqs),
+                    "window_used": len(outstanding),
+                    "stats": stats,
+                })
+            return len(completed_seqs)
+
+        if status == ACK_STATUS_PENDING:
+            stats.ack_pending += 1
+            entry["retry_deadline"] = ack_time + self.config.timeout
+            entry["retry_reason"] = "timeout"
+            self._update_rates(stats, entry["payload_len"], transfer_len, ack_time, entry["tx_time"])
+            if self.config.verbose_events:
+                self._emit(callback, "ack_status", {
+                    "seq": ack_seq,
+                    "payload_len": entry["payload_len"],
+                    "transfer_len": transfer_len,
+                    "status": status,
+                    "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                    "attempt": entry["attempts"],
+                    "rtt_ms": rtt_ms,
+                    "window_used": len(outstanding),
+                    "stats": stats,
+                })
+            return 0
+
+        if status == ACK_STATUS_BAD_MAGIC:
+            stats.ack_bad_magic += 1
+        elif status == ACK_STATUS_BAD_LENGTH:
+            stats.ack_bad_length += 1
+        elif status == ACK_STATUS_BAD_CHECKSUM:
+            stats.ack_bad_checksum += 1
+        elif status == ACK_STATUS_BUSY:
+            stats.ack_busy += 1
+        elif status == ACK_STATUS_DMA_ERROR:
+            stats.ack_dma_error += 1
+
+        if self.config.verbose_events:
+            self._emit(callback, "ack_status", {
+                "seq": ack_seq,
+                "payload_len": entry["payload_len"],
+                "transfer_len": transfer_len,
+                "status": status,
+                "status_name": ACK_STATUS_NAMES.get(status, f"UNKNOWN_{status}"),
+                "attempt": entry["attempts"],
+                "rtt_ms": rtt_ms,
+                "window_used": len(outstanding),
+                "stats": stats,
+            })
+        if entry["attempts"] >= self.config.retries:
+            raise RuntimeError(f"seq {ack_seq} exceeded retry limit")
+        if status == ACK_STATUS_BUSY:
+            entry["retry_deadline"] = ack_time + busy_retry_delay
+            entry["retry_reason"] = "busy"
+        else:
+            entry["retry_deadline"] = ack_time
+            entry["retry_reason"] = "ack_status"
+        return 0
+
+    def _send_throughput(self, payload: bytes,
+        callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
+        stats = SenderStats(total_size=len(payload))
+        destination = (self.config.ip, self.config.port)
+        total_chunks = (len(payload) + self.config.chunk_size - 1) // self.config.chunk_size
+        packet_cache = [None] * total_chunks
+        acked = [False] * total_chunks
+        outstanding: Dict[int, dict] = {}
+        base_seq = 0
+        next_seq = 0
+
+        stats.started_at = time.time()
+        self._last_progress_emit = 0.0
+        self._emit(callback, "start", {"total_size": stats.total_size, "config": self.config})
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.config.socket_buffer_bytes)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.config.socket_buffer_bytes)
+        sock.setblocking(False)
+        busy_retry_delay = max(min(self.config.timeout / 8.0, 0.02), 0.002)
+        idle_sleep_s = 0.0005
+
+        try:
+            while base_seq < total_chunks:
+                made_progress = False
+
+                while next_seq < total_chunks and len(outstanding) < self.config.window_size:
+                    if self._stop_requested:
+                        self._emit(callback, "stopped", {"seq": next_seq, "bytes_sent": stats.bytes_sent})
+                        stats.finished_at = time.time()
+                        return stats
+
+                    packet, start, end = self._build_cached_packet(payload, packet_cache, next_seq)
+                    self._apply_rate_limit(stats.bytes_sent + (end - start), stats.started_at)
+                    tx_time = time.time()
+                    sock.sendto(packet, destination)
+                    outstanding[next_seq] = {
+                        "start": start,
+                        "end": end,
+                        "payload_len": end - start,
+                        "attempts": 1,
+                        "tx_time": tx_time,
+                        "retry_deadline": tx_time + self.config.timeout,
+                        "retry_reason": "timeout",
+                    }
+                    stats.packets_sent += 1
+                    stats.bytes_sent = max(stats.bytes_sent, end)
+                    made_progress = True
+                    if self.config.verbose_events:
+                        self._emit(callback, "chunk_sent", {
+                            "seq": next_seq,
+                            "payload_len": end - start,
+                            "attempt": 1,
+                            "offset": start,
+                            "end": end,
+                            "window_used": len(outstanding),
+                        })
+                    next_seq += 1
+
+                while True:
+                    try:
+                        ack_seq, status, transfer_len = recv_any_ack(sock)
+                    except BlockingIOError:
+                        break
+                    except OSError as exc:
+                        if is_socket_would_block(exc):
+                            break
+                        raise
+
+                    completed = self._process_ack(
+                        ack_seq,
+                        status,
+                        transfer_len,
+                        time.time(),
+                        outstanding,
+                        acked,
+                        packet_cache,
+                        stats,
+                        callback,
+                        busy_retry_delay,
+                    )
+                    while base_seq < total_chunks and acked[base_seq]:
+                        base_seq += 1
+                    made_progress = True
+                    if completed > 0:
+                        self._emit_progress(callback, stats, len(outstanding))
+
+                now = time.time()
+                expired_items = [
+                    (seq, entry)
+                    for seq, entry in outstanding.items()
+                    if now >= entry["retry_deadline"]
+                ]
+                if expired_items:
+                    expired_items.sort(key=lambda item: (item[1]["retry_deadline"], item[0]))
+                    oldest_seq, entry = expired_items[0]
+                    entry["attempts"] += 1
+                    if entry["attempts"] > self.config.retries:
+                        raise RuntimeError(f"seq {oldest_seq} exceeded retry limit")
+
+                    packet, _start, _end = self._build_cached_packet(payload, packet_cache, oldest_seq)
+                    reason = entry.get("retry_reason", "timeout")
+                    entry["tx_time"] = now
+                    entry["retry_deadline"] = now + self.config.timeout
+                    entry["retry_reason"] = "timeout"
+                    sock.sendto(packet, destination)
+                    stats.packets_sent += 1
+                    stats.retries_used += 1
+                    if reason == "timeout":
+                        stats.timeout_count += 1
+                    made_progress = True
+                    if self.config.verbose_events:
+                        self._emit(callback, "timeout" if reason == "timeout" else "retry", {
+                            "seq": oldest_seq,
+                            "payload_len": entry["payload_len"],
+                            "attempt": entry["attempts"],
+                            "reason": reason,
+                            "window_used": len(outstanding),
+                        })
+                    self._emit_progress(callback, stats, len(outstanding))
+
+                self._sample_outstanding(stats, len(outstanding))
+                self._emit_progress(callback, stats, len(outstanding))
+
+                if not made_progress and outstanding:
+                    stats.socket_timeout_wakeups += 1
+                    sleep_start = time.time()
+                    time.sleep(idle_sleep_s)
+                    stats.send_loop_sleep_time_s += time.time() - sleep_start
+
+            stats.finished_at = time.time()
+            self._emit_progress(callback, stats, len(outstanding), force=True)
+            self._emit(callback, "done", {"stats": stats})
+            return stats
+        finally:
+            sock.close()
+
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
+        if self.config.throughput_mode:
+            if self.config.chunk_size <= 0:
+                raise ValueError("chunk_size must be positive")
+            if self.config.window_size <= 0:
+                raise ValueError("window_size must be positive")
+            return self._send_throughput(payload, callback=callback)
+
         stats = SenderStats(total_size=len(payload))
         destination = (self.config.ip, self.config.port)
         chunks = list(iter_chunks(payload, self.config.chunk_size))
@@ -234,6 +532,7 @@ class UdpSender:
                     tx_time = time.time()
                     packet = build_packet(seq, chunk)
                     sock.sendto(packet, destination)
+                    stats.packets_sent += 1
                     outstanding[seq] = {
                         "packet": packet,
                         "chunk": chunk,
@@ -261,6 +560,7 @@ class UdpSender:
 
                     ack_seq, status, transfer_len = recv_any_ack(sock)
                     ack_time = time.time()
+                    stats.ack_received += 1
                     if ack_seq not in outstanding:
                         self._emit(callback, "ack_ignored", {
                             "seq": ack_seq,
@@ -312,6 +612,7 @@ class UdpSender:
                             ack_time,
                             last_entry["tx_time"],
                         )
+                        self._sample_outstanding(stats, len(outstanding))
                         if self.config.verbose_events:
                             self._emit(callback, "ack_ok", {
                                 "seq": last_completed_seq,
@@ -374,6 +675,7 @@ class UdpSender:
                             entry["retry_deadline"] = ack_time
                             entry["retry_reason"] = "ack_status"
                 except socket.timeout:
+                    stats.socket_timeout_wakeups += 1
                     if not outstanding:
                         continue
 
@@ -397,6 +699,7 @@ class UdpSender:
                     reason = entry.get("retry_reason", "timeout")
                     entry["retry_reason"] = "timeout"
                     sock.sendto(entry["packet"], destination)
+                    stats.packets_sent += 1
                     if reason == "timeout":
                         stats.timeout_count += 1
                     if self.config.verbose_events:
@@ -408,6 +711,7 @@ class UdpSender:
                             "window_used": len(outstanding),
                         })
                     self._emit_progress(callback, stats, len(outstanding))
+                    self._sample_outstanding(stats, len(outstanding))
 
             stats.finished_at = time.time()
             self._emit_progress(callback, stats, len(outstanding), force=True)
@@ -473,13 +777,17 @@ def run_cli(args) -> int:
                     f"THR acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
                     f"inflight={payload_dict['window_used']} send={stats.average_rate_kib_s:.2f} KiB/s "
                     f"deliv={stats.delivered_rate_kib_s:.2f} KiB/s ps_est={stats.estimated_ps_rate_kib_s:.2f} KiB/s "
+                    f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"rtt={stats.last_rtt_ms:.2f} ms retry={stats.retries_used} timeout={stats.timeout_count} "
-                    f"busy={stats.ack_busy} pending={stats.ack_pending} window={sender.config.window_size}"
+                    f"busy={stats.ack_busy} pending={stats.ack_pending} window={sender.config.window_size} "
+                    f"occ_avg={stats.outstanding_window_avg:.1f} occ_max={stats.outstanding_window_max} "
+                    f"idle_sleep={stats.send_loop_sleep_time_s:.3f}s empty={stats.socket_timeout_wakeups}"
                 )
             else:
                 print(
                     f"progress acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
                     f"inflight={payload_dict['window_used']} delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
+                    f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"rtt={stats.last_rtt_ms:.2f} ms busy={stats.ack_busy} pending={stats.ack_pending}"
                 )
         elif event_name == "done":
@@ -488,6 +796,7 @@ def run_cli(args) -> int:
             print(
                 f"done sent={stats.bytes_sent} acked={stats.bytes_acked} elapsed={elapsed:.3f}s "
                 f"avg_sent={stats.average_rate_kib_s:.2f} KiB/s delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
+                f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                 f"ack_ok={stats.ack_ok} ack_pending={stats.ack_pending} timeouts={stats.timeout_count}"
             )
 

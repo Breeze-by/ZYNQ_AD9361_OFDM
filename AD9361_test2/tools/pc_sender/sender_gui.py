@@ -116,6 +116,11 @@ class SenderGui:
         self.busy_count_var = tk.StringVar(value="0")
         self.error_count_var = tk.StringVar(value="0")
         self.pending_count_var = tk.StringVar(value="0")
+        self.tx_packet_rate_var = tk.StringVar(value="0.0 pkt/s")
+        self.ack_packet_rate_var = tk.StringVar(value="0.0 pkt/s")
+        self.window_average_var = tk.StringVar(value="0.0 / 0")
+        self.idle_sleep_var = tk.StringVar(value="0.000 s")
+        self.empty_poll_var = tk.StringVar(value="0")
 
         self.progress_var = tk.DoubleVar(value=0.0)
         self.sent_speed_chart = None
@@ -260,6 +265,11 @@ class SenderGui:
             ("Retries", self.retry_count_var),
             ("Busy", self.busy_count_var),
             ("Errors", self.error_count_var),
+            ("TX Packets", self.tx_packet_rate_var),
+            ("ACK Packets", self.ack_packet_rate_var),
+            ("Window Avg/Max", self.window_average_var),
+            ("Idle Sleep", self.idle_sleep_var),
+            ("Empty Polls", self.empty_poll_var),
         ]
 
         for label_text, variable in metrics:
@@ -425,6 +435,11 @@ class SenderGui:
         self.retry_count_var.set("0")
         self.busy_count_var.set("0")
         self.error_count_var.set("0")
+        self.tx_packet_rate_var.set("0.0 pkt/s")
+        self.ack_packet_rate_var.set("0.0 pkt/s")
+        self.window_average_var.set("0.0 / 0")
+        self.idle_sleep_var.set("0.000 s")
+        self.empty_poll_var.set("0")
         self.sent_speed_chart.reset()
         self.ps_speed_chart.reset()
         self.rtt_chart.reset()
@@ -467,6 +482,13 @@ class SenderGui:
             self.timeout_count_var.set(str(stats.timeout_count))
             self.retry_count_var.set(str(stats.retries_used))
             self.busy_count_var.set(str(stats.ack_busy))
+            self.tx_packet_rate_var.set(f"{stats.packets_sent_per_second:.1f} pkt/s")
+            self.ack_packet_rate_var.set(f"{stats.ack_received_per_second:.1f} pkt/s")
+            self.window_average_var.set(
+                f"{stats.outstanding_window_avg:.1f} / {stats.outstanding_window_max}"
+            )
+            self.idle_sleep_var.set(f"{stats.send_loop_sleep_time_s:.3f} s")
+            self.empty_poll_var.set(str(stats.socket_timeout_wakeups))
             error_total = (
                 stats.ack_bad_magic + stats.ack_bad_length +
                 stats.ack_bad_checksum + stats.ack_dma_error
@@ -487,6 +509,9 @@ class SenderGui:
                 self._append_log(
                     f"PROGRESS acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
                     f"inflight={payload.get('window_used', 0)} delivered={stats.delivered_rate_kib_s:.2f}KiB/s "
+                    f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
+                    f"occ={stats.outstanding_window_avg:.1f}/{stats.outstanding_window_max} "
+                    f"sleep={stats.send_loop_sleep_time_s:.3f}s empty={stats.socket_timeout_wakeups} "
                     f"busy={stats.ack_busy} pending={stats.ack_pending}"
                 )
             return

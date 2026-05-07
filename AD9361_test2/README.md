@@ -123,6 +123,25 @@ Host-side metrics now use two different meanings:
   - single-chunk rate derived from `transfer_len / ACK_RTT`
   - useful for latency inspection, but not equal to sustained throughput
 
+In `--throughput-mode`, the host uses a dedicated tight sender path. It keeps
+packet bytes cached while they are outstanding, fills the configured window
+aggressively, drains all currently available ACKs with a non-blocking socket,
+and only emits aggregate progress at the configured interval. This keeps the
+test from being paced by per-packet logging or by a long `recvfrom` timeout.
+
+Additional host-side throughput diagnostics:
+
+- `tx_pkt`
+  - host UDP packets sent per second, including retransmissions
+- `ack_rx`
+  - ACK packets received per second
+- `occ_avg` / `occ_max`
+  - sampled outstanding-window occupancy average and maximum
+- `idle_sleep`
+  - total time spent sleeping because no ACK/retry/send work was immediately available
+- `empty`
+  - count of empty non-blocking receive polls / timeout wakeups
+
 Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per second. It reports interval and average RX/DMA rates, packet and DMA completion counts, aggregation block occupancy, ACK/NACK counts, protocol errors, duplicate/pending/busy counts, and aggregation counters. After aggregation is working, `dma_done` should be much lower than `rx_pkt`, while `agg_avg` should be much larger than one UDP chunk.
 
 Example throughput command:
