@@ -23,6 +23,7 @@ typedef struct {
     uint32_t payload_len;
     uint32_t transfer_len;
     XTime first_write_time;
+    XTime last_write_time;
 } net_agg_block_t;
 
 typedef struct {
@@ -224,6 +225,7 @@ static int net_ensure_fill_block(uint32_t append_len)
     block->payload_len = 0U;
     block->transfer_len = 0U;
     XTime_GetTime(&block->first_write_time);
+    block->last_write_time = block->first_write_time;
     fill_block_index = free_index;
     net_update_queue_stats();
     return 0;
@@ -294,6 +296,8 @@ static void net_check_agg_timeout(void)
 {
     XTime now_time;
     net_agg_block_t *block;
+    uint64_t fill_elapsed_us;
+    uint64_t idle_elapsed_us;
 
     if (fill_block_index < 0) {
         return;
@@ -305,7 +309,16 @@ static void net_check_agg_timeout(void)
     }
 
     XTime_GetTime(&now_time);
-    if (net_elapsed_us(block->first_write_time, now_time) >= NET_AGG_FLUSH_TIMEOUT_US) {
+    fill_elapsed_us = net_elapsed_us(block->first_write_time, now_time);
+    idle_elapsed_us = net_elapsed_us(block->last_write_time, now_time);
+
+    if ((block->payload_len >= NET_AGG_MIN_FLUSH_BYTES) &&
+        (fill_elapsed_us >= NET_AGG_FLUSH_TIMEOUT_US)) {
+        net_submit_fill_block(1);
+        return;
+    }
+
+    if (idle_elapsed_us >= NET_AGG_IDLE_FLUSH_TIMEOUT_US) {
         net_submit_fill_block(1);
     }
 }
@@ -400,6 +413,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     }
 
     block->payload_len += header.payload_len;
+    XTime_GetTime(&block->last_write_time);
     total_accepted_bytes += header.payload_len;
     total_accepted_chunks += 1U;
     net_record_accepted_chunk(header.seq, header.payload_len);
@@ -454,6 +468,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
         agg_blocks[index].payload_len = 0U;
         agg_blocks[index].transfer_len = 0U;
         agg_blocks[index].first_write_time = 0U;
+        agg_blocks[index].last_write_time = 0U;
     }
     memset(accepted_history, 0, sizeof(accepted_history));
     accepted_history_head_index = 0U;

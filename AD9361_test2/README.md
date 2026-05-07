@@ -73,7 +73,9 @@ Board-side values:
   - `NET_AGG_ENABLE = 1`
   - `NET_AGG_BLOCK_COUNT = 8`
   - `NET_AGG_BLOCK_BYTES = 16384`
+  - `NET_AGG_MIN_FLUSH_BYTES = 8192`
   - `NET_AGG_FLUSH_TIMEOUT_US = 1000`
+  - `NET_AGG_IDLE_FLUSH_TIMEOUT_US = 100000`
   - Total aggregation buffer = `8 * 16384 = 131072` bytes
   - `NET_DEFAULT_CHUNK_SIZE_BYTES = 1456`
   - `NET_MAX_RECOMMENDED_WINDOW_SIZE = 64`
@@ -121,7 +123,7 @@ Host-side metrics now use two different meanings:
   - single-chunk rate derived from `transfer_len / ACK_RTT`
   - useful for latency inspection, but not equal to sustained throughput
 
-Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per second. It reports interval and average RX/DMA rates, packet and DMA completion counts, aggregation block occupancy, ACK/NACK counts, protocol errors, duplicate/pending/busy counts, and aggregation counters. After aggregation is enabled, `dma_done` should be much lower than `rx_pkt`, while `agg_avg` should be much larger than one UDP chunk.
+Board-side `STAT ...` is printed by `src/drivers/net/net_stats.c` about once per second. It reports interval and average RX/DMA rates, packet and DMA completion counts, aggregation block occupancy, ACK/NACK counts, protocol errors, duplicate/pending/busy counts, and aggregation counters. After aggregation is working, `dma_done` should be much lower than `rx_pkt`, while `agg_avg` should be much larger than one UDP chunk.
 
 Example throughput command:
 
