@@ -80,10 +80,20 @@ agg_avg 接近 16 KiB
 
 ## PC 发送工具
 
+PC 发送端默认会把每个 UDP chunk 作为一个 MPDU，先封装成一个 Legacy OFDM 输入帧：
+
+```text
+PC->PS 协议头 + addr0 Legacy L-SIG 控制字 + addr1 0 + MPDU 数据 8 字节对齐补 0
+```
+
+板端 PS 仍然只解析 PC->PS 协议头；协议头后的 OFDM 头和 MPDU 数据会被整体当作 DMA data 转发到 PL。默认 Legacy 速率为 6 Mbps，`L-SIG LENGTH = MPDU_LEN + 4`。
+
+GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
+
 命令行吞吐测试：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1456 --window-size 64 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 64 --throughput-mode
 ```
 
 GUI：
@@ -97,8 +107,10 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 ```text
 模式：测试数据（GUI 中为 Test Data）
 吞吐模式：启用（GUI 中为 Throughput Mode）
+OFDM Legacy Wrap：启用
+OFDM Rate：6 Mbps
 逐包日志：关闭（GUI 中为 Verbose Packet Events）
-每包负载字节数：1456（GUI 中为 Chunk Bytes）
+每包 MPDU 字节数：1440（GUI 中为 Chunk Bytes）
 窗口大小：64（GUI 中为 Window Size）
 进度刷新间隔：1000 ms（GUI 中为 Progress ms）
 测试数据大小：64 MiB 或 256 MiB
