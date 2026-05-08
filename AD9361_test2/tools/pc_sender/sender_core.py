@@ -35,12 +35,24 @@ ACK_FORMAT = "<IIHHI"
 DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
 
+DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
+OFDM_LEGACY_RATE_BITS = {
+    6: 0b1101,
+    9: 0b1111,
+    12: 0b0101,
+    18: 0b0111,
+    24: 0b1001,
+    36: 0b1011,
+    48: 0b0001,
+    54: 0b0011,
+}
+
 
 @dataclass
 class SenderConfig:
     ip: str
     port: int = 5001
-    chunk_size: int = 1456
+    chunk_size: int = DEFAULT_OFDM_LEGACY_CHUNK_SIZE
     timeout: float = 1.0
     retries: int = 10
     target_rate_kib_s: float = 0.0
@@ -49,6 +61,8 @@ class SenderConfig:
     progress_interval_s: float = 0.1
     verbose_events: bool = False
     throughput_mode: bool = False
+    ofdm_legacy: bool = True
+    ofdm_rate_mbps: int = 6
 
 
 @dataclass
@@ -93,7 +107,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UDP sliding-window sender for AD9361_test2")
     parser.add_argument("--ip", required=True, help="Zynq target IP address")
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
-    parser.add_argument("--chunk-size", type=int, default=1456, help="payload bytes per UDP chunk")
+    parser.add_argument("--chunk-size", type=int, default=DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
+        help="MPDU payload bytes per UDP chunk; 1440 keeps OFDM legacy frames within a 1500 byte MTU")
     parser.add_argument("--timeout", type=float, default=1.0, help="ACK timeout in seconds")
     parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
     parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
@@ -108,6 +123,13 @@ def parse_args():
         help="print or emit per-packet events instead of throttled summaries")
     parser.add_argument("--throughput-mode", action="store_true",
         help="suppress packet events and print lightweight aggregate progress")
+    parser.add_argument("--ofdm-legacy", dest="ofdm_legacy", action="store_true", default=True,
+        help="wrap each MPDU chunk as one legacy OFDM input frame before sending")
+    parser.add_argument("--raw-payload", dest="ofdm_legacy", action="store_false",
+        help="send raw UDP payload without legacy OFDM addr0/addr1 words")
+    parser.add_argument("--ofdm-rate-mbps", type=int, default=6,
+        choices=sorted(OFDM_LEGACY_RATE_BITS.keys()),
+        help="legacy OFDM RATE field in Mbps")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -124,10 +146,50 @@ def load_payload(test_size: int = 0, file_path: Optional[str] = None) -> bytes:
     raise ValueError("one of test_size or file_path is required")
 
 
-def build_packet(seq: int, payload: bytes) -> bytes:
-    crc32 = binascii.crc32(payload) & 0xFFFFFFFF
-    header = struct.pack(DATA_HEADER_FORMAT, DATA_MAGIC, seq, len(payload), 0, crc32)
-    return header + payload
+def parity_odd(value: int) -> int:
+    value ^= value >> 16
+    value ^= value >> 8
+    value ^= value >> 4
+    value &= 0xF
+    return (0x6996 >> value) & 1
+
+
+def calc_lsig_parity(rate_bits: int, length: int) -> int:
+    lsig_without_parity = ((length & 0x0FFF) << 5) | (rate_bits & 0x0F)
+    return parity_odd(lsig_without_parity)
+
+
+def align8(length: int) -> int:
+    return (length + 7) & ~7
+
+
+def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
+    if rate_mbps not in OFDM_LEGACY_RATE_BITS:
+        raise ValueError(f"unsupported legacy OFDM rate {rate_mbps} Mbps")
+
+    lsig_length = len(mpdu_payload) + 4
+    if lsig_length > 0x0FFF:
+        raise ValueError("legacy OFDM L-SIG LENGTH exceeds 12 bits")
+
+    rate_bits = OFDM_LEGACY_RATE_BITS[rate_mbps]
+    parity = calc_lsig_parity(rate_bits, lsig_length)
+    word0 = ((parity & 0x1) << 17) | ((lsig_length & 0x0FFF) << 5) | (rate_bits & 0x0F)
+    padded_payload = mpdu_payload + bytes(align8(len(mpdu_payload)) - len(mpdu_payload))
+
+    return struct.pack("<Q", word0) + struct.pack("<Q", 0) + padded_payload
+
+
+def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None) -> bytes:
+    wire_payload = payload
+    if config is not None and config.ofdm_legacy:
+        wire_payload = build_ofdm_legacy_frame(payload, config.ofdm_rate_mbps)
+
+    if len(wire_payload) > 0xFFFF:
+        raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
+
+    crc32 = binascii.crc32(wire_payload) & 0xFFFFFFFF
+    header = struct.pack(DATA_HEADER_FORMAT, DATA_MAGIC, seq, len(wire_payload), 0, crc32)
+    return header + wire_payload
 
 
 def recv_any_ack(sock: socket.socket):
@@ -169,6 +231,17 @@ class UdpSender:
 
     def stop(self):
         self._stop_requested = True
+
+    def _validate_config(self):
+        if self.config.chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if self.config.window_size <= 0:
+            raise ValueError("window_size must be positive")
+        if self.config.ofdm_legacy:
+            if self.config.ofdm_rate_mbps not in OFDM_LEGACY_RATE_BITS:
+                raise ValueError(f"unsupported legacy OFDM rate {self.config.ofdm_rate_mbps} Mbps")
+            if (self.config.chunk_size + 4) > 0x0FFF:
+                raise ValueError("chunk_size is too large for the 12-bit legacy L-SIG LENGTH field")
 
     def _emit(self, callback: Optional[Callable[[str, dict], None]], event_name: str, payload: dict):
         if callback is not None:
@@ -228,7 +301,7 @@ class UdpSender:
         start = seq * self.config.chunk_size
         end = min(start + self.config.chunk_size, len(payload))
         if packet is None:
-            packet = build_packet(seq, payload[start:end])
+            packet = build_packet(seq, payload[start:end], self.config)
             packet_cache[seq] = packet
         return packet, start, end
 
@@ -509,11 +582,9 @@ class UdpSender:
             sock.close()
 
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
+        self._validate_config()
+
         if self.config.throughput_mode:
-            if self.config.chunk_size <= 0:
-                raise ValueError("chunk_size must be positive")
-            if self.config.window_size <= 0:
-                raise ValueError("window_size must be positive")
             return self._send_throughput(payload, callback=callback)
 
         stats = SenderStats(total_size=len(payload))
@@ -525,11 +596,6 @@ class UdpSender:
         outstanding: Dict[int, dict] = {}
         base_seq = 0
         next_seq = 0
-
-        if self.config.chunk_size <= 0:
-            raise ValueError("chunk_size must be positive")
-        if self.config.window_size <= 0:
-            raise ValueError("window_size must be positive")
 
         stats.started_at = time.time()
         self._last_progress_emit = 0.0
@@ -553,7 +619,7 @@ class UdpSender:
                     seq, chunk, start, end = chunks[next_seq]
                     self._apply_rate_limit(stats.bytes_sent + len(chunk), stats.started_at)
                     tx_time = time.time()
-                    packet = build_packet(seq, chunk)
+                    packet = build_packet(seq, chunk, self.config)
                     sock.sendto(packet, destination)
                     stats.packets_sent += 1
                     outstanding[seq] = {
@@ -761,6 +827,8 @@ def run_cli(args) -> int:
         ) / 1000.0,
         verbose_events=False if args.throughput_mode else args.verbose_events,
         throughput_mode=args.throughput_mode,
+        ofdm_legacy=args.ofdm_legacy,
+        ofdm_rate_mbps=args.ofdm_rate_mbps,
     ))
 
     def callback(event_name: str, payload_dict: dict):

@@ -4,7 +4,7 @@
 
 ```text
 PC 发送端
--> UDP 包：net_data_header_t + 负载
+-> UDP 包：net_data_header_t + Legacy OFDM 输入帧
 -> Zynq PS lwIP RAW UDP 回调
 -> 包头 / 长度 / CRC32 校验
 -> 严格按序接收
@@ -169,16 +169,26 @@ I-cache 已启用，D-cache 保持关闭，以避免 DMA coherency 风险。DMA 
 
 ## PC 发送端
 
+PC 发送端默认会把每个 UDP chunk 当作一个 MPDU，封装成一个 Legacy 非聚合 OFDM 输入帧后再发送。PS 侧仍然只解析 `net_data_header_t`；协议头后的 OFDM `addr0/addr1` 和 MPDU 数据会被整体写入聚合缓冲并经 DMA 转发到 PL。
+
+```text
+addr0: Legacy L-SIG 控制字，64 bit
+addr1: Legacy 未使用，填 0，64 bit
+addr2+: MPDU 数据，小端 64 bit word，最后不足 8 字节高位补 0
+```
+
+默认 `RATE=6 Mbps`，`L-SIG LENGTH=MPDU_LEN+4`，默认 `chunk-size=1440`，这样加上 16 字节 PC->PS 协议头和 16 字节 OFDM 头后仍能适配普通 1500 MTU。
+
 推荐命令行吞吐测试：
 
 ```bash
-python tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1456 --window-size 64 --throughput-mode
+python tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 64 --throughput-mode
 ```
 
 发送文件：
 
 ```bash
-python tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1456 --window-size 64 --throughput-mode
+python tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1440 --window-size 64 --throughput-mode
 ```
 
 GUI：
@@ -192,8 +202,10 @@ python tools/pc_sender/sender_gui.py
 ```text
 模式：测试数据（GUI 中为 Test Data）
 吞吐模式：启用（GUI 中为 Throughput Mode）
+OFDM Legacy Wrap：启用
+OFDM Rate：6 Mbps
 逐包日志：关闭（GUI 中为 Verbose Packet Events）
-每包负载字节数：1456（GUI 中为 Chunk Bytes）
+每包 MPDU 字节数：1440（GUI 中为 Chunk Bytes）
 窗口大小：64（GUI 中为 Window Size）
 进度刷新间隔：1000 ms（GUI 中为 Progress ms）
 测试数据大小：64 MiB 或 256 MiB
@@ -201,7 +213,7 @@ python tools/pc_sender/sender_gui.py
 
 吞吐模式使用非阻塞 ACK 读取、未确认包缓存和自适应有效窗口。`BUSY` 和超时会降低有效窗口；`PENDING` 只做轻微退避，因为它表示顺序压力，而不是数据已丢失。
 
-默认每包负载大小是 `1456` 字节。加上 16 字节应用层包头后，UDP 负载为 `1472` 字节，可避免普通 1500 MTU 下的 IP 分片。
+默认每包 MPDU 大小是 `1440` 字节。Legacy OFDM 封装后为 `1456` 字节，再加上 16 字节 PC->PS 应用层包头后，UDP 负载为 `1472` 字节，可避免普通 1500 MTU 下的 IP 分片。若使用 `--raw-payload` 关闭 OFDM 封装，则可以继续按原始负载模式发送。
 
 ## 运行统计
 

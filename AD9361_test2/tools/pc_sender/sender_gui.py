@@ -6,7 +6,13 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from sender_core import SenderConfig, UdpSender, load_payload
+from sender_core import (
+    DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
+    OFDM_LEGACY_RATE_BITS,
+    SenderConfig,
+    UdpSender,
+    load_payload,
+)
 
 
 class Sparkline(tk.Canvas):
@@ -90,7 +96,7 @@ class SenderGui:
         self.file_info_var = tk.StringVar(value="No file selected")
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
-        self.chunk_var = tk.StringVar(value="1456")
+        self.chunk_var = tk.StringVar(value=str(DEFAULT_OFDM_LEGACY_CHUNK_SIZE))
         self.timeout_var = tk.StringVar(value="1.0")
         self.retries_var = tk.StringVar(value="10")
         self.target_rate_var = tk.StringVar(value="0")
@@ -100,6 +106,8 @@ class SenderGui:
         self.progress_interval_var = tk.StringVar(value="1000")
         self.verbose_var = tk.BooleanVar(value=False)
         self.throughput_mode_var = tk.BooleanVar(value=True)
+        self.ofdm_legacy_var = tk.BooleanVar(value=True)
+        self.ofdm_rate_var = tk.StringVar(value="6")
 
         self.status_text_var = tk.StringVar(value="Idle")
         self.progress_text_var = tk.StringVar(value="0 / 0")
@@ -225,6 +233,17 @@ class SenderGui:
         ttk.Checkbutton(net_box, text="Throughput Mode", variable=self.throughput_mode_var,
             command=self._update_throughput_mode).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
+        ofdm_row = ttk.Frame(net_box)
+        ofdm_row.pack(fill=tk.X, pady=(8, 0))
+        ttk.Checkbutton(ofdm_row, text="OFDM Legacy Wrap", variable=self.ofdm_legacy_var).pack(side=tk.LEFT)
+        ttk.Label(ofdm_row, text="Rate", width=8).pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Combobox(
+            ofdm_row,
+            textvariable=self.ofdm_rate_var,
+            values=[str(rate) for rate in sorted(OFDM_LEGACY_RATE_BITS.keys())],
+            width=8,
+            state="readonly",
+        ).pack(side=tk.LEFT)
         ttk.Label(
             net_box,
             text="Throughput mode disables packet logs and uses at least 1000 ms progress updates.",
@@ -400,6 +419,8 @@ class SenderGui:
                 progress_interval_s=max(progress_interval_ms, 10) / 1000.0,
                 verbose_events=verbose_events,
                 throughput_mode=throughput_mode,
+                ofdm_legacy=bool(self.ofdm_legacy_var.get()),
+                ofdm_rate_mbps=int(self.ofdm_rate_var.get().strip()),
             )
         except Exception as exc:
             messagebox.showerror("Parameter Error", str(exc))
@@ -412,7 +433,8 @@ class SenderGui:
         self.status_text_var.set("Sending")
         self._append_log(
             f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
-            f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode}"
+            f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
+            f"ofdm_legacy={config.ofdm_legacy} rate={config.ofdm_rate_mbps}Mbps"
         )
 
         self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)
