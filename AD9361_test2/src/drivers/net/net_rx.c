@@ -53,6 +53,8 @@ static uint32_t pending_ok_ack_seq;
 static uint32_t pending_ok_ack_transfer_len;
 static uint32_t pending_ok_ack_count;
 static XTime pending_ok_ack_first_time;
+static uint16_t current_session_id;
+static int session_valid;
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
@@ -240,6 +242,43 @@ static void net_record_accepted_chunk(uint32_t seq, uint32_t payload_len)
     entry->payload_len = payload_len;
     accepted_history_head_index =
         (accepted_history_head_index + 1U) % NET_COMPLETED_HISTORY_DEPTH;
+}
+
+static void net_reset_stream_state(uint16_t session_id)
+{
+    uint32_t index;
+
+    for (index = 0U; index < NET_AGG_BLOCK_COUNT; ++index) {
+        agg_blocks[index].state = NET_AGG_BLOCK_FREE;
+        agg_blocks[index].payload_len = 0U;
+        agg_blocks[index].transfer_len = 0U;
+        agg_blocks[index].submit_order = 0U;
+        agg_blocks[index].first_write_time = 0U;
+        agg_blocks[index].last_write_time = 0U;
+    }
+
+    memset(accepted_history, 0, sizeof(accepted_history));
+    accepted_history_head_index = 0U;
+    fill_block_index = -1;
+    dma_block_index = -1;
+    dma_busy = 0;
+    queue_occupancy_max = 0U;
+    total_accepted_bytes = 0U;
+    next_expected_seq = 0U;
+    next_agg_submit_order = 0U;
+    pending_ok_ack_valid = 0;
+    pending_ok_ack_port = 0U;
+    pending_ok_ack_seq = 0U;
+    pending_ok_ack_transfer_len = 0U;
+    pending_ok_ack_count = 0U;
+    pending_ok_ack_first_time = 0U;
+    current_session_id = session_id & NET_DATA_SESSION_MASK;
+    session_valid = 1;
+    TxDone = 0;
+    Error = 0;
+
+    NetStats_Init();
+    net_update_queue_stats();
 }
 
 static int net_seq_before(uint32_t seq_a, uint32_t seq_b)
@@ -443,6 +482,8 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     net_data_header_t header;
     uint32_t actual_crc;
     uint32_t accepted_payload_len;
+    uint16_t packet_flags;
+    uint16_t packet_session_id;
     net_agg_block_t *block;
     uint8_t *write_ptr;
     u16_t copied_len;
@@ -479,6 +520,46 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             (unsigned long)header.magic);
         NetStats_OnBadMagic();
         net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_MAGIC, 0U);
+        pbuf_free(p);
+        return;
+    }
+
+    packet_flags = (uint16_t)(header.reserved & ~NET_DATA_SESSION_MASK);
+    packet_session_id = (uint16_t)(header.reserved & NET_DATA_SESSION_MASK);
+
+    if ((packet_flags & NET_DATA_FLAG_RESET) != 0U) {
+        if ((uint32_t)p->tot_len != (uint32_t)sizeof(header)) {
+            UART_Printf("UDP reset drop seq=%lu reason=bad_length pkt=%lu\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)p->tot_len);
+            NetStats_OnBadLength();
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        if (dma_fatal_error != 0) {
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_DMA_ERROR, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        if (dma_busy != 0) {
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BUSY, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        net_reset_stream_state(packet_session_id);
+        UART_Printf("UDP RX reset session=%u\r\n", (unsigned)current_session_id);
+        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, 0U);
+        pbuf_free(p);
+        return;
+    }
+
+    if ((session_valid == 0) || (packet_session_id != current_session_id)) {
+        NetStats_OnPending();
+        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_PENDING, 0U);
         pbuf_free(p);
         return;
     }
@@ -553,6 +634,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
+#if NET_VALIDATE_PAYLOAD_CRC
     actual_crc = Net_Protocol_Crc32(write_ptr, header.payload_len);
     if (actual_crc != header.payload_crc32) {
         UART_Printf("UDP drop seq=%lu reason=bad_crc rx=0x%08lX calc=0x%08lX\r\n",
@@ -565,6 +647,9 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         pbuf_free(p);
         return;
     }
+#else
+    LWIP_UNUSED_ARG(actual_crc);
+#endif
 
     block->payload_len += header.payload_len;
     XTime_GetTime(&block->last_write_time);
@@ -641,6 +726,8 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     pending_ok_ack_transfer_len = 0U;
     pending_ok_ack_count = 0U;
     pending_ok_ack_first_time = 0U;
+    current_session_id = 0U;
+    session_valid = 0;
     TxDone = 0;
     Error = 0;
 

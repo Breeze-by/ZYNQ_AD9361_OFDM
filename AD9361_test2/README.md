@@ -83,6 +83,15 @@ typedef struct {
 } net_data_header_t;
 ```
 
+`net_data_header_t.reserved` 当前用于传输会话控制：
+
+```text
+bit15      RESET flag
+bit14:0    session id
+```
+
+PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。后续普通数据包都携带同一个 session id。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
+
 ACK 包：
 
 ```c

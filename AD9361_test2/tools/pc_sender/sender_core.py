@@ -2,6 +2,7 @@
 import argparse
 import binascii
 import errno
+import random
 import socket
 import struct
 import threading
@@ -35,6 +36,9 @@ DATA_HEADER_FORMAT = "<IIHHI"
 ACK_FORMAT = "<IIHHI"
 DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
+
+DATA_FLAG_RESET = 0x8000
+DATA_SESSION_MASK = 0x7FFF
 
 DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
 OFDM_LEGACY_RATE_BITS = {
@@ -180,7 +184,8 @@ def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
     return struct.pack("<Q", word0) + struct.pack("<Q", 0) + padded_payload
 
 
-def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None) -> bytes:
+def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None,
+    session_id: int = 0) -> bytes:
     wire_payload = payload
     if config is not None and config.ofdm_legacy:
         wire_payload = build_ofdm_legacy_frame(payload, config.ofdm_rate_mbps)
@@ -189,8 +194,26 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
         raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
 
     crc32 = binascii.crc32(wire_payload) & 0xFFFFFFFF
-    header = struct.pack(DATA_HEADER_FORMAT, DATA_MAGIC, seq, len(wire_payload), 0, crc32)
+    header = struct.pack(
+        DATA_HEADER_FORMAT,
+        DATA_MAGIC,
+        seq,
+        len(wire_payload),
+        session_id & DATA_SESSION_MASK,
+        crc32,
+    )
     return header + wire_payload
+
+
+def build_reset_packet(session_id: int) -> bytes:
+    return struct.pack(
+        DATA_HEADER_FORMAT,
+        DATA_MAGIC,
+        0,
+        0,
+        DATA_FLAG_RESET | (session_id & DATA_SESSION_MASK),
+        0,
+    )
 
 
 def recv_any_ack(sock: socket.socket):
@@ -230,6 +253,7 @@ class UdpSender:
         self._stop_requested = False
         self._last_progress_emit = 0.0
         self._config_lock = threading.Lock()
+        self._session_id = 0
 
     def stop(self):
         self._stop_requested = True
@@ -261,6 +285,7 @@ class UdpSender:
         with self._config_lock:
             ofdm_legacy = self.config.ofdm_legacy
             ofdm_rate_mbps = self.config.ofdm_rate_mbps
+            session_id = self._session_id
 
         config = SenderConfig(
             ip=self.config.ip,
@@ -277,7 +302,37 @@ class UdpSender:
             ofdm_legacy=ofdm_legacy,
             ofdm_rate_mbps=ofdm_rate_mbps,
         )
-        return build_packet(seq, payload, config)
+        return build_packet(seq, payload, config, session_id=session_id)
+
+    def _begin_new_session(self):
+        destination = (self.config.ip, self.config.port)
+        reset_timeout_s = min(max(self.config.timeout, 0.2), 1.0)
+        retries = max(self.config.retries, 3)
+        session_id = random.randint(1, DATA_SESSION_MASK)
+        packet = build_reset_packet(session_id)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(reset_timeout_s)
+            for attempt in range(retries + 1):
+                sock.sendto(packet, destination)
+                try:
+                    ack_seq, status, _transfer_len = recv_any_ack(sock)
+                except socket.timeout:
+                    continue
+
+                if ack_seq != 0:
+                    continue
+                if status == ACK_STATUS_OK:
+                    with self._config_lock:
+                        self._session_id = session_id
+                    return session_id
+                if status == ACK_STATUS_BUSY:
+                    time.sleep(0.02)
+                    continue
+                if status == ACK_STATUS_DMA_ERROR:
+                    raise RuntimeError("target reported DMA_ERROR during session reset")
+
+            raise RuntimeError("target did not accept session reset")
 
     def _emit(self, callback: Optional[Callable[[str, dict], None]], event_name: str, payload: dict):
         if callback is not None:
@@ -619,6 +674,7 @@ class UdpSender:
 
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         self._validate_config()
+        self._begin_new_session()
 
         if self.config.throughput_mode:
             return self._send_throughput(payload, callback=callback)
