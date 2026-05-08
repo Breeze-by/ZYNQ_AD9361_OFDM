@@ -87,10 +87,11 @@ typedef struct {
 
 ```text
 bit15      RESET flag
-bit14:0    session id
+bit14      NO_CRC flag
+bit13:0    session id
 ```
 
-PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。后续普通数据包都携带同一个 session id。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
+PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。`NO_CRC` 由 GUI 的 Payload CRC32 开关决定，默认关闭 `NO_CRC`，即启用 payload CRC32 校验。后续普通数据包都携带同一个 session id。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
 
 ACK 包：
 
@@ -171,10 +172,10 @@ DMA 传输长度按 8 字节对齐，不足部分补 0。
 
 ```c
 #define APP_ENABLE_ICACHE 1
-#define APP_ENABLE_DCACHE 0
+#define APP_ENABLE_DCACHE 1
 ```
 
-I-cache 已启用，D-cache 保持关闭，以避免 DMA coherency 风险。DMA MM2S 启动前仍保留 `Xil_DCacheFlushRange()` 调用，便于后续如需启用 D-cache 时继续维护一致性路径。
+I-cache 和 D-cache 均已启用。DMA MM2S 启动前保留 `Xil_DCacheFlushRange()`，保证 PS 写入聚合缓冲后的数据在 DMA 读取前被刷新到内存。
 
 ## PC 发送端
 
@@ -215,6 +216,7 @@ python tools/pc_sender/sender_gui.py
 吞吐模式：启用（GUI 中为 Throughput Mode）
 OFDM Legacy Wrap：启用
 OFDM Rate：6 Mbps
+Payload CRC32：启用
 逐包日志：关闭（GUI 中为 Verbose Packet Events）
 每包 MPDU 字节数：1440（GUI 中为 Chunk Bytes）
 窗口大小：64（GUI 中为 Window Size）

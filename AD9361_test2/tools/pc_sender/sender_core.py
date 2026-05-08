@@ -38,7 +38,8 @@ DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
 
 DATA_FLAG_RESET = 0x8000
-DATA_SESSION_MASK = 0x7FFF
+DATA_FLAG_NO_CRC = 0x4000
+DATA_SESSION_MASK = 0x3FFF
 
 DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
 OFDM_LEGACY_RATE_BITS = {
@@ -68,6 +69,7 @@ class SenderConfig:
     throughput_mode: bool = False
     ofdm_legacy: bool = True
     ofdm_rate_mbps: int = 6
+    validate_payload_crc: bool = True
 
 
 @dataclass
@@ -135,6 +137,9 @@ def parse_args():
     parser.add_argument("--ofdm-rate-mbps", type=int, default=6,
         choices=sorted(OFDM_LEGACY_RATE_BITS.keys()),
         help="legacy OFDM RATE field in Mbps")
+    parser.add_argument("--no-payload-crc", dest="validate_payload_crc",
+        action="store_false", default=True,
+        help="disable PC-generated and PS-validated application payload CRC32 for this transfer")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -193,7 +198,8 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
     if len(wire_payload) > 0xFFFF:
         raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
 
-    crc32 = binascii.crc32(wire_payload) & 0xFFFFFFFF
+    validate_payload_crc = True if config is None else config.validate_payload_crc
+    crc32 = (binascii.crc32(wire_payload) & 0xFFFFFFFF) if validate_payload_crc else 0
     header = struct.pack(
         DATA_HEADER_FORMAT,
         DATA_MAGIC,
@@ -205,13 +211,17 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
     return header + wire_payload
 
 
-def build_reset_packet(session_id: int) -> bytes:
+def build_reset_packet(session_id: int, validate_payload_crc: bool = True) -> bytes:
+    flags = DATA_FLAG_RESET
+    if not validate_payload_crc:
+        flags |= DATA_FLAG_NO_CRC
+
     return struct.pack(
         DATA_HEADER_FORMAT,
         DATA_MAGIC,
         0,
         0,
-        DATA_FLAG_RESET | (session_id & DATA_SESSION_MASK),
+        flags | (session_id & DATA_SESSION_MASK),
         0,
     )
 
@@ -285,6 +295,7 @@ class UdpSender:
         with self._config_lock:
             ofdm_legacy = self.config.ofdm_legacy
             ofdm_rate_mbps = self.config.ofdm_rate_mbps
+            validate_payload_crc = self.config.validate_payload_crc
             session_id = self._session_id
 
         config = SenderConfig(
@@ -301,6 +312,7 @@ class UdpSender:
             throughput_mode=self.config.throughput_mode,
             ofdm_legacy=ofdm_legacy,
             ofdm_rate_mbps=ofdm_rate_mbps,
+            validate_payload_crc=validate_payload_crc,
         )
         return build_packet(seq, payload, config, session_id=session_id)
 
@@ -309,7 +321,9 @@ class UdpSender:
         reset_timeout_s = min(max(self.config.timeout, 0.2), 1.0)
         retries = max(self.config.retries, 3)
         session_id = random.randint(1, DATA_SESSION_MASK)
-        packet = build_reset_packet(session_id)
+        with self._config_lock:
+            validate_payload_crc = self.config.validate_payload_crc
+        packet = build_reset_packet(session_id, validate_payload_crc)
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(reset_timeout_s)
@@ -921,6 +935,7 @@ def run_cli(args) -> int:
         throughput_mode=args.throughput_mode,
         ofdm_legacy=args.ofdm_legacy,
         ofdm_rate_mbps=args.ofdm_rate_mbps,
+        validate_payload_crc=args.validate_payload_crc,
     ))
 
     def callback(event_name: str, payload_dict: dict):

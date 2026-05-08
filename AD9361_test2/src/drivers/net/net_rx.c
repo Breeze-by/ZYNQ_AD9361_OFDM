@@ -55,6 +55,7 @@ static uint32_t pending_ok_ack_count;
 static XTime pending_ok_ack_first_time;
 static uint16_t current_session_id;
 static int session_valid;
+static int current_session_validate_crc;
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
@@ -244,7 +245,7 @@ static void net_record_accepted_chunk(uint32_t seq, uint32_t payload_len)
         (accepted_history_head_index + 1U) % NET_COMPLETED_HISTORY_DEPTH;
 }
 
-static void net_reset_stream_state(uint16_t session_id)
+static void net_reset_stream_state(uint16_t session_id, int validate_crc)
 {
     uint32_t index;
 
@@ -274,6 +275,7 @@ static void net_reset_stream_state(uint16_t session_id)
     pending_ok_ack_first_time = 0U;
     current_session_id = session_id & NET_DATA_SESSION_MASK;
     session_valid = 1;
+    current_session_validate_crc = validate_crc;
     TxDone = 0;
     Error = 0;
 
@@ -550,8 +552,11 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             return;
         }
 
-        net_reset_stream_state(packet_session_id);
-        UART_Printf("UDP RX reset session=%u\r\n", (unsigned)current_session_id);
+        net_reset_stream_state(packet_session_id,
+            ((packet_flags & NET_DATA_FLAG_NO_CRC) == 0U) ? 1 : 0);
+        UART_Printf("UDP RX reset session=%u crc=%s\r\n",
+            (unsigned)current_session_id,
+            (current_session_validate_crc != 0) ? "on" : "off");
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, 0U);
         pbuf_free(p);
         return;
@@ -635,20 +640,20 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     }
 
 #if NET_VALIDATE_PAYLOAD_CRC
-    actual_crc = Net_Protocol_Crc32(write_ptr, header.payload_len);
-    if (actual_crc != header.payload_crc32) {
-        UART_Printf("UDP drop seq=%lu reason=bad_crc rx=0x%08lX calc=0x%08lX\r\n",
-            (unsigned long)header.seq,
-            (unsigned long)header.payload_crc32,
-            (unsigned long)actual_crc);
-        NetStats_OnCrcError();
-        net_release_empty_fill_block();
-        net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
-        pbuf_free(p);
-        return;
+    if (current_session_validate_crc != 0) {
+        actual_crc = Net_Protocol_Crc32(write_ptr, header.payload_len);
+        if (actual_crc != header.payload_crc32) {
+            UART_Printf("UDP drop seq=%lu reason=bad_crc rx=0x%08lX calc=0x%08lX\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)header.payload_crc32,
+                (unsigned long)actual_crc);
+            NetStats_OnCrcError();
+            net_release_empty_fill_block();
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_CHECKSUM, 0U);
+            pbuf_free(p);
+            return;
+        }
     }
-#else
-    LWIP_UNUSED_ARG(actual_crc);
 #endif
 
     block->payload_len += header.payload_len;
@@ -728,6 +733,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     pending_ok_ack_first_time = 0U;
     current_session_id = 0U;
     session_valid = 0;
+    current_session_validate_crc = 1;
     TxDone = 0;
     Error = 0;
 
