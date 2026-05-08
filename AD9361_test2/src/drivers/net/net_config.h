@@ -27,7 +27,24 @@
 #define NET_INPUT_POLL_BUDGET 32U
 
 #define NET_TX_SLOT_CAPACITY_BYTES (TX_TRANSFER_LENGTH_BYTES / NET_TX_QUEUE_DEPTH)
-#define NET_MAX_PAYLOAD_BYTES NET_TX_SLOT_CAPACITY_BYTES
+#define NET_MAX_PAYLOAD_BYTES \
+    ((NET_TX_SLOT_CAPACITY_BYTES > 65535U) ? 65535U : NET_TX_SLOT_CAPACITY_BYTES)
+
+#if TX_TRANSFER_LENGTH_BYTES == 0U
+#error "TX_TRANSFER_LENGTH_BYTES must be non-zero. Check TX_BUFFER_WORD_COUNT integer arithmetic."
+#endif
+
+#if NET_AGG_BLOCK_COUNT == 0U
+#error "NET_AGG_BLOCK_COUNT must be non-zero. TX buffer must be at least one aggregation block."
+#endif
+
+#if NET_MAX_PAYLOAD_BYTES == 0U
+#error "NET_MAX_PAYLOAD_BYTES must be non-zero. Check TX_TRANSFER_LENGTH_BYTES and NET_TX_QUEUE_DEPTH."
+#endif
+
+#if NET_AGG_BLOCK_BYTES > 131071U
+#error "NET_AGG_BLOCK_BYTES exceeds AXI DMA simple transfer length width limit."
+#endif
 
 typedef enum {
     NET_ACK_STATUS_OK = 0,
