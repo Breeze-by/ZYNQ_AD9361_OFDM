@@ -65,7 +65,7 @@ UDP port 5001
 
 ## 当前吞吐状态
 
-当前测试环境下，端到端稳定吞吐约为 `1.1-1.2 MiB/s`。干净传输时典型状态：
+当前测试环境下，启用 D-cache 后端到端稳定吞吐约为 `10.8-11.2 MiB/s`。干净传输时典型状态：
 
 ```text
 PC delivered ~= PS acc ~= PS dma
@@ -73,10 +73,29 @@ crc=0
 drop=0
 dma_err=0
 timeouts=0
-agg_avg 接近 16 KiB
+agg_avg 接近 64 KiB
+q 通常只有 1-2/32
 ```
 
-目前主要持续速率瓶颈不再是 PC 发送、ACK 或 UDP 聚合，而更可能在 AXI DMA / PL 消费侧，或者 PL 侧 AXI-Stream 反压。
+CRC32 开关对该测试结果影响很小；D-cache 对吞吐影响很大。D-cache 关闭时，PS 侧 `pbuf_copy_partial()`、协议处理和聚合缓冲写入都在无缓存 DDR 上运行，真实 PC->PS->PL 吞吐会退回约 `1.1-1.3 MiB/s`。D-cache 开启后，`rx/acc/dma` 能同时稳定到约 `11 MiB/s`。
+
+当前 `q` 不满不是问题，反而说明 DMA/PL 还没有持续反压；主要限制仍在 PS 侧 lwIP/UDP 回调、pbuf 拷贝、内存访问和裸机轮询路径。如果后续优化后 `q` 长时间接近满、`busy` 增加，再重点看 DMA/PL 消费侧。
+
+## D-cache 和 DMA 维护
+
+项目默认应保持：
+
+```c
+#define APP_ENABLE_ICACHE 1
+#define APP_ENABLE_DCACHE 1
+```
+
+不开 D-cache 只适合定位 cache 一致性问题，不适合作为吞吐测试配置。开启 D-cache 的风险是 CPU cache 与 AXI DMA/PL 访问 DDR 时默认不自动一致，因此必须按方向做维护：
+
+- MM2S，CPU 写 buffer、DMA/PL 读：启动 DMA 前必须 `Xil_DCacheFlushRange()`。
+- S2MM，DMA/PL 写 buffer、CPU 读：DMA 完成后、CPU 读之前必须 `Xil_DCacheInvalidateRange()`。
+- DMA buffer 起始地址和长度尽量保持 32 字节或更高对齐；不要让 DMA buffer 与普通变量共享同一 cache line。
+- 当前 PC->PS->PL 路径是 MM2S，`net_rx.c` 在 `XAxiDma_SimpleTransfer()` 前已经 flush 聚合块，所以可以安全启用 D-cache。
 
 ## PC 发送工具
 
@@ -89,6 +108,8 @@ PC->PS 协议头 + addr0 Legacy L-SIG 控制字 + addr1 0 + MPDU 数据 8 字节
 板端 PS 仍然只解析 PC->PS 协议头；协议头后的 OFDM 头和 MPDU 数据会被整体当作 DMA data 转发到 PL。默认 Legacy 速率为 6 Mbps，`L-SIG LENGTH = MPDU_LEN + 4`。
 
 GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
+
+PC 每次点击 Start 会先发送一个 reset/session 控制包，板端清空旧序号和聚合状态后再接收新数据。GUI 的 Payload CRC32 开关也在这个控制包里生效，默认启用；关闭后本次传输 PC 不计算 payload CRC，PS 也不校验 payload CRC。这样多次连续测试时不需要重启板端，也不会把上一次传输的旧序号误判成 duplicate 并产生假吞吐。
 
 命令行吞吐测试：
 
@@ -109,6 +130,7 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 吞吐模式：启用（GUI 中为 Throughput Mode）
 OFDM Legacy Wrap：启用
 OFDM Rate：6 Mbps
+Payload CRC32：启用
 逐包日志：关闭（GUI 中为 Verbose Packet Events）
 每包 MPDU 字节数：1440（GUI 中为 Chunk Bytes）
 窗口大小：64（GUI 中为 Window Size）

@@ -36,7 +36,7 @@ tools/pc_sender/sender_gui.py          Tkinter GUI 发送工具
 
 `main.c` 的主要流程：
 
-1. 启用 I-cache，关闭 D-cache。
+1. 启用 I-cache 和 D-cache。
 2. 初始化 GPIO、SPI 和 AD9361 参数。
 3. 初始化 UART、GIC、AXI DMA 和 DMA 中断。
 4. 初始化 lwIP/GEM，使用静态 IPv4 地址。
@@ -175,7 +175,33 @@ DMA 传输长度按 8 字节对齐，不足部分补 0。
 #define APP_ENABLE_DCACHE 1
 ```
 
-I-cache 和 D-cache 均已启用。DMA MM2S 启动前保留 `Xil_DCacheFlushRange()`，保证 PS 写入聚合缓冲后的数据在 DMA 读取前被刷新到内存。
+I-cache 和 D-cache 均已启用。D-cache 是当前吞吐的关键配置：关闭 D-cache 时，lwIP pbuf 拷贝、payload 写入聚合缓冲和协议处理会大量直接访问无缓存 DDR，实测真实 PC->PS->PL 吞吐只有约 `1.1-1.3 MiB/s`；启用 D-cache 后，`rx/acc/dma` 可以稳定到约 `10.8-11.2 MiB/s`。CRC32 开关前后吞吐接近，说明当前主要收益来自缓存，而不是跳过 CRC。
+
+D-cache 的风险是 CPU cache 与 AXI DMA/PL 访问 DDR 时默认不自动一致。维护规则如下：
+
+```text
+MM2S: CPU 写 DDR buffer，DMA/PL 读
+      启动 DMA 前必须 Xil_DCacheFlushRange(buffer, len)
+
+S2MM: DMA/PL 写 DDR buffer，CPU 读
+      DMA 完成后、CPU 读之前必须 Xil_DCacheInvalidateRange(buffer, len)
+```
+
+当前 PC->PS->PL 数据路径只使用 MM2S。`net_rx.c` 在 `XAxiDma_SimpleTransfer()` 前已经对聚合块执行：
+
+```c
+Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
+```
+
+因此当前发送路径可以并且应该保持 D-cache 开启。以后如果恢复或新增 PL->PS/S2MM 路径，必须在 DMA 完成后补 `Xil_DCacheInvalidateRange()`，否则 CPU 可能读到 cache 中的旧数据。
+
+维护 DMA buffer 时还要遵守：
+
+- `TX_BUFFER_BASE`、`NET_AGG_BLOCK_BYTES` 和 DMA 传输长度应保持 cache line 友好对齐，推荐至少 32 字节对齐。
+- DMA buffer 不要和普通变量、状态结构体共享同一个 cache line。
+- `Flush` 必须发生在 CPU 完成写入之后、DMA 启动之前。
+- `Invalidate` 必须发生在 DMA 完成之后、CPU 第一次读取之前。
+- 临时关闭 D-cache 只用于定位 cache 一致性问题，不应作为性能测试或长期运行配置。
 
 ## PC 发送端
 
@@ -263,7 +289,7 @@ agg_avg/min/max   聚合块负载大小统计
 
 ## 当前性能
 
-当前测试环境下，干净传输的端到端吞吐约为 `1.1-1.2 MiB/s`：
+当前测试环境下，启用 D-cache 后干净传输的端到端吞吐约为 `10.8-11.2 MiB/s`：
 
 ```text
 PC delivered ~= PS acc ~= PS dma
@@ -272,9 +298,19 @@ drop=0
 dma_err=0
 timeouts=0
 agg_avg 接近 64 KiB
+q 通常只有 1-2/32
 ```
 
-目前聚合块已接近满块，主机和板端统计也能对齐。剩余持续吞吐瓶颈更可能在 PS UDP 聚合之后，例如 AXI DMA / PL 消费行为，或 PL 侧 AXI-Stream 反压。
+对比测试显示，Payload CRC32 开启和关闭时速率接近；D-cache 开关对速率影响非常大。因此旧的 `1.1-1.3 MiB/s` 不是 DMA 或 PL 的极限，而是 PS 侧无缓存 DDR 访问导致的 CPU/内存路径瓶颈。
+
+`q` 不满不代表需要强行把队列填满。当前 `q=1-2/32` 且 `busy=0`、`pend=0` 时，含义是 DMA/PL 能及时消费 PS 聚合块，系统瓶颈还在前面的 PS 网络接收、pbuf 拷贝、内存写入和轮询调度路径。只有当 `q` 长时间接近满、`busy` 增加，并且 `acc` 明显高于 `dma` 时，才说明 DMA/PL 消费侧成为主要限制。
+
+后续继续提吞吐的优先级：
+
+- 保持 D-cache 开启，并确认 MM2S flush / S2MM invalidate 规则没有被破坏。
+- 用 `PC delivered`、PS `acc` 和 PS `dma` 三者对齐判断真实吞吐，不用单看 GUI delivered。
+- 若 `rx ~= acc ~= dma` 且 `q` 不满，优先优化 PS 侧 lwIP 输入轮询、pbuf copy 次数、GEM/lwIP BSP 参数和主循环调度。
+- 若 `q` 持续满、`busy` 增加，才转向检查 AXI DMA、PL AXI-Stream 反压和 ping-pong/多缓冲消费策略。
 
 ## 构建和运行
 
