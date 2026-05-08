@@ -179,6 +179,8 @@ addr2+: MPDU 数据，小端 64 bit word，最后不足 8 字节高位补 0
 
 默认 `RATE=6 Mbps`，`L-SIG LENGTH=MPDU_LEN+4`，默认 `chunk-size=1440`，这样加上 16 字节 PC->PS 协议头和 16 字节 OFDM 头后仍能适配普通 1500 MTU。
 
+GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
+
 推荐命令行吞吐测试：
 
 ```bash

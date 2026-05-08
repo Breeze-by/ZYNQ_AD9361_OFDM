@@ -4,6 +4,7 @@ import binascii
 import errno
 import socket
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
@@ -228,20 +229,55 @@ class UdpSender:
         self.config = config
         self._stop_requested = False
         self._last_progress_emit = 0.0
+        self._config_lock = threading.Lock()
 
     def stop(self):
         self._stop_requested = True
 
+    def set_ofdm_rate_mbps(self, rate_mbps: int):
+        if rate_mbps not in OFDM_LEGACY_RATE_BITS:
+            raise ValueError(f"unsupported legacy OFDM rate {rate_mbps} Mbps")
+        with self._config_lock:
+            self.config.ofdm_rate_mbps = rate_mbps
+
     def _validate_config(self):
-        if self.config.chunk_size <= 0:
+        with self._config_lock:
+            chunk_size = self.config.chunk_size
+            window_size = self.config.window_size
+            ofdm_legacy = self.config.ofdm_legacy
+            ofdm_rate_mbps = self.config.ofdm_rate_mbps
+
+        if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
-        if self.config.window_size <= 0:
+        if window_size <= 0:
             raise ValueError("window_size must be positive")
-        if self.config.ofdm_legacy:
-            if self.config.ofdm_rate_mbps not in OFDM_LEGACY_RATE_BITS:
-                raise ValueError(f"unsupported legacy OFDM rate {self.config.ofdm_rate_mbps} Mbps")
-            if (self.config.chunk_size + 4) > 0x0FFF:
+        if ofdm_legacy:
+            if ofdm_rate_mbps not in OFDM_LEGACY_RATE_BITS:
+                raise ValueError(f"unsupported legacy OFDM rate {ofdm_rate_mbps} Mbps")
+            if (chunk_size + 4) > 0x0FFF:
                 raise ValueError("chunk_size is too large for the 12-bit legacy L-SIG LENGTH field")
+
+    def _build_packet(self, seq: int, payload: bytes) -> bytes:
+        with self._config_lock:
+            ofdm_legacy = self.config.ofdm_legacy
+            ofdm_rate_mbps = self.config.ofdm_rate_mbps
+
+        config = SenderConfig(
+            ip=self.config.ip,
+            port=self.config.port,
+            chunk_size=self.config.chunk_size,
+            timeout=self.config.timeout,
+            retries=self.config.retries,
+            target_rate_kib_s=self.config.target_rate_kib_s,
+            window_size=self.config.window_size,
+            socket_buffer_bytes=self.config.socket_buffer_bytes,
+            progress_interval_s=self.config.progress_interval_s,
+            verbose_events=self.config.verbose_events,
+            throughput_mode=self.config.throughput_mode,
+            ofdm_legacy=ofdm_legacy,
+            ofdm_rate_mbps=ofdm_rate_mbps,
+        )
+        return build_packet(seq, payload, config)
 
     def _emit(self, callback: Optional[Callable[[str, dict], None]], event_name: str, payload: dict):
         if callback is not None:
@@ -301,7 +337,7 @@ class UdpSender:
         start = seq * self.config.chunk_size
         end = min(start + self.config.chunk_size, len(payload))
         if packet is None:
-            packet = build_packet(seq, payload[start:end], self.config)
+            packet = self._build_packet(seq, payload[start:end])
             packet_cache[seq] = packet
         return packet, start, end
 
@@ -619,7 +655,7 @@ class UdpSender:
                     seq, chunk, start, end = chunks[next_seq]
                     self._apply_rate_limit(stats.bytes_sent + len(chunk), stats.started_at)
                     tx_time = time.time()
-                    packet = build_packet(seq, chunk, self.config)
+                    packet = self._build_packet(seq, chunk)
                     sock.sendto(packet, destination)
                     stats.packets_sent += 1
                     outstanding[seq] = {

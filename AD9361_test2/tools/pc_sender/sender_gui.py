@@ -237,13 +237,15 @@ class SenderGui:
         ofdm_row.pack(fill=tk.X, pady=(8, 0))
         ttk.Checkbutton(ofdm_row, text="OFDM Legacy Wrap", variable=self.ofdm_legacy_var).pack(side=tk.LEFT)
         ttk.Label(ofdm_row, text="Rate", width=8).pack(side=tk.LEFT, padx=(16, 0))
-        ttk.Combobox(
+        self.ofdm_rate_combo = ttk.Combobox(
             ofdm_row,
             textvariable=self.ofdm_rate_var,
             values=[str(rate) for rate in sorted(OFDM_LEGACY_RATE_BITS.keys())],
             width=8,
             state="readonly",
-        ).pack(side=tk.LEFT)
+        )
+        self.ofdm_rate_combo.pack(side=tk.LEFT)
+        self.ofdm_rate_combo.bind("<<ComboboxSelected>>", self._on_ofdm_rate_changed)
         ttk.Label(
             net_box,
             text="Throughput mode disables packet logs and uses at least 1000 ms progress updates.",
@@ -378,6 +380,21 @@ class SenderGui:
                 current_interval = 0
             if current_interval < 1000:
                 self.progress_interval_var.set("1000")
+
+    def _on_ofdm_rate_changed(self, _event=None):
+        if self.sender is None:
+            return
+
+        try:
+            rate_mbps = int(self.ofdm_rate_var.get().strip())
+            self.sender.set_ofdm_rate_mbps(rate_mbps)
+        except Exception as exc:
+            self._append_log(f"OFDM rate change rejected: {exc}")
+            return
+
+        self._append_log(
+            f"OFDM rate set to {rate_mbps} Mbps for newly generated packets"
+        )
 
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
