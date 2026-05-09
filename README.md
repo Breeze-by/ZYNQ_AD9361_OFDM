@@ -111,6 +111,8 @@ GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成
 
 如果 GUI 不勾选 `OFDM Legacy Wrap`，PC->PS 协议头后面会直接放原始 data，不会添加 OFDM `addr0/addr1`，OFDM rate 对本次传输无效。GUI Start 日志会显示 `payload_mode=raw`，PS reset 日志会显示 `ofdm=raw`。
 
+GUI 的 `PL Verify Pattern` 可用于协助 PL 端核对 DMA 数据。开启后，每个 MPDU/raw chunk 内会生成 `PLT0` 测试头和可预测字节 pattern；legacy 模式下该测试头位于 `addr0/addr1` 之后，raw 模式下该测试头就是 chunk 的起始内容。详细字段见 `AD9361_test2/README.md`。
+
 PC 每次点击 Start 会先发送一个 reset/session 控制包，板端清空旧序号和聚合状态后再接收新数据。GUI 的 Payload CRC32 开关和 OFDM Legacy Wrap 模式也在这个控制包里生效。Payload CRC32 默认启用；关闭后本次传输 PC 不计算 payload CRC，PS 也不校验 payload CRC。这样多次连续测试时不需要重启板端，也不会把上一次传输的旧序号误判成 duplicate 并产生假吞吐。
 
 命令行吞吐测试：
