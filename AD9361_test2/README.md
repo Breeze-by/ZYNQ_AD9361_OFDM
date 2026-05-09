@@ -88,10 +88,11 @@ typedef struct {
 ```text
 bit15      RESET flag
 bit14      NO_CRC flag
-bit13:0    session id
+bit13      OFDM_LEGACY flag
+bit12:0    session id
 ```
 
-PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。`NO_CRC` 由 GUI 的 Payload CRC32 开关决定，默认关闭 `NO_CRC`，即启用 payload CRC32 校验。后续普通数据包都携带同一个 session id。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
+PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。`NO_CRC` 由 GUI 的 Payload CRC32 开关决定，默认关闭 `NO_CRC`，即启用 payload CRC32 校验。`OFDM_LEGACY` 由 GUI 的 OFDM Legacy Wrap 开关决定，只用于标记当前传输模式和串口日志；PS 仍然不会解析 OFDM `addr0/addr1`，协议头后的全部内容都会作为 DMA data 写入聚合缓冲。后续普通数据包都携带同一个 session id 和当前 payload mode 标志。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
 
 ACK 包：
 
@@ -216,6 +217,8 @@ addr2+: MPDU 数据，小端 64 bit word，最后不足 8 字节高位补 0
 默认 `RATE=6 Mbps`，`L-SIG LENGTH=MPDU_LEN+4`，默认 `chunk-size=1440`，这样加上 16 字节 PC->PS 协议头和 16 字节 OFDM 头后仍能适配普通 1500 MTU。
 
 GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
+
+如果 GUI 不勾选 `OFDM Legacy Wrap`，PC->PS 协议头后面会直接放原始 data，不会添加 OFDM `addr0/addr1`，OFDM rate 对本次传输无效。GUI Start 日志会显示 `payload_mode=raw`，PS reset 日志会显示 `ofdm=raw`。
 
 推荐命令行吞吐测试：
 

@@ -39,7 +39,8 @@ ACK_SIZE = struct.calcsize(ACK_FORMAT)
 
 DATA_FLAG_RESET = 0x8000
 DATA_FLAG_NO_CRC = 0x4000
-DATA_SESSION_MASK = 0x3FFF
+DATA_FLAG_OFDM_LEGACY = 0x2000
+DATA_SESSION_MASK = 0x1FFF
 
 DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
 OFDM_LEGACY_RATE_BITS = {
@@ -192,8 +193,10 @@ def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
 def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None,
     session_id: int = 0) -> bytes:
     wire_payload = payload
+    flags = 0
     if config is not None and config.ofdm_legacy:
         wire_payload = build_ofdm_legacy_frame(payload, config.ofdm_rate_mbps)
+        flags |= DATA_FLAG_OFDM_LEGACY
 
     if len(wire_payload) > 0xFFFF:
         raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
@@ -205,16 +208,19 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
         DATA_MAGIC,
         seq,
         len(wire_payload),
-        session_id & DATA_SESSION_MASK,
+        flags | (session_id & DATA_SESSION_MASK),
         crc32,
     )
     return header + wire_payload
 
 
-def build_reset_packet(session_id: int, validate_payload_crc: bool = True) -> bytes:
+def build_reset_packet(session_id: int, validate_payload_crc: bool = True,
+    ofdm_legacy: bool = True) -> bytes:
     flags = DATA_FLAG_RESET
     if not validate_payload_crc:
         flags |= DATA_FLAG_NO_CRC
+    if ofdm_legacy:
+        flags |= DATA_FLAG_OFDM_LEGACY
 
     return struct.pack(
         DATA_HEADER_FORMAT,
@@ -323,7 +329,8 @@ class UdpSender:
         session_id = random.randint(1, DATA_SESSION_MASK)
         with self._config_lock:
             validate_payload_crc = self.config.validate_payload_crc
-        packet = build_reset_packet(session_id, validate_payload_crc)
+            ofdm_legacy = self.config.ofdm_legacy
+        packet = build_reset_packet(session_id, validate_payload_crc, ofdm_legacy)
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(reset_timeout_s)

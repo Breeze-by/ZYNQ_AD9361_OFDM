@@ -109,7 +109,9 @@ PC->PS 协议头 + addr0 Legacy L-SIG 控制字 + addr1 0 + MPDU 数据 8 字节
 
 GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
 
-PC 每次点击 Start 会先发送一个 reset/session 控制包，板端清空旧序号和聚合状态后再接收新数据。GUI 的 Payload CRC32 开关也在这个控制包里生效，默认启用；关闭后本次传输 PC 不计算 payload CRC，PS 也不校验 payload CRC。这样多次连续测试时不需要重启板端，也不会把上一次传输的旧序号误判成 duplicate 并产生假吞吐。
+如果 GUI 不勾选 `OFDM Legacy Wrap`，PC->PS 协议头后面会直接放原始 data，不会添加 OFDM `addr0/addr1`，OFDM rate 对本次传输无效。GUI Start 日志会显示 `payload_mode=raw`，PS reset 日志会显示 `ofdm=raw`。
+
+PC 每次点击 Start 会先发送一个 reset/session 控制包，板端清空旧序号和聚合状态后再接收新数据。GUI 的 Payload CRC32 开关和 OFDM Legacy Wrap 模式也在这个控制包里生效。Payload CRC32 默认启用；关闭后本次传输 PC 不计算 payload CRC，PS 也不校验 payload CRC。这样多次连续测试时不需要重启板端，也不会把上一次传输的旧序号误判成 duplicate 并产生假吞吐。
 
 命令行吞吐测试：
 

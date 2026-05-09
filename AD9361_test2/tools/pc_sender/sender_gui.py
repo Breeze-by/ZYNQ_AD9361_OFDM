@@ -138,6 +138,7 @@ class SenderGui:
 
         self._build_ui()
         self._update_mode_widgets()
+        self._update_ofdm_widgets()
         self.root.after(100, self._drain_event_queue)
 
     def _build_ui(self):
@@ -236,8 +237,14 @@ class SenderGui:
         ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
         ofdm_row = ttk.Frame(net_box)
         ofdm_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Checkbutton(ofdm_row, text="OFDM Legacy Wrap", variable=self.ofdm_legacy_var).pack(side=tk.LEFT)
-        ttk.Label(ofdm_row, text="Rate", width=8).pack(side=tk.LEFT, padx=(16, 0))
+        ttk.Checkbutton(
+            ofdm_row,
+            text="OFDM Legacy Wrap",
+            variable=self.ofdm_legacy_var,
+            command=self._on_ofdm_legacy_toggled,
+        ).pack(side=tk.LEFT)
+        self.ofdm_rate_label = ttk.Label(ofdm_row, text="Rate", width=8)
+        self.ofdm_rate_label.pack(side=tk.LEFT, padx=(16, 0))
         self.ofdm_rate_combo = ttk.Combobox(
             ofdm_row,
             textvariable=self.ofdm_rate_var,
@@ -344,6 +351,19 @@ class SenderGui:
         self.file_entry.configure(state=tk.NORMAL if mode == "file" else tk.DISABLED)
         self.test_entry.configure(state=tk.NORMAL if mode == "test" else tk.DISABLED)
 
+    def _update_ofdm_widgets(self):
+        if self.ofdm_legacy_var.get():
+            self.ofdm_rate_combo.configure(state="readonly")
+            self.ofdm_rate_label.configure(text="Rate")
+        else:
+            self.ofdm_rate_combo.configure(state=tk.DISABLED)
+            self.ofdm_rate_label.configure(text="Rate N/A")
+
+    def _on_ofdm_legacy_toggled(self):
+        self._update_ofdm_widgets()
+        mode = "OFDM legacy wrapping" if self.ofdm_legacy_var.get() else "raw payload"
+        self._append_log(f"Payload mode set to {mode} for the next transfer")
+
     def _browse_file(self):
         file_path = filedialog.askopenfilename(title="Select file to send", filetypes=[("All files", "*.*")])
         if not file_path:
@@ -384,6 +404,8 @@ class SenderGui:
                 self.progress_interval_var.set("1000")
 
     def _on_ofdm_rate_changed(self, _event=None):
+        if not self.ofdm_legacy_var.get():
+            return
         if self.sender is None:
             return
 
@@ -397,6 +419,15 @@ class SenderGui:
         self._append_log(
             f"OFDM rate set to {rate_mbps} Mbps for newly generated packets"
         )
+
+    def _format_start_mode(self, config: SenderConfig) -> str:
+        if config.ofdm_legacy:
+            nominal_wire_chunk = 16 + ((config.chunk_size + 7) & ~7)
+            return (
+                f"payload_mode=ofdm_legacy rate={config.ofdm_rate_mbps}Mbps "
+                f"nominal_wire_chunk={nominal_wire_chunk}"
+            )
+        return f"payload_mode=raw nominal_wire_chunk={config.chunk_size}"
 
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
@@ -454,7 +485,7 @@ class SenderGui:
         self._append_log(
             f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
             f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
-            f"ofdm_legacy={config.ofdm_legacy} rate={config.ofdm_rate_mbps}Mbps "
+            f"{self._format_start_mode(config)} "
             f"payload_crc={config.validate_payload_crc}"
         )
 
