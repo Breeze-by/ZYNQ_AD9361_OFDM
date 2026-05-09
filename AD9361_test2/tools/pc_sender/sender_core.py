@@ -459,6 +459,14 @@ class UdpSender:
                 stats.bytes_acked += completed_entry["payload_len"]
                 stats.chunks_acked += 1
 
+            if outstanding:
+                next_oldest_seq = min(outstanding.keys())
+                next_oldest_entry = outstanding[next_oldest_seq]
+                if next_oldest_entry.get("blocked_by_gap", False):
+                    next_oldest_entry["retry_deadline"] = min(
+                        next_oldest_entry["retry_deadline"], ack_time)
+                    next_oldest_entry["retry_reason"] = "gap"
+
             stats.ack_ok += len(completed_seqs)
             stats.ack_batches += 1
             stats.last_seq = last_completed_seq
@@ -485,8 +493,13 @@ class UdpSender:
 
         if status == ACK_STATUS_PENDING:
             stats.ack_pending += 1
-            entry["retry_deadline"] = ack_time + busy_retry_delay
-            entry["retry_reason"] = "pending"
+            entry["blocked_by_gap"] = True
+            if outstanding:
+                oldest_seq = min(outstanding.keys())
+                oldest_entry = outstanding[oldest_seq]
+                if (ack_time - oldest_entry["tx_time"]) >= busy_retry_delay:
+                    oldest_entry["retry_deadline"] = min(oldest_entry["retry_deadline"], ack_time)
+                    oldest_entry["retry_reason"] = "gap"
             self._update_rates(stats, entry["payload_len"], transfer_len, ack_time, entry["tx_time"])
             if self.config.verbose_events:
                 self._emit(callback, "ack_status", {
@@ -583,6 +596,7 @@ class UdpSender:
                         "tx_time": tx_time,
                         "retry_deadline": tx_time + self.config.timeout,
                         "retry_reason": "timeout",
+                        "blocked_by_gap": False,
                     }
                     stats.packets_sent += 1
                     stats.bytes_sent = max(stats.bytes_sent, end)
@@ -641,14 +655,13 @@ class UdpSender:
                         self._emit_progress(callback, stats, len(outstanding))
 
                 now = time.time()
-                expired_items = [
-                    (seq, entry)
-                    for seq, entry in outstanding.items()
-                    if now >= entry["retry_deadline"]
-                ]
-                if expired_items:
-                    expired_items.sort(key=lambda item: (item[1]["retry_deadline"], item[0]))
-                    oldest_seq, entry = expired_items[0]
+                if outstanding:
+                    oldest_seq = min(outstanding.keys())
+                    entry = outstanding[oldest_seq]
+                else:
+                    oldest_seq = None
+                    entry = None
+                if entry is not None and now >= entry["retry_deadline"]:
                     entry["attempts"] += 1
                     if entry["attempts"] > self.config.retries:
                         raise RuntimeError(f"seq {oldest_seq} exceeded retry limit")
@@ -658,6 +671,7 @@ class UdpSender:
                     entry["tx_time"] = now
                     entry["retry_deadline"] = now + self.config.timeout
                     entry["retry_reason"] = "timeout"
+                    entry["blocked_by_gap"] = False
                     sock.sendto(packet, destination)
                     stats.packets_sent += 1
                     stats.retries_used += 1
@@ -744,6 +758,7 @@ class UdpSender:
                         "tx_time": tx_time,
                         "retry_deadline": tx_time + self.config.timeout,
                         "retry_reason": "timeout",
+                        "blocked_by_gap": False,
                     }
                     if self.config.verbose_events:
                         self._emit(callback, "chunk_sent", {
@@ -803,6 +818,14 @@ class UdpSender:
                         while base_seq < total_chunks and acked[base_seq]:
                             base_seq += 1
 
+                        if outstanding:
+                            next_oldest_seq = min(outstanding.keys())
+                            next_oldest_entry = outstanding[next_oldest_seq]
+                            if next_oldest_entry.get("blocked_by_gap", False):
+                                next_oldest_entry["retry_deadline"] = min(
+                                    next_oldest_entry["retry_deadline"], ack_time)
+                                next_oldest_entry["retry_reason"] = "gap"
+
                         stats.ack_ok += len(completed_seqs)
                         stats.ack_batches += 1
                         stats.last_seq = last_completed_seq
@@ -829,8 +852,13 @@ class UdpSender:
                         self._emit_progress(callback, stats, len(outstanding))
                     elif status == ACK_STATUS_PENDING:
                         stats.ack_pending += 1
-                        entry["retry_deadline"] = ack_time + busy_retry_delay
-                        entry["retry_reason"] = "pending"
+                        entry["blocked_by_gap"] = True
+                        if outstanding:
+                            oldest_seq = min(outstanding.keys())
+                            oldest_entry = outstanding[oldest_seq]
+                            if (ack_time - oldest_entry["tx_time"]) >= busy_retry_delay:
+                                oldest_entry["retry_deadline"] = min(oldest_entry["retry_deadline"], ack_time)
+                                oldest_entry["retry_reason"] = "gap"
                         self._update_rates(stats, len(chunk), transfer_len, ack_time, entry["tx_time"])
                         if self.config.verbose_events:
                             self._emit(callback, "ack_status", {
@@ -882,16 +910,10 @@ class UdpSender:
                         continue
 
                     now = time.time()
-                    expired_items = [
-                        (seq, entry)
-                        for seq, entry in outstanding.items()
-                        if now >= entry["retry_deadline"]
-                    ]
-                    if not expired_items:
+                    oldest_seq = min(outstanding.keys())
+                    entry = outstanding[oldest_seq]
+                    if now < entry["retry_deadline"]:
                         continue
-
-                    expired_items.sort(key=lambda item: (item[1]["retry_deadline"], item[0]))
-                    oldest_seq, entry = expired_items[0]
                     entry["attempts"] += 1
                     if entry["attempts"] > self.config.retries:
                         raise RuntimeError(f"seq {oldest_seq} exceeded retry limit")
@@ -900,6 +922,7 @@ class UdpSender:
                     entry["retry_deadline"] = now + self.config.timeout
                     reason = entry.get("retry_reason", "timeout")
                     entry["retry_reason"] = "timeout"
+                    entry["blocked_by_gap"] = False
                     sock.sendto(entry["packet"], destination)
                     stats.packets_sent += 1
                     if reason == "timeout":
