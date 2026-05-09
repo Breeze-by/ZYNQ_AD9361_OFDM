@@ -36,6 +36,16 @@ DATA_HEADER_FORMAT = "<IIHHI"
 ACK_FORMAT = "<IIHHI"
 DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
+PL_VERIFY_MAGIC = 0x30544C50
+PL_VERIFY_HEADER_BYTES = 32
+PL_VERIFY_VERSION = 1
+PL_VERIFY_FLAG_OFDM_LEGACY = 0x0100
+PL_VERIFY_FLAG_LAST_CHUNK = 0x0200
+PL_VERIFY_PATTERN_SEED = 0x13579BDF
+PL_VERIFY_HEADER_FORMAT = "<IHHIIIIII"
+PL_VERIFY_HEADER_SIZE = struct.calcsize(PL_VERIFY_HEADER_FORMAT)
+if PL_VERIFY_HEADER_SIZE != PL_VERIFY_HEADER_BYTES:
+    raise RuntimeError("PL verify header format size mismatch")
 
 DATA_FLAG_RESET = 0x8000
 DATA_FLAG_NO_CRC = 0x4000
@@ -71,6 +81,7 @@ class SenderConfig:
     ofdm_legacy: bool = True
     ofdm_rate_mbps: int = 6
     validate_payload_crc: bool = True
+    pl_verify_pattern: bool = False
 
 
 @dataclass
@@ -141,6 +152,8 @@ def parse_args():
     parser.add_argument("--no-payload-crc", dest="validate_payload_crc",
         action="store_false", default=True,
         help="disable PC-generated and PS-validated application payload CRC32 for this transfer")
+    parser.add_argument("--pl-verify-pattern", action="store_true",
+        help="replace each MPDU/raw chunk with a PL-visible test header and deterministic byte pattern")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -174,6 +187,37 @@ def align8(length: int) -> int:
     return (length + 7) & ~7
 
 
+def build_pl_verify_payload(payload: bytes, seq: int, total_chunks: int, total_size: int,
+    byte_offset: int, ofdm_legacy: bool) -> bytes:
+    chunk_len = len(payload)
+    if chunk_len < PL_VERIFY_HEADER_BYTES:
+        raise ValueError(
+            f"PL verify pattern needs each chunk to be at least {PL_VERIFY_HEADER_BYTES} bytes")
+
+    flags = PL_VERIFY_VERSION
+    if ofdm_legacy:
+        flags |= PL_VERIFY_FLAG_OFDM_LEGACY
+    if total_chunks > 0 and seq == (total_chunks - 1):
+        flags |= PL_VERIFY_FLAG_LAST_CHUNK
+
+    header = struct.pack(
+        PL_VERIFY_HEADER_FORMAT,
+        PL_VERIFY_MAGIC,
+        PL_VERIFY_HEADER_BYTES,
+        flags,
+        seq & 0xFFFFFFFF,
+        total_chunks & 0xFFFFFFFF,
+        chunk_len & 0xFFFFFFFF,
+        byte_offset & 0xFFFFFFFF,
+        total_size & 0xFFFFFFFF,
+        PL_VERIFY_PATTERN_SEED,
+    )
+    pattern_len = chunk_len - PL_VERIFY_HEADER_BYTES
+    seed_byte = PL_VERIFY_PATTERN_SEED & 0xFF
+    pattern = bytes((seed_byte + seq + index) & 0xFF for index in range(pattern_len))
+    return header + pattern
+
+
 def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
     if rate_mbps not in OFDM_LEGACY_RATE_BITS:
         raise ValueError(f"unsupported legacy OFDM rate {rate_mbps} Mbps")
@@ -191,12 +235,26 @@ def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
 
 
 def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None,
-    session_id: int = 0) -> bytes:
+    session_id: int = 0, total_chunks: int = 0, total_size: int = 0,
+    byte_offset: int = 0) -> bytes:
+    mpdu_payload = payload
+    if config is not None and config.pl_verify_pattern:
+        mpdu_payload = build_pl_verify_payload(
+            payload,
+            seq,
+            total_chunks,
+            total_size,
+            byte_offset,
+            config.ofdm_legacy,
+        )
+
     wire_payload = payload
     flags = 0
     if config is not None and config.ofdm_legacy:
-        wire_payload = build_ofdm_legacy_frame(payload, config.ofdm_rate_mbps)
+        wire_payload = build_ofdm_legacy_frame(mpdu_payload, config.ofdm_rate_mbps)
         flags |= DATA_FLAG_OFDM_LEGACY
+    else:
+        wire_payload = mpdu_payload
 
     if len(wire_payload) > 0xFFFF:
         raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
@@ -270,6 +328,8 @@ class UdpSender:
         self._last_progress_emit = 0.0
         self._config_lock = threading.Lock()
         self._session_id = 0
+        self._active_total_size = 0
+        self._active_total_chunks = 0
 
     def stop(self):
         self._stop_requested = True
@@ -286,6 +346,7 @@ class UdpSender:
             window_size = self.config.window_size
             ofdm_legacy = self.config.ofdm_legacy
             ofdm_rate_mbps = self.config.ofdm_rate_mbps
+            pl_verify_pattern = self.config.pl_verify_pattern
 
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
@@ -296,6 +357,23 @@ class UdpSender:
                 raise ValueError(f"unsupported legacy OFDM rate {ofdm_rate_mbps} Mbps")
             if (chunk_size + 4) > 0x0FFF:
                 raise ValueError("chunk_size is too large for the 12-bit legacy L-SIG LENGTH field")
+        if pl_verify_pattern and chunk_size < PL_VERIFY_HEADER_BYTES:
+            raise ValueError(
+                f"chunk_size must be at least {PL_VERIFY_HEADER_BYTES} bytes when PL Verify Pattern is enabled")
+
+    def _prepare_transfer(self, payload: bytes):
+        total_chunks = (len(payload) + self.config.chunk_size - 1) // self.config.chunk_size
+        self._active_total_size = len(payload)
+        self._active_total_chunks = total_chunks
+
+        if self.config.pl_verify_pattern and total_chunks > 0:
+            last_chunk_len = len(payload) - ((total_chunks - 1) * self.config.chunk_size)
+            if last_chunk_len < PL_VERIFY_HEADER_BYTES:
+                raise ValueError(
+                    "PL Verify Pattern requires the final chunk to fit a 32-byte header; "
+                    "use a test size that is a multiple of Chunk Bytes or leaves at least 32 bytes")
+
+        return total_chunks
 
     def _build_packet(self, seq: int, payload: bytes) -> bytes:
         with self._config_lock:
@@ -303,6 +381,7 @@ class UdpSender:
             ofdm_rate_mbps = self.config.ofdm_rate_mbps
             validate_payload_crc = self.config.validate_payload_crc
             session_id = self._session_id
+            pl_verify_pattern = self.config.pl_verify_pattern
 
         config = SenderConfig(
             ip=self.config.ip,
@@ -319,8 +398,17 @@ class UdpSender:
             ofdm_legacy=ofdm_legacy,
             ofdm_rate_mbps=ofdm_rate_mbps,
             validate_payload_crc=validate_payload_crc,
+            pl_verify_pattern=pl_verify_pattern,
         )
-        return build_packet(seq, payload, config, session_id=session_id)
+        return build_packet(
+            seq,
+            payload,
+            config,
+            session_id=session_id,
+            total_chunks=self._active_total_chunks,
+            total_size=self._active_total_size,
+            byte_offset=seq * self.config.chunk_size,
+        )
 
     def _begin_new_session(self):
         destination = (self.config.ip, self.config.port)
@@ -709,6 +797,7 @@ class UdpSender:
 
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         self._validate_config()
+        self._prepare_transfer(payload)
         self._begin_new_session()
 
         if self.config.throughput_mode:
@@ -966,6 +1055,7 @@ def run_cli(args) -> int:
         ofdm_legacy=args.ofdm_legacy,
         ofdm_rate_mbps=args.ofdm_rate_mbps,
         validate_payload_crc=args.validate_payload_crc,
+        pl_verify_pattern=args.pl_verify_pattern,
     ))
 
     def callback(event_name: str, payload_dict: dict):

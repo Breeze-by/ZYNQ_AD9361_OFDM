@@ -169,6 +169,20 @@ NET_AGG_IDLE_FLUSH_TIMEOUT_US  100000
 
 DMA 传输长度按 8 字节对齐，不足部分补 0。
 
+一次 PS->PL DMA 的长度由当前聚合块的 `transfer_len` 决定，并不是固定每次 64 KiB。规则是：PS 按接收顺序把 PC->PS 协议头之后的 wire payload 追加到当前聚合块；如果下一个 payload 会超过 `NET_AGG_BLOCK_BYTES=65536`，就先提交当前聚合块。提交时 `transfer_len = align8(payload_len)`。
+
+默认 `Chunk Bytes=1440` 时：
+
+```text
+OFDM Legacy Wrap 开启：每个 MPDU wire payload = 16 + align8(1440) = 1456 字节
+典型满聚合块 DMA 长度 = floor(65536 / 1456) * 1456 = 45 * 1456 = 65520 字节
+
+OFDM Legacy Wrap 关闭：每个 raw payload = 1440 字节
+典型满聚合块 DMA 长度 = floor(65536 / 1440) * 1440 = 45 * 1440 = 64800 字节
+```
+
+最后一块、低速发送或超时 flush 时，DMA 长度会小于上述典型值；如果选择的 chunk 大小刚好能整除 65536，则单次 DMA 可以达到 65536 字节。
+
 ## Cache 策略
 
 当前 cache 策略：
@@ -221,6 +235,59 @@ addr2+: MPDU 数据，小端 64 bit word，最后不足 8 字节高位补 0
 GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
 
 如果 GUI 不勾选 `OFDM Legacy Wrap`，PC->PS 协议头后面会直接放原始 data，不会添加 OFDM `addr0/addr1`，OFDM rate 对本次传输无效。GUI Start 日志会显示 `payload_mode=raw`，PS reset 日志会显示 `ofdm=raw`。
+
+### PL Verify Pattern
+
+GUI 的 `PL Verify Pattern` 开关用于协助 PL 端确认 DMA 数据的顺序、数量和内容。开启后，PC 不再发送原始文件/测试数据内容，而是在每个 MPDU/raw chunk 内生成固定测试内容；chunk 长度仍由 `Chunk Bytes` 决定。
+
+每个 chunk 的前 32 字节是小端测试头：
+
+```text
+offset  size  field
+0       4     magic = 0x30544C50，即 ASCII "PLT0"
+4       2     header_bytes = 32
+6       2     flags_version，低 8 bit 为 version=1，bit8=OFDM legacy，bit9=last chunk
+8       4     seq，MPDU/raw chunk 序号，从 0 递增
+12      4     total_chunks
+16      4     chunk_len，即本 MPDU 原始 payload 长度，默认 1440
+20      4     byte_offset，seq * Chunk Bytes
+24      4     total_size，本次 PC 侧发送数据总字节数
+28      4     pattern_seed = 0x13579BDF
+```
+
+从 offset 32 开始是可预测字节 pattern：
+
+```text
+payload_byte[i] = (0xDF + seq + (i - 32)) & 0xff,  i >= 32
+```
+
+PL 端用 ILA 抓 64-bit little-endian 数据时，测试头前 4 个 64-bit word 是：
+
+```text
+word0 = flags_version << 48 | 32 << 32 | 0x30544C50
+word1 = total_chunks << 32 | seq
+word2 = byte_offset << 32 | chunk_len
+word3 = 0x13579BDF << 32 | total_size
+```
+
+如果开启 `OFDM Legacy Wrap`，DMA 中每个 MPDU 的结构是：
+
+```text
+addr0 Legacy L-SIG word
+addr1 0
+PLT0 test header, 32 bytes
+test pattern bytes
+8-byte padding if needed
+```
+
+如果关闭 `OFDM Legacy Wrap`，DMA 中每个 chunk 的结构是：
+
+```text
+PLT0 test header, 32 bytes
+test pattern bytes
+```
+
+建议 PL 端先检查 `magic` 是否按 MPDU/chunk 边界周期性出现，再检查 `seq` 是否连续、`chunk_len` 是否恒定、`last chunk` 是否只出现在最后一个 chunk，最后再按公式检查 pattern 字节。开启该模式时，最后一个 chunk 也必须至少能容纳 32 字节测试头；最省事的测试方式是让 `Test Bytes` 是 `Chunk Bytes` 的整数倍。
 
 推荐命令行吞吐测试：
 

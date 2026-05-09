@@ -109,6 +109,7 @@ class SenderGui:
         self.ofdm_legacy_var = tk.BooleanVar(value=True)
         self.ofdm_rate_var = tk.StringVar(value="6")
         self.payload_crc_var = tk.BooleanVar(value=True)
+        self.pl_verify_pattern_var = tk.BooleanVar(value=False)
 
         self.status_text_var = tk.StringVar(value="Idle")
         self.progress_text_var = tk.StringVar(value="0 / 0")
@@ -255,11 +256,21 @@ class SenderGui:
         self.ofdm_rate_combo.pack(side=tk.LEFT)
         self.ofdm_rate_combo.bind("<<ComboboxSelected>>", self._on_ofdm_rate_changed)
         ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Checkbutton(
+            net_box,
+            text="PL Verify Pattern",
+            variable=self.pl_verify_pattern_var,
+        ).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Label(
+            net_box,
+            text="PL Verify Pattern replaces each chunk payload with a 32-byte PLT0 header and byte pattern.",
+            foreground="#555555",
+        ).pack(anchor=tk.W, pady=(6, 0))
         ttk.Label(
             net_box,
             text="Throughput mode disables packet logs and uses at least 1000 ms progress updates.",
             foreground="#555555",
-        ).pack(anchor=tk.W, pady=(6, 0))
+        ).pack(anchor=tk.W, pady=(2, 0))
 
         action_box = ttk.LabelFrame(parent, text="Control", padding=12)
         action_box.pack(fill=tk.X, pady=(12, 0))
@@ -472,6 +483,7 @@ class SenderGui:
                 ofdm_legacy=bool(self.ofdm_legacy_var.get()),
                 ofdm_rate_mbps=int(self.ofdm_rate_var.get().strip()),
                 validate_payload_crc=bool(self.payload_crc_var.get()),
+                pl_verify_pattern=bool(self.pl_verify_pattern_var.get()),
             )
         except Exception as exc:
             messagebox.showerror("Parameter Error", str(exc))
@@ -486,7 +498,7 @@ class SenderGui:
             f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
             f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
             f"{self._format_start_mode(config)} "
-            f"payload_crc={config.validate_payload_crc}"
+            f"payload_crc={config.validate_payload_crc} pl_verify={config.pl_verify_pattern}"
         )
 
         self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)
