@@ -106,9 +106,9 @@ class SenderGui:
         self.progress_interval_var = tk.StringVar(value="1000")
         self.verbose_var = tk.BooleanVar(value=False)
         self.throughput_mode_var = tk.BooleanVar(value=True)
-        self.ofdm_legacy_var = tk.BooleanVar(value=True)
+        self.ofdm_legacy_var = tk.BooleanVar(value=False)
         self.ofdm_rate_var = tk.StringVar(value="6")
-        self.payload_crc_var = tk.BooleanVar(value=True)
+        self.payload_crc_var = tk.BooleanVar(value=False)
         self.pl_verify_pattern_var = tk.BooleanVar(value=False)
 
         self.status_text_var = tk.StringVar(value="Idle")

@@ -99,13 +99,13 @@ CRC32 开关对该测试结果影响很小；D-cache 对吞吐影响很大。D-c
 
 ## PC 发送工具
 
-PC 发送端默认会把每个 UDP chunk 作为一个 MPDU，先封装成一个 Legacy OFDM 输入帧：
+PC 发送端默认使用 raw payload 模式，PC->PS 协议头后面直接放原始数据。启用 `--ofdm-legacy` 或 GUI 中的 `OFDM Legacy Wrap` 后，才会把每个 UDP chunk 作为一个 MPDU，封装成一个 Legacy OFDM 输入帧：
 
 ```text
 PC->PS 协议头 + addr0 Legacy L-SIG 控制字 + addr1 0 + MPDU 数据 8 字节对齐补 0
 ```
 
-板端 PS 仍然只解析 PC->PS 协议头；协议头后的 OFDM 头和 MPDU 数据会被整体当作 DMA data 转发到 PL。默认 Legacy 速率为 6 Mbps，`L-SIG LENGTH = MPDU_LEN + 4`。
+板端 PS 仍然只解析 PC->PS 协议头；启用 Legacy 模式时，协议头后的 OFDM 头和 MPDU 数据会被整体当作 DMA data 转发到 PL。Legacy 速率默认为 6 Mbps，`L-SIG LENGTH = MPDU_LEN + 4`。
 
 GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
 
@@ -113,7 +113,7 @@ GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成
 
 GUI 的 `PL Verify Pattern` 可用于协助 PL 端核对 DMA 数据。开启后，每个 MPDU/raw chunk 内会生成 `PLT0` 测试头和可预测字节 pattern；legacy 模式下该测试头位于 `addr0/addr1` 之后，raw 模式下该测试头就是 chunk 的起始内容。详细字段见 `AD9361_test2/README.md`。
 
-PC 每次点击 Start 会先发送一个 reset/session 控制包，板端清空旧序号和聚合状态后再接收新数据。GUI 的 Payload CRC32 开关和 OFDM Legacy Wrap 模式也在这个控制包里生效。Payload CRC32 默认启用；关闭后本次传输 PC 不计算 payload CRC，PS 也不校验 payload CRC。这样多次连续测试时不需要重启板端，也不会把上一次传输的旧序号误判成 duplicate 并产生假吞吐。
+PC 每次点击 Start 会先发送一个 reset/session 控制包，板端清空旧序号和聚合状态后再接收新数据。GUI 的 Payload CRC32 开关和 OFDM Legacy Wrap 模式也在这个控制包里生效。Payload CRC32 默认关闭；启用后本次传输 PC 计算 payload CRC，PS 也校验 payload CRC。这样多次连续测试时不需要重启板端，也不会把上一次传输的旧序号误判成 duplicate 并产生假吞吐。
 
 命令行吞吐测试：
 
@@ -132,11 +132,11 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 ```text
 模式：测试数据（GUI 中为 Test Data）
 吞吐模式：启用（GUI 中为 Throughput Mode）
-OFDM Legacy Wrap：启用
+OFDM Legacy Wrap：关闭
 OFDM Rate：6 Mbps
-Payload CRC32：启用
+Payload CRC32：关闭
 逐包日志：关闭（GUI 中为 Verbose Packet Events）
-每包 MPDU 字节数：1440（GUI 中为 Chunk Bytes）
+每包 payload/chunk 字节数：1440（GUI 中为 Chunk Bytes）
 窗口大小：64（GUI 中为 Window Size）
 进度刷新间隔：1000 ms（GUI 中为 Progress ms）
 测试数据大小：64 MiB 或 256 MiB

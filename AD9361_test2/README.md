@@ -92,7 +92,7 @@ bit13      OFDM_LEGACY flag
 bit12:0    session id
 ```
 
-PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。`NO_CRC` 由 GUI 的 Payload CRC32 开关决定，默认关闭 `NO_CRC`，即启用 payload CRC32 校验。`OFDM_LEGACY` 由 GUI 的 OFDM Legacy Wrap 开关决定，只用于标记当前传输模式和串口日志；PS 仍然不会解析 OFDM `addr0/addr1`，协议头后的全部内容都会作为 DMA data 写入聚合缓冲。后续普通数据包都携带同一个 session id 和当前 payload mode 标志。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
+PC 每次点击 Start 会先发送一个 `RESET flag=1, payload_len=0` 的控制包。PS 在 DMA 空闲时清空接收序号、历史记录和聚合队列，并切换到新的 session id。`NO_CRC` 由 GUI 的 Payload CRC32 开关决定，默认启用 `NO_CRC`，即关闭 payload CRC32 校验。`OFDM_LEGACY` 由 GUI 的 OFDM Legacy Wrap 开关决定，只用于标记当前传输模式和串口日志；PS 仍然不会解析 OFDM `addr0/addr1`，协议头后的全部内容都会作为 DMA data 写入聚合缓冲。后续普通数据包都携带同一个 session id 和当前 payload mode 标志。这样可以避免多次测试时 PC 从 `seq=0` 重新开始，而 PS 仍保留上一次 `next_expected_seq` 导致旧序号被当成 duplicate 快速 ACK 的假吞吐现象。
 
 ACK 包：
 
@@ -222,7 +222,7 @@ Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
 
 ## PC 发送端
 
-PC 发送端默认会把每个 UDP chunk 当作一个 MPDU，封装成一个 Legacy 非聚合 OFDM 输入帧后再发送。PS 侧仍然只解析 `net_data_header_t`；协议头后的 OFDM `addr0/addr1` 和 MPDU 数据会被整体写入聚合缓冲并经 DMA 转发到 PL。
+PC 发送端默认使用 raw payload 模式，PC->PS 协议头后面直接放原始数据。启用 `--ofdm-legacy` 或 GUI 中的 `OFDM Legacy Wrap` 后，才会把每个 UDP chunk 当作一个 MPDU，封装成一个 Legacy 非聚合 OFDM 输入帧后再发送。PS 侧仍然只解析 `net_data_header_t`；协议头后的 OFDM `addr0/addr1` 和 MPDU 数据会被整体写入聚合缓冲并经 DMA 转发到 PL。
 
 ```text
 addr0: Legacy L-SIG 控制字，64 bit
@@ -230,7 +230,7 @@ addr1: Legacy 未使用，填 0，64 bit
 addr2+: MPDU 数据，小端 64 bit word，最后不足 8 字节高位补 0
 ```
 
-默认 `RATE=6 Mbps`，`L-SIG LENGTH=MPDU_LEN+4`，默认 `chunk-size=1440`，这样加上 16 字节 PC->PS 协议头和 16 字节 OFDM 头后仍能适配普通 1500 MTU。
+启用 Legacy OFDM 封装时，默认 `RATE=6 Mbps`，`L-SIG LENGTH=MPDU_LEN+4`。默认 `chunk-size=1440`，raw 模式下加上 16 字节 PC->PS 协议头、Legacy 模式下再加 16 字节 OFDM 头后，都能适配普通 1500 MTU。
 
 GUI 发射过程中可以实时切换 OFDM Rate。切换只影响之后新生成的 MPDU 帧；已经发出的包以及后续重传包会继续使用它们首次发送时的 rate 和 CRC。
 
@@ -312,11 +312,11 @@ python tools/pc_sender/sender_gui.py
 ```text
 模式：测试数据（GUI 中为 Test Data）
 吞吐模式：启用（GUI 中为 Throughput Mode）
-OFDM Legacy Wrap：启用
+OFDM Legacy Wrap：关闭
 OFDM Rate：6 Mbps
-Payload CRC32：启用
+Payload CRC32：关闭
 逐包日志：关闭（GUI 中为 Verbose Packet Events）
-每包 MPDU 字节数：1440（GUI 中为 Chunk Bytes）
+每包 payload/chunk 字节数：1440（GUI 中为 Chunk Bytes）
 窗口大小：64（GUI 中为 Window Size）
 进度刷新间隔：1000 ms（GUI 中为 Progress ms）
 测试数据大小：64 MiB 或 256 MiB
@@ -324,7 +324,7 @@ Payload CRC32：启用
 
 吞吐模式使用非阻塞 ACK 读取、未确认包缓存和自适应有效窗口。`BUSY` 和超时会降低有效窗口；`PENDING` 只做轻微退避，因为它表示顺序压力，而不是数据已丢失。
 
-默认每包 MPDU 大小是 `1440` 字节。Legacy OFDM 封装后为 `1456` 字节，再加上 16 字节 PC->PS 应用层包头后，UDP 负载为 `1472` 字节，可避免普通 1500 MTU 下的 IP 分片。若使用 `--raw-payload` 关闭 OFDM 封装，则可以继续按原始负载模式发送。
+默认每包 raw payload 大小是 `1440` 字节，加上 16 字节 PC->PS 应用层包头后，UDP 负载为 `1456` 字节。启用 `--ofdm-legacy` 后，Legacy OFDM 封装后的 wire payload 为 `1456` 字节，再加应用层包头后 UDP 负载为 `1472` 字节，可避免普通 1500 MTU 下的 IP 分片。
 
 ## 运行统计
 

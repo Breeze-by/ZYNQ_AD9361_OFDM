@@ -78,9 +78,9 @@ class SenderConfig:
     progress_interval_s: float = 0.1
     verbose_events: bool = False
     throughput_mode: bool = False
-    ofdm_legacy: bool = True
+    ofdm_legacy: bool = False
     ofdm_rate_mbps: int = 6
-    validate_payload_crc: bool = True
+    validate_payload_crc: bool = False
     pl_verify_pattern: bool = False
 
 
@@ -127,7 +127,7 @@ def parse_args():
     parser.add_argument("--ip", required=True, help="Zynq target IP address")
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
-        help="MPDU payload bytes per UDP chunk; 1440 keeps OFDM legacy frames within a 1500 byte MTU")
+        help="payload bytes per UDP chunk; 1440 fits a 1500 byte MTU in raw and OFDM legacy modes")
     parser.add_argument("--timeout", type=float, default=1.0, help="ACK timeout in seconds")
     parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
     parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
@@ -142,15 +142,18 @@ def parse_args():
         help="print or emit per-packet events instead of throttled summaries")
     parser.add_argument("--throughput-mode", action="store_true",
         help="suppress packet events and print lightweight aggregate progress")
-    parser.add_argument("--ofdm-legacy", dest="ofdm_legacy", action="store_true", default=True,
+    parser.add_argument("--ofdm-legacy", dest="ofdm_legacy", action="store_true", default=False,
         help="wrap each MPDU chunk as one legacy OFDM input frame before sending")
     parser.add_argument("--raw-payload", dest="ofdm_legacy", action="store_false",
         help="send raw UDP payload without legacy OFDM addr0/addr1 words")
     parser.add_argument("--ofdm-rate-mbps", type=int, default=6,
         choices=sorted(OFDM_LEGACY_RATE_BITS.keys()),
         help="legacy OFDM RATE field in Mbps")
+    parser.add_argument("--payload-crc", dest="validate_payload_crc",
+        action="store_true", default=False,
+        help="enable PC-generated and PS-validated application payload CRC32")
     parser.add_argument("--no-payload-crc", dest="validate_payload_crc",
-        action="store_false", default=True,
+        action="store_false",
         help="disable PC-generated and PS-validated application payload CRC32 for this transfer")
     parser.add_argument("--pl-verify-pattern", action="store_true",
         help="replace each MPDU/raw chunk with a PL-visible test header and deterministic byte pattern")
@@ -259,7 +262,7 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
     if len(wire_payload) > 0xFFFF:
         raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
 
-    validate_payload_crc = True if config is None else config.validate_payload_crc
+    validate_payload_crc = False if config is None else config.validate_payload_crc
     crc32 = (binascii.crc32(wire_payload) & 0xFFFFFFFF) if validate_payload_crc else 0
     header = struct.pack(
         DATA_HEADER_FORMAT,
@@ -272,8 +275,8 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
     return header + wire_payload
 
 
-def build_reset_packet(session_id: int, validate_payload_crc: bool = True,
-    ofdm_legacy: bool = True) -> bytes:
+def build_reset_packet(session_id: int, validate_payload_crc: bool = False,
+    ofdm_legacy: bool = False) -> bytes:
     flags = DATA_FLAG_RESET
     if not validate_payload_crc:
         flags |= DATA_FLAG_NO_CRC
