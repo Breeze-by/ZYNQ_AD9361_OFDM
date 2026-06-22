@@ -547,17 +547,24 @@ class UdpSender:
 
     def _update_rates(self, stats: SenderStats, payload_len: int, wire_payload_len: int,
         ack_time: float, tx_time: float):
-        elapsed = max(ack_time - stats.started_at, 1e-6)
         ack_elapsed = max(ack_time - tx_time, 1e-6)
 
         stats.last_rtt_ms = ack_elapsed * 1000.0
         stats.last_wire_payload_len = wire_payload_len
         stats.current_rate_kib_s = (payload_len / 1024.0) / ack_elapsed
         stats.current_wire_rate_kib_s = (wire_payload_len / 1024.0) / ack_elapsed
+        self._refresh_cumulative_rates(stats, ack_time)
+
+    def _refresh_cumulative_rates(self, stats: SenderStats, event_time: Optional[float] = None):
+        if event_time is None:
+            event_time = time.time()
+        elapsed = max(event_time - stats.started_at, 1e-6)
+
         stats.average_rate_kib_s = (stats.bytes_sent / 1024.0) / elapsed
         stats.delivered_rate_kib_s = (stats.bytes_acked / 1024.0) / elapsed
         stats.wire_delivered_rate_kib_s = (stats.wire_bytes_acked / 1024.0) / elapsed
         stats.udp_app_tx_rate_kib_s = (stats.udp_app_bytes_sent / 1024.0) / elapsed
+        stats.loopback_rate_kib_s = (stats.loopback_bytes / 1024.0) / elapsed
         stats.packets_sent_per_second = stats.packets_sent / elapsed
         stats.ack_received_per_second = stats.ack_received / elapsed
 
@@ -617,8 +624,7 @@ class UdpSender:
                             actual_byte = actual_value
                             break
 
-        elapsed = max(time.time() - stats.started_at, 1e-6)
-        stats.loopback_rate_kib_s = (stats.loopback_bytes / 1024.0) / elapsed
+        self._refresh_cumulative_rates(stats)
 
         should_emit = self.config.verbose_events or compare_status not in ("OK", "UNSUPPORTED")
         if should_emit:
@@ -1018,6 +1024,7 @@ class UdpSender:
 
             self._drain_loopback(sock, payload, stats, callback)
             stats.finished_at = time.time()
+            self._refresh_cumulative_rates(stats, stats.finished_at)
             self._emit_progress(callback, stats, len(outstanding), force=True)
             self._emit(callback, "done", {"stats": stats})
             return stats
@@ -1275,6 +1282,7 @@ class UdpSender:
 
             self._drain_loopback(sock, payload, stats, callback)
             stats.finished_at = time.time()
+            self._refresh_cumulative_rates(stats, stats.finished_at)
             self._emit_progress(callback, stats, len(outstanding), force=True)
             self._emit(callback, "done", {"stats": stats})
             return stats
