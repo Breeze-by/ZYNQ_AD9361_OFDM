@@ -196,7 +196,7 @@ ACK 状态：
 
 每次 PC 发送工具开始传输前，都会先发送 `RESET flag=1, payload_len=0, seq=0` 的控制包。板端只有在 DMA 空闲且无 fatal error 时接受 reset，随后清空序号、历史记录、聚合队列和统计，并切换到新的 13-bit session id。普通数据包必须带同一个 session id。
 
-`NO_CRC` 由 PC 工具的 Payload CRC32 开关决定。默认关闭 payload CRC，因此 reset 包携带 `NO_CRC`，普通包的 `payload_crc32=0`；开启 `--payload-crc` 或 GUI 对应选项后，PC 对 wire payload 计算 CRC32，PS 接收后校验。
+`NO_CRC` 由 PC 工具的 Payload CRC32 开关决定。关闭 payload CRC 时，reset 包携带 `NO_CRC`，普通包的 `payload_crc32=0`；开启 `--payload-crc` 或 GUI 对应选项后，PC 对 wire payload 计算 CRC32，PS 接收后校验。GUI 默认开启 Payload CRC32，高负载测试时曾观察到少量 PC->PS payload CRC 错误，开启后坏包会被 PS 拒收并由发送端重传，最终 loopback 校验才可信。
 
 `OFDM_LEGACY` 只标记本次传输模式并写入板端 reset 日志。PS 不解析 OFDM `addr0/addr1`，它只把应用层包头后的 wire payload 原样写入 DMA buffer。
 
@@ -379,8 +379,8 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --ofdm-legacy           启用 Legacy OFDM 输入帧封装
 --raw-payload           发送原始 payload，不添加 OFDM addr0/addr1
 --ofdm-rate-mbps        Legacy RATE 字段，可选 6/9/12/18/24/36/48/54
---payload-crc           启用应用层 payload CRC32
---no-payload-crc        关闭应用层 payload CRC32，默认
+--payload-crc           启用应用层 payload CRC32；高负载/完整性测试推荐开启
+--no-payload-crc        关闭应用层 payload CRC32
 --pl-verify-pattern     用 PL 可见测试头和可预测 pattern 替换 payload
 ```
 
@@ -391,7 +391,7 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 Throughput Mode         开启
 OFDM Legacy Wrap        按 PL 当前期望选择；不需要 OFDM 头时关闭
 OFDM Rate               6 Mbps 起步
-Payload CRC32           关闭，除非正在排查数据损坏
+Payload CRC32           开启
 Verbose Packet Events   关闭
 Chunk Bytes             1440
 Window Size             64
