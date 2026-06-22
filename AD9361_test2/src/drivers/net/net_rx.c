@@ -24,6 +24,7 @@ typedef struct {
     uint32_t payload_len;
     uint32_t transfer_len;
     uint32_t submit_order;
+    uint32_t stream_offset;
     XTime first_write_time;
     XTime last_write_time;
 } net_agg_block_t;
@@ -54,6 +55,11 @@ static uint32_t pending_ok_ack_seq;
 static uint32_t pending_ok_ack_transfer_len;
 static uint32_t pending_ok_ack_count;
 static XTime pending_ok_ack_first_time;
+static ip_addr_t loopback_return_addr;
+static u16_t loopback_return_port;
+static int loopback_return_peer_valid;
+static uint32_t loopback_return_packet_count;
+static uint32_t loopback_return_byte_count;
 static uint16_t current_session_id;
 static int session_valid;
 static int current_session_validate_crc;
@@ -186,6 +192,7 @@ static void net_release_empty_fill_block(void)
     block->state = NET_AGG_BLOCK_FREE;
     block->transfer_len = 0U;
     block->submit_order = 0U;
+    block->stream_offset = 0U;
     block->first_write_time = 0U;
     block->last_write_time = 0U;
     fill_block_index = -1;
@@ -325,6 +332,7 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc)
         agg_blocks[index].payload_len = 0U;
         agg_blocks[index].transfer_len = 0U;
         agg_blocks[index].submit_order = 0U;
+        agg_blocks[index].stream_offset = 0U;
         agg_blocks[index].first_write_time = 0U;
         agg_blocks[index].last_write_time = 0U;
     }
@@ -344,6 +352,10 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc)
     pending_ok_ack_transfer_len = 0U;
     pending_ok_ack_count = 0U;
     pending_ok_ack_first_time = 0U;
+    loopback_return_peer_valid = 0;
+    loopback_return_port = 0U;
+    loopback_return_packet_count = 0U;
+    loopback_return_byte_count = 0U;
     current_session_id = session_id & NET_DATA_SESSION_MASK;
     session_valid = 1;
     current_session_validate_crc = validate_crc;
@@ -463,6 +475,7 @@ static int net_ensure_fill_block(uint32_t append_len)
     block->state = NET_AGG_BLOCK_FILLING;
     block->payload_len = 0U;
     block->transfer_len = 0U;
+    block->stream_offset = (uint32_t)total_accepted_bytes;
     XTime_GetTime(&block->first_write_time);
     block->last_write_time = block->first_write_time;
     fill_block_index = free_index;
@@ -556,6 +569,98 @@ static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
 #endif
 }
 
+static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t *payload,
+    uint32_t payload_len, uint32_t timestamp_lo, uint32_t timestamp_hi,
+    uint32_t meta0, uint32_t meta1)
+{
+#if NET_LOOPBACK_UDP_RETURN_ENABLE
+    uint32_t chunk_offset = 0U;
+    uint32_t chunk_len;
+    net_loopback_packet_header_t header;
+    struct pbuf *packet_pbuf;
+    uint8_t *packet_payload;
+    err_t err;
+
+    if ((udp_control_pcb == NULL) || (loopback_return_peer_valid == 0)) {
+        UART_Printf("LB UDP skip reason=no_peer block=%lu len=%lu\r\n",
+            (unsigned long)loopback_rx_transfer_id,
+            (unsigned long)payload_len);
+        return;
+    }
+
+    while (chunk_offset < payload_len) {
+        chunk_len = payload_len - chunk_offset;
+        if (chunk_len > NET_LOOPBACK_UDP_PAYLOAD_BYTES) {
+            chunk_len = NET_LOOPBACK_UDP_PAYLOAD_BYTES;
+        }
+
+        header.magic = NET_LOOPBACK_MAGIC;
+        header.block_id = loopback_rx_transfer_id;
+        header.stream_offset = block->stream_offset;
+        header.block_payload_len = (uint16_t)payload_len;
+        header.chunk_offset = (uint16_t)chunk_offset;
+        header.chunk_len = (uint16_t)chunk_len;
+        header.flags = ((chunk_offset + chunk_len) >= payload_len) ?
+            NET_LOOPBACK_FLAG_LAST_CHUNK : 0U;
+        header.payload_crc32 = Net_Protocol_Crc32(&payload[chunk_offset], chunk_len);
+        header.timestamp_lo = timestamp_lo;
+        header.timestamp_hi = timestamp_hi;
+        header.meta0 = meta0;
+        header.meta1 = meta1;
+
+        packet_pbuf = pbuf_alloc(PBUF_TRANSPORT,
+            (u16_t)(sizeof(header) + chunk_len), PBUF_RAM);
+        if (packet_pbuf == NULL) {
+            UART_Printf("LB UDP alloc failed block=%lu chunk_off=%lu len=%lu\r\n",
+                (unsigned long)header.block_id,
+                (unsigned long)chunk_offset,
+                (unsigned long)chunk_len);
+            NetStats_OnDropped();
+            return;
+        }
+
+        packet_payload = (uint8_t *)packet_pbuf->payload;
+        memcpy(packet_payload, &header, sizeof(header));
+        memcpy(&packet_payload[sizeof(header)], &payload[chunk_offset], chunk_len);
+        err = udp_sendto(udp_control_pcb, packet_pbuf, &loopback_return_addr,
+            loopback_return_port);
+        pbuf_free(packet_pbuf);
+
+        if (err != ERR_OK) {
+            UART_Printf("LB UDP send failed block=%lu chunk_off=%lu len=%lu err=%d\r\n",
+                (unsigned long)header.block_id,
+                (unsigned long)chunk_offset,
+                (unsigned long)chunk_len,
+                (int)err);
+            NetStats_OnDropped();
+            return;
+        }
+
+        loopback_return_packet_count += 1U;
+        loopback_return_byte_count += chunk_len;
+        chunk_offset += chunk_len;
+    }
+
+    if (net_loopback_should_log(loopback_rx_transfer_id) != 0) {
+        UART_Printf("LB UDP sent block=%lu stream_off=%lu payload=%lu packets=%lu total_bytes=%lu peer_port=%u\r\n",
+            (unsigned long)loopback_rx_transfer_id,
+            (unsigned long)block->stream_offset,
+            (unsigned long)payload_len,
+            (unsigned long)loopback_return_packet_count,
+            (unsigned long)loopback_return_byte_count,
+            (unsigned)loopback_return_port);
+    }
+#else
+    (void)block;
+    (void)payload;
+    (void)payload_len;
+    (void)timestamp_lo;
+    (void)timestamp_hi;
+    (void)meta0;
+    (void)meta1;
+#endif
+}
+
 static void net_loopback_print_words(const char *tag, const uint8_t *buffer, uint32_t length)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
@@ -596,6 +701,7 @@ static void net_loopback_release_dma_block_if_done(void)
     agg_blocks[dma_block_index].payload_len = 0U;
     agg_blocks[dma_block_index].transfer_len = 0U;
     agg_blocks[dma_block_index].submit_order = 0U;
+    agg_blocks[dma_block_index].stream_offset = 0U;
     dma_block_index = -1;
     loopback_rx_expected_len = 0U;
     loopback_tx_expected_len = 0U;
@@ -672,6 +778,10 @@ static void net_loopback_poll_s2mm(void)
     uint32_t mismatch_index;
     uint32_t compare_len;
     uint32_t rx_prefix_len;
+    uint32_t timestamp_lo = 0U;
+    uint32_t timestamp_hi = 0U;
+    uint32_t rx_meta0 = 0U;
+    uint32_t rx_meta1 = 0U;
     const uint8_t *rx_payload_ptr;
     int mismatch_found;
     int should_log;
@@ -747,6 +857,12 @@ static void net_loopback_poll_s2mm(void)
         rx_prefix_len = loopback_rx_expected_len;
     }
     rx_payload_ptr = &loopback_rx_buffer[rx_prefix_len];
+    if (rx_prefix_len >= 16U) {
+        timestamp_lo = net_load_le32(&loopback_rx_buffer[0]);
+        timestamp_hi = net_load_le32(&loopback_rx_buffer[4]);
+        rx_meta0 = net_load_le32(&loopback_rx_buffer[8]);
+        rx_meta1 = net_load_le32(&loopback_rx_buffer[12]);
+    }
     compare_len = loopback_tx_expected_len;
     if (compare_len > (loopback_rx_expected_len - rx_prefix_len)) {
         compare_len = loopback_rx_expected_len - rx_prefix_len;
@@ -797,6 +913,11 @@ static void net_loopback_poll_s2mm(void)
             net_loopback_print_words("S2MM tx_head", agg_blocks[dma_block_index].buffer_ptr,
                 agg_blocks[dma_block_index].transfer_len);
         }
+    }
+
+    if (dma_block_index >= 0) {
+        net_loopback_return_udp(&agg_blocks[dma_block_index], rx_payload_ptr, compare_len,
+            timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
     }
 
     net_loopback_release_dma_block_if_done();
@@ -999,6 +1120,9 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
 
         net_reset_stream_state(packet_session_id,
             ((packet_flags & NET_DATA_FLAG_NO_CRC) == 0U) ? 1 : 0);
+        loopback_return_addr = *addr;
+        loopback_return_port = port;
+        loopback_return_peer_valid = 1;
         UART_Printf("UDP RX reset session=%u crc=%s ofdm=%s\r\n",
             (unsigned)current_session_id,
             (current_session_validate_crc != 0) ? "on" : "off",
@@ -1104,6 +1228,9 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
 
     block->payload_len += header.payload_len;
     XTime_GetTime(&block->last_write_time);
+    loopback_return_addr = *addr;
+    loopback_return_port = port;
+    loopback_return_peer_valid = 1;
     total_accepted_bytes += header.payload_len;
     NetStats_OnAcceptedPacket(header.payload_len);
     net_record_accepted_chunk(header.seq, header.payload_len);
@@ -1159,6 +1286,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
         agg_blocks[index].payload_len = 0U;
         agg_blocks[index].transfer_len = 0U;
         agg_blocks[index].submit_order = 0U;
+        agg_blocks[index].stream_offset = 0U;
         agg_blocks[index].first_write_time = 0U;
         agg_blocks[index].last_write_time = 0U;
     }
@@ -1178,6 +1306,10 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     pending_ok_ack_transfer_len = 0U;
     pending_ok_ack_count = 0U;
     pending_ok_ack_first_time = 0U;
+    loopback_return_peer_valid = 0;
+    loopback_return_port = 0U;
+    loopback_return_packet_count = 0U;
+    loopback_return_byte_count = 0U;
     current_session_id = 0U;
     session_valid = 0;
     current_session_validate_crc = 1;
@@ -1214,6 +1346,11 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
         (unsigned long)tx_buffer_capacity_bytes,
         (unsigned)NET_MAX_PAYLOAD_BYTES,
         (unsigned)NET_MAX_RECOMMENDED_WINDOW_SIZE);
+#if NET_LOOPBACK_UDP_RETURN_ENABLE
+    UART_Printf("Loopback UDP return ready, magic=0x%08lX chunk_bytes=%u\r\n",
+        (unsigned long)NET_LOOPBACK_MAGIC,
+        (unsigned)NET_LOOPBACK_UDP_PAYLOAD_BYTES);
+#endif
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
     UART_Printf("S2MM loopback debug ready, rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u\r\n",
         (unsigned long)RX_BUFFER_BASE,

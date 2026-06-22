@@ -17,7 +17,7 @@
 - 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`OFDM Legacy Wrap`、`PL Verify Pattern` 等。
 - 用户当前要发送纯 payload，不要默认要求勾选 `OFDM Legacy Wrap`，也不要默认给 `--ofdm-legacy` 之类的命令行参数。若确实需要 Legacy 模式，必须先说明原因并明确让用户在 GUI 勾选 `OFDM Legacy Wrap`。
 - 调试 PL 回环要分阶段做。由于本地无法板级验证，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
-- 需要用户反馈时，明确列出要复制的串口日志行，例如 `S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`STAT rate/state`、`MM2S error`。
+- 需要用户反馈时，明确列出要复制的串口日志行，例如 `S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制 GUI 日志里的 `PROGRESS ... lb=... lb_crc=... lb_diff=... lb_range=...` 和 `DONE ...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
 ## 当前工程定位
@@ -67,7 +67,24 @@ AD9361_test2/tools/pc_sender/sender_gui.py
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。Legacy 模式下 chunk 最大建议不超过 `2984`，因为 wire payload 还要加 16 字节 OFDM 头。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；新增 S2MM 时必须在 DMA 完成后 invalidate。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
-- 当前已开启第一阶段 PL->PS S2MM 回环调试：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；尚未实现回环数据 UDP 发回 PC。PL 设计者称 16 字节头为前 8 字节时间戳、后 8 字节速率和 payload 长度，但字段编码仍需用日志确认。
+- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回 GUI。GUI 侧在等待 ACK 的同时处理 loopback 包，raw payload 模式下按 `stream_offset + chunk_offset` 对原始测试数据做 CRC/范围/逐字节校验。PL 设计者称 16 字节头为前 8 字节时间戳、后 8 字节速率和 payload 长度；当前日志显示 `meta1` 低 16 bit 的 `len_field - 4` 与 `tx_transfer` 匹配，字段编码仍需继续用日志确认。
+
+## 当前推荐 GUI 测试设置
+
+```text
+Mode                    Test Data
+Test Bytes              16384
+Chunk Bytes             1440
+Window Size             4
+Throughput Mode         checked
+OFDM Legacy Wrap        unchecked
+Payload CRC32           unchecked
+PL Verify Pattern       unchecked
+Verbose Packet Events   unchecked
+Progress ms             1000
+```
+
+这一组用于小数据量回环确认。预期板端串口出现 `Loopback UDP return ready`、`S2MM done ... cmp=OK`、`LB UDP sent ...`，GUI `DONE` 行中 `lb=16384/16384` 且 `lb_crc=0 lb_diff=0 lb_range=0`。
 
 ## 常用验证命令
 

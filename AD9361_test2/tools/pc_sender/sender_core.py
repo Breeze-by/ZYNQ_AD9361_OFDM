@@ -13,6 +13,7 @@ from typing import Callable, Dict, Optional
 
 DATA_MAGIC = 0x4E455430
 ACK_MAGIC = 0x41434B30
+LOOPBACK_MAGIC = 0x304B424C
 
 ACK_STATUS_OK = 0
 ACK_STATUS_BAD_MAGIC = 1
@@ -34,8 +35,10 @@ ACK_STATUS_NAMES = {
 
 DATA_HEADER_FORMAT = "<IIHHI"
 ACK_FORMAT = "<IIHHI"
+LOOPBACK_FORMAT = "<IIIHHHHIIIII"
 DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
+LOOPBACK_HEADER_SIZE = struct.calcsize(LOOPBACK_FORMAT)
 PL_VERIFY_MAGIC = 0x30544C50
 PL_VERIFY_HEADER_BYTES = 32
 PL_VERIFY_VERSION = 1
@@ -51,6 +54,7 @@ DATA_FLAG_RESET = 0x8000
 DATA_FLAG_NO_CRC = 0x4000
 DATA_FLAG_OFDM_LEGACY = 0x2000
 DATA_SESSION_MASK = 0x1FFF
+LOOPBACK_FLAG_LAST_CHUNK = 0x0001
 
 DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
 OFDM_LEGACY_RATE_BITS = {
@@ -118,6 +122,17 @@ class SenderStats:
     ack_batches: int = 0
     packets_sent: int = 0
     ack_received: int = 0
+    loopback_packets: int = 0
+    loopback_bytes: int = 0
+    loopback_blocks: int = 0
+    loopback_crc_errors: int = 0
+    loopback_mismatch_errors: int = 0
+    loopback_range_errors: int = 0
+    loopback_unsupported: int = 0
+    loopback_last_block_id: int = 0
+    loopback_last_stream_offset: int = 0
+    loopback_last_chunk_offset: int = 0
+    loopback_rate_kib_s: float = 0.0
     packets_sent_per_second: float = 0.0
     ack_received_per_second: float = 0.0
     send_loop_sleep_time_s: float = 0.0
@@ -311,6 +326,62 @@ def recv_any_ack(sock: socket.socket):
     return seq, status, transfer_len
 
 
+def recv_any_packet(sock: socket.socket):
+    data, _ = sock.recvfrom(4096)
+    if len(data) < 4:
+        return "unknown", {"length": len(data)}
+
+    magic = struct.unpack("<I", data[:4])[0]
+    if magic == ACK_MAGIC:
+        if len(data) < ACK_SIZE:
+            return "unknown", {"length": len(data), "reason": "short_ack"}
+        _magic, seq, status, _reserved, transfer_len = struct.unpack(ACK_FORMAT, data[:ACK_SIZE])
+        return "ack", {
+            "seq": seq,
+            "status": status,
+            "transfer_len": transfer_len,
+        }
+
+    if magic == LOOPBACK_MAGIC:
+        if len(data) < LOOPBACK_HEADER_SIZE:
+            return "unknown", {"length": len(data), "reason": "short_loopback"}
+        fields = struct.unpack(LOOPBACK_FORMAT, data[:LOOPBACK_HEADER_SIZE])
+        (
+            _magic,
+            block_id,
+            stream_offset,
+            block_payload_len,
+            chunk_offset,
+            chunk_len,
+            flags,
+            payload_crc32,
+            timestamp_lo,
+            timestamp_hi,
+            meta0,
+            meta1,
+        ) = fields
+        payload = data[LOOPBACK_HEADER_SIZE:]
+        return "loopback", {
+            "block_id": block_id,
+            "stream_offset": stream_offset,
+            "block_payload_len": block_payload_len,
+            "chunk_offset": chunk_offset,
+            "chunk_len": chunk_len,
+            "flags": flags,
+            "payload_crc32": payload_crc32,
+            "timestamp_lo": timestamp_lo,
+            "timestamp_hi": timestamp_hi,
+            "meta0": meta0,
+            "meta1": meta1,
+            "payload": payload,
+        }
+
+    return "unknown", {
+        "length": len(data),
+        "magic": magic,
+    }
+
+
 def iter_chunks(payload: bytes, chunk_size: int):
     offset = 0
     seq = 0
@@ -489,6 +560,125 @@ class UdpSender:
         stats.udp_app_tx_rate_kib_s = (stats.udp_app_bytes_sent / 1024.0) / elapsed
         stats.packets_sent_per_second = stats.packets_sent / elapsed
         stats.ack_received_per_second = stats.ack_received / elapsed
+
+    def _loopback_expected_bytes(self, payload: bytes) -> int:
+        if self.config.ofdm_legacy or self.config.pl_verify_pattern:
+            return 0
+        return len(payload)
+
+    def _process_loopback_packet(self, packet: dict, payload: bytes, stats: SenderStats,
+        callback: Optional[Callable[[str, dict], None]]):
+        returned_payload = packet["payload"]
+        returned_len = len(returned_payload)
+        chunk_len = packet["chunk_len"]
+        stream_offset = packet["stream_offset"]
+        chunk_offset = packet["chunk_offset"]
+        absolute_offset = stream_offset + chunk_offset
+        first_diff = -1
+        expected_byte = None
+        actual_byte = None
+        compare_status = "OK"
+
+        stats.loopback_packets += 1
+        stats.loopback_bytes += returned_len
+        stats.loopback_last_block_id = packet["block_id"]
+        stats.loopback_last_stream_offset = stream_offset
+        stats.loopback_last_chunk_offset = chunk_offset
+        if (packet["flags"] & LOOPBACK_FLAG_LAST_CHUNK) != 0:
+            stats.loopback_blocks += 1
+
+        if returned_len != chunk_len:
+            stats.loopback_range_errors += 1
+            compare_status = "LEN"
+
+        calc_crc = binascii.crc32(returned_payload) & 0xFFFFFFFF
+        if calc_crc != packet["payload_crc32"]:
+            stats.loopback_crc_errors += 1
+            compare_status = "CRC"
+
+        if self.config.ofdm_legacy or self.config.pl_verify_pattern:
+            stats.loopback_unsupported += 1
+            if compare_status == "OK":
+                compare_status = "UNSUPPORTED"
+        else:
+            absolute_end = absolute_offset + returned_len
+            if absolute_end > len(payload):
+                stats.loopback_range_errors += 1
+                compare_status = "RANGE"
+            else:
+                expected_payload = payload[absolute_offset:absolute_end]
+                if returned_payload != expected_payload:
+                    stats.loopback_mismatch_errors += 1
+                    compare_status = "DIFF"
+                    for index, (expected_value, actual_value) in enumerate(zip(expected_payload, returned_payload)):
+                        if expected_value != actual_value:
+                            first_diff = index
+                            expected_byte = expected_value
+                            actual_byte = actual_value
+                            break
+
+        elapsed = max(time.time() - stats.started_at, 1e-6)
+        stats.loopback_rate_kib_s = (stats.loopback_bytes / 1024.0) / elapsed
+
+        should_emit = self.config.verbose_events or compare_status not in ("OK", "UNSUPPORTED")
+        if should_emit:
+            self._emit(callback, "loopback", {
+                "block_id": packet["block_id"],
+                "stream_offset": stream_offset,
+                "chunk_offset": chunk_offset,
+                "chunk_len": chunk_len,
+                "returned_len": returned_len,
+                "flags": packet["flags"],
+                "crc": calc_crc,
+                "crc_expected": packet["payload_crc32"],
+                "status": compare_status,
+                "first_diff": first_diff,
+                "expected_byte": expected_byte,
+                "actual_byte": actual_byte,
+                "stats": stats,
+            })
+
+    def _drain_loopback(self, sock: socket.socket, payload: bytes, stats: SenderStats,
+        callback: Optional[Callable[[str, dict], None]]):
+        expected_bytes = self._loopback_expected_bytes(payload)
+        if expected_bytes <= 0 or stats.loopback_bytes >= expected_bytes:
+            return
+
+        previous_timeout = sock.gettimeout()
+        drain_timeout_s = max(self.config.timeout, 1.0)
+        poll_timeout_s = min(drain_timeout_s / 20.0, 0.05)
+        deadline = time.time() + drain_timeout_s
+        sock.settimeout(poll_timeout_s)
+        try:
+            while (not self._stop_requested and
+                stats.loopback_bytes < expected_bytes and
+                time.time() < deadline):
+                try:
+                    packet_type, packet = recv_any_packet(sock)
+                except socket.timeout:
+                    continue
+                except BlockingIOError:
+                    continue
+                except OSError as exc:
+                    if is_socket_would_block(exc):
+                        continue
+                    raise
+
+                if packet_type == "loopback":
+                    self._process_loopback_packet(packet, payload, stats, callback)
+                    deadline = time.time() + drain_timeout_s
+                    self._emit_progress(callback, stats, 0)
+                elif packet_type == "ack":
+                    self._emit(callback, "ack_ignored", {
+                        "seq": packet["seq"],
+                        "status": packet["status"],
+                        "status_name": ACK_STATUS_NAMES.get(packet["status"], f"UNKNOWN_{packet['status']}"),
+                        "transfer_len": packet["transfer_len"],
+                    })
+                elif self.config.verbose_events:
+                    self._emit(callback, "packet_ignored", packet)
+        finally:
+            sock.settimeout(previous_timeout)
 
     def _sample_outstanding(self, stats: SenderStats, window_used: int):
         stats.outstanding_window_samples += 1
@@ -727,7 +917,7 @@ class UdpSender:
 
                 while True:
                     try:
-                        ack_seq, status, transfer_len = recv_any_ack(sock)
+                        packet_type, packet = recv_any_packet(sock)
                     except BlockingIOError:
                         break
                     except OSError as exc:
@@ -735,6 +925,19 @@ class UdpSender:
                             break
                         raise
 
+                    if packet_type == "loopback":
+                        self._process_loopback_packet(packet, payload, stats, callback)
+                        self._emit_progress(callback, stats, len(outstanding))
+                        made_progress = True
+                        continue
+                    if packet_type != "ack":
+                        if self.config.verbose_events:
+                            self._emit(callback, "packet_ignored", packet)
+                        continue
+
+                    ack_seq = packet["seq"]
+                    status = packet["status"]
+                    transfer_len = packet["transfer_len"]
                     completed = self._process_ack(
                         ack_seq,
                         status,
@@ -813,6 +1016,7 @@ class UdpSender:
                     time.sleep(idle_sleep_s)
                     stats.send_loop_sleep_time_s += time.time() - sleep_start
 
+            self._drain_loopback(sock, payload, stats, callback)
             stats.finished_at = time.time()
             self._emit_progress(callback, stats, len(outstanding), force=True)
             self._emit(callback, "done", {"stats": stats})
@@ -892,7 +1096,19 @@ class UdpSender:
                     if not outstanding:
                         continue
 
-                    ack_seq, status, transfer_len = recv_any_ack(sock)
+                    packet_type, packet = recv_any_packet(sock)
+                    if packet_type == "loopback":
+                        self._process_loopback_packet(packet, payload, stats, callback)
+                        self._emit_progress(callback, stats, len(outstanding))
+                        continue
+                    if packet_type != "ack":
+                        if self.config.verbose_events:
+                            self._emit(callback, "packet_ignored", packet)
+                        continue
+
+                    ack_seq = packet["seq"]
+                    status = packet["status"]
+                    transfer_len = packet["transfer_len"]
                     ack_time = time.time()
                     stats.ack_received += 1
                     if ack_seq not in outstanding:
@@ -1057,6 +1273,7 @@ class UdpSender:
                     self._emit_progress(callback, stats, len(outstanding))
                     self._sample_outstanding(stats, len(outstanding))
 
+            self._drain_loopback(sock, payload, stats, callback)
             stats.finished_at = time.time()
             self._emit_progress(callback, stats, len(outstanding), force=True)
             self._emit(callback, "done", {"stats": stats})
@@ -1128,6 +1345,10 @@ def run_cli(args) -> int:
                     f"app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
                     f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx={stats.udp_app_tx_rate_kib_s:.2f} KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
+                    f"lb={stats.loopback_bytes}/{stats.total_size} lb_blk={stats.loopback_blocks} "
+                    f"lb_pkt={stats.loopback_packets} lb_rate={stats.loopback_rate_kib_s:.2f} KiB/s "
+                    f"lb_crc={stats.loopback_crc_errors} lb_diff={stats.loopback_mismatch_errors} "
+                    f"lb_range={stats.loopback_range_errors} "
                     f"rtt={stats.last_rtt_ms:.2f} ms retry={stats.retries_used} timeout={stats.timeout_count} "
                     f"busy={stats.ack_busy} pending={stats.ack_pending} "
                     f"window={stats.effective_window_size}/{sender.config.window_size} "
@@ -1141,7 +1362,20 @@ def run_cli(args) -> int:
                     f"inflight={payload_dict['window_used']} app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
                     f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx_rate={stats.udp_app_tx_rate_kib_s:.2f} KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
+                    f"lb={stats.loopback_bytes}/{stats.total_size} lb_blk={stats.loopback_blocks} "
+                    f"lb_pkt={stats.loopback_packets} lb_rate={stats.loopback_rate_kib_s:.2f} KiB/s "
+                    f"lb_crc={stats.loopback_crc_errors} lb_diff={stats.loopback_mismatch_errors} "
+                    f"lb_range={stats.loopback_range_errors} "
                     f"rtt={stats.last_rtt_ms:.2f} ms busy={stats.ack_busy} pending={stats.ack_pending}"
+                )
+        elif event_name == "loopback":
+            if args.verbose_events or payload_dict["status"] != "OK":
+                stats = payload_dict["stats"]
+                print(
+                    f"loopback block={payload_dict['block_id']} off={payload_dict['stream_offset']}+{payload_dict['chunk_offset']} "
+                    f"len={payload_dict['returned_len']} status={payload_dict['status']} "
+                    f"lb={stats.loopback_bytes}/{stats.total_size} lb_crc={stats.loopback_crc_errors} "
+                    f"lb_diff={stats.loopback_mismatch_errors} lb_range={stats.loopback_range_errors}"
                 )
         elif event_name == "done":
             stats = payload_dict["stats"]
@@ -1152,6 +1386,10 @@ def run_cli(args) -> int:
                 f"app_sched_rate={stats.average_rate_kib_s:.2f} KiB/s app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
                 f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx={stats.udp_app_tx_rate_kib_s:.2f} KiB/s "
                 f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
+                f"lb={stats.loopback_bytes}/{stats.total_size} lb_blk={stats.loopback_blocks} "
+                f"lb_pkt={stats.loopback_packets} lb_rate={stats.loopback_rate_kib_s:.2f} KiB/s "
+                f"lb_crc={stats.loopback_crc_errors} lb_diff={stats.loopback_mismatch_errors} "
+                f"lb_range={stats.loopback_range_errors} "
                 f"ack_ok={stats.ack_ok} ack_pending={stats.ack_pending} timeouts={stats.timeout_count}"
             )
 
