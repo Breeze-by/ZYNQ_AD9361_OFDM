@@ -128,7 +128,7 @@ IP  : 192.168.1.50
 MASK: 255.255.255.0
 GW  : 192.168.1.1
 UDP : listen on port 5001
-UDP RX ready, agg_blocks=699 block_bytes=3000 total_bytes=2097152 max_payload=3000 rec_window<=64 ack=on_accept
+UDP RX ready, agg_blocks=697 block_bytes=3000 stride=3008 total_bytes=2097152 max_payload=3000 rec_window<=64 ack=on_accept
 Loopback UDP return ready, magic=0x304B424C chunk_bytes=1200
 ```
 
@@ -281,16 +281,18 @@ TX buffer size                 2097152 bytes
 NET_OFDM_TARGET_PSDU_BYTES     3000
 NET_OFDM_MAX_DMA_WORDS         1022
 NET_OFDM_MAX_PSDU_BYTES        8176 bytes
+NET_DMA_CACHE_LINE_BYTES       64
 NET_AGG_BLOCK_BYTES            3000
-NET_AGG_BLOCK_COUNT            699
-NET_DMA_QUEUE_CAPACITY         699
+NET_AGG_BLOCK_STRIDE_BYTES     3008
+NET_AGG_BLOCK_COUNT            697
+NET_DMA_QUEUE_CAPACITY         697
 NET_AGG_MIN_FLUSH_BYTES        1500
 NET_AGG_FLUSH_TIMEOUT_US       15000
 NET_AGG_IDLE_FLUSH_TIMEOUT_US  100000
 NET_MAX_PAYLOAD_BYTES          3000
 ```
 
-DDR 中实际参与聚合队列管理的容量是 `699 * 3000 = 2097000` 字节，略小于 `2 MiB` TX buffer，余下尾部不用作聚合块。
+每个聚合块的有效 payload 容量仍是 `3000` 字节，但 DDR slot stride 是 `3008` 字节。`3008` 是 64 字节 cache line 对齐后的槽跨度，用来避免相邻 DMA slot 共享同一条 cache line。DDR 中实际参与聚合队列管理的容量是 `697 * 3008 = 2096576` 字节，略小于 `2 MiB` TX buffer，余下尾部不用作聚合块。
 
 聚合块提交条件：
 
@@ -594,7 +596,7 @@ SDK 工程当前 Debug 配置使用 Cortex-A9 hard-float flags：
 ## 修改注意事项
 
 - 改协议结构、flag、ACK 语义、CRC 默认值或 PC 发送策略时，同时改 `net_protocol.h`、`net_config.h` 和 `sender_core.py`，并更新本 README。
-- 改 `NET_AGG_BLOCK_BYTES` 时，必须同时检查 `NET_MAX_PAYLOAD_BYTES`、`NET_OFDM_MAX_PSDU_BYTES`、8 字节对齐、AXI DMA simple transfer 长度限制，以及 `tx_intf` auto-start 阈值。
+- 改 `NET_AGG_BLOCK_BYTES` 时，必须同时检查 `NET_AGG_BLOCK_STRIDE_BYTES`、`NET_MAX_PAYLOAD_BYTES`、`NET_OFDM_MAX_PSDU_BYTES`、8 字节对齐、AXI DMA simple transfer 长度限制，以及 `tx_intf` auto-start 阈值。DMA slot stride 必须保持 cache-line 对齐，不能让相邻 slot 共享 cache line。
 - 改 PC `chunk_size` 默认值时，确认 raw/Legacy 两种 wire payload 都不超过 PS 侧最大 payload，并考虑 1500 MTU 分片。
 - 改 cache 开关或新增 S2MM 路径时，先把 flush/invalidate 点设计清楚。
 - BSP 和硬件导出目录尽量由 Xilinx 工具再生成，不做零散手改。

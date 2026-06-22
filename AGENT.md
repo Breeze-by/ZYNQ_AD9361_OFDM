@@ -62,12 +62,12 @@ AD9361_test2/tools/pc_sender/sender_gui.py
 
 ## 调参边界
 
-- 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。
+- 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。DDR 中每个聚合 slot 的有效 payload 是 3000 字节，但 `NET_AGG_BLOCK_STRIDE_BYTES = 3008`，队列深度为 697；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
 - 默认 `Chunk Bytes = 1440`。raw 模式每包 wire payload 为 `1440`；Legacy 模式为 `16 + align8(1440) = 1456`。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。Legacy 模式下 chunk 最大建议不超过 `2984`，因为 wire payload 还要加 16 字节 OFDM 头。
-- 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；新增 S2MM 时必须在 DMA 完成后 invalidate。
+- 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发 `lb_diff`。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
-- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回 GUI。GUI 侧在等待 ACK 的同时处理 loopback 包，raw payload 模式下按 `stream_offset + chunk_offset` 对原始测试数据做 CRC/范围/逐字节校验。PL 设计者称 16 字节头为前 8 字节时间戳、后 8 字节速率和 payload 长度；当前日志显示 `meta1` 低 16 bit 的 `len_field - 4` 与 `tx_transfer` 匹配，字段编码仍需继续用日志确认。
+- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；如果比较结果为 `cmp=DIFF`，现在会强制打印，不受 128 块间隔限制。随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回 GUI。GUI 侧在等待 ACK 的同时处理 loopback 包，raw payload 模式下按 `stream_offset + chunk_offset` 对原始测试数据做 CRC/范围/逐字节校验。PL 设计者称 16 字节头为前 8 字节时间戳、后 8 字节速率和 payload 长度；当前日志显示 `meta1` 低 16 bit 的 `len_field - 4` 与 `tx_transfer` 匹配，字段编码仍需继续用日志确认。
 
 ## 当前推荐 GUI 测试设置
 

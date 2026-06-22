@@ -886,6 +886,10 @@ static void net_loopback_poll_s2mm(void)
         }
     }
 
+    if (mismatch_found != 0) {
+        should_log = 1;
+    }
+
     if (should_log != 0) {
         UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu rx_prefix=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
             (unsigned long)loopback_rx_transfer_id,
@@ -1258,10 +1262,10 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
 {
     uint32_t index;
 
-    if (tx_buffer_capacity_bytes < (NET_AGG_BLOCK_BYTES * NET_AGG_BLOCK_COUNT)) {
+    if (tx_buffer_capacity_bytes < (NET_AGG_BLOCK_STRIDE_BYTES * NET_AGG_BLOCK_COUNT)) {
         UART_Printf("NET agg buffer too small capacity=%lu required=%lu\r\n",
             (unsigned long)tx_buffer_capacity_bytes,
-            (unsigned long)(NET_AGG_BLOCK_BYTES * NET_AGG_BLOCK_COUNT));
+            (unsigned long)(NET_AGG_BLOCK_STRIDE_BYTES * NET_AGG_BLOCK_COUNT));
         return -1;
     }
 
@@ -1282,7 +1286,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     loopback_rx_buffer = (uint8_t *)RX_BUFFER_BASE;
     for (index = 0U; index < NET_AGG_BLOCK_COUNT; ++index) {
         agg_blocks[index].state = NET_AGG_BLOCK_FREE;
-        agg_blocks[index].buffer_ptr = dma_tx_buffer + (index * NET_AGG_BLOCK_BYTES);
+        agg_blocks[index].buffer_ptr = dma_tx_buffer + (index * NET_AGG_BLOCK_STRIDE_BYTES);
         agg_blocks[index].payload_len = 0U;
         agg_blocks[index].transfer_len = 0U;
         agg_blocks[index].submit_order = 0U;
@@ -1340,9 +1344,10 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     net_update_queue_stats();
     udp_recv(udp_control_pcb, net_udp_receive_callback, NULL);
     UART_Printf(
-        "UDP RX ready, agg_blocks=%u block_bytes=%u total_bytes=%lu max_payload=%u rec_window<=%u ack=on_accept\r\n",
+        "UDP RX ready, agg_blocks=%u block_bytes=%u stride=%u total_bytes=%lu max_payload=%u rec_window<=%u ack=on_accept\r\n",
         (unsigned)NET_AGG_BLOCK_COUNT,
         (unsigned)NET_AGG_BLOCK_BYTES,
+        (unsigned)NET_AGG_BLOCK_STRIDE_BYTES,
         (unsigned long)tx_buffer_capacity_bytes,
         (unsigned)NET_MAX_PAYLOAD_BYTES,
         (unsigned)NET_MAX_RECOMMENDED_WINDOW_SIZE);
