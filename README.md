@@ -446,7 +446,22 @@ agg_to            超时导致提交
 agg_avg/min/max   聚合块 payload_len 统计
 ```
 
-判断真实端到端吞吐时，对齐看 PC `delivered`、板端 `acc` 和板端 `dma`。`rx` 是输入尝试流量，主机发太快或重传多时可能高于 `acc`。
+PC 发送工具现在把速率拆成三个真实口径：
+
+```text
+app_deliv   原始业务 payload 被 ACK 的速率；raw/Legacy 下都按用户输入数据计数。
+wire_acc    PS 已接受的 wire payload 速率；对应板端 `acc`，Legacy 模式会包含 16 字节 OFDM 头和 padding。
+udp_tx      主机实际送入 UDP socket 的应用层字节速率；包含 16 字节 PC->PS 包头和重传。
+```
+
+判断真实端到端吞吐时：
+
+- 看业务数据吞吐，用 PC `app_deliv`。
+- 看 PS 实际接受了多少准备送 PL 的数据，用 PC `wire_acc` 对齐板端 `acc`。
+- 看 PL 实际收到多少 DMA 数据，用板端 `dma`。
+- 看主机实际发包压力，用 PC `udp_tx`，它会随重传和 ACK/BUSY/PENDING 变化。
+
+`rx` 是板端输入尝试流量，主机发太快或重传多时可能高于 `acc`。Legacy 模式下 `app_deliv` 与 `wire_acc/acc/dma` 本来就不应完全相等，因为 wire payload 额外包含 OFDM `addr0/addr1` 和 8 字节对齐 padding。
 
 ## 构建和运行
 

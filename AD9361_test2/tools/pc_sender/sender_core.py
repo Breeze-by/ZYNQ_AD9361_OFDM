@@ -89,6 +89,9 @@ class SenderStats:
     total_size: int = 0
     bytes_sent: int = 0
     bytes_acked: int = 0
+    wire_bytes_sent: int = 0
+    wire_bytes_acked: int = 0
+    udp_app_bytes_sent: int = 0
     chunks_acked: int = 0
     retries_used: int = 0
     ack_ok: int = 0
@@ -103,12 +106,15 @@ class SenderStats:
     last_seq: int = -1
     last_ack_status: int = -1
     last_transfer_len: int = 0
+    last_wire_payload_len: int = 0
     last_rtt_ms: float = 0.0
     current_rate_kib_s: float = 0.0
+    current_wire_rate_kib_s: float = 0.0
     average_rate_kib_s: float = 0.0
-    estimated_ps_rate_kib_s: float = 0.0
     ack_pending: int = 0
     delivered_rate_kib_s: float = 0.0
+    wire_delivered_rate_kib_s: float = 0.0
+    udp_app_tx_rate_kib_s: float = 0.0
     ack_batches: int = 0
     packets_sent: int = 0
     ack_received: int = 0
@@ -460,15 +466,27 @@ class UdpSender:
         if sleep_time > 0.0:
             time.sleep(sleep_time)
 
-    def _update_rates(self, stats: SenderStats, payload_len: int, transfer_len: int, ack_time: float, tx_time: float):
+    def _packet_wire_payload_len(self, packet: bytes) -> int:
+        return max(len(packet) - DATA_HEADER_SIZE, 0)
+
+    def _record_packet_send(self, stats: SenderStats, packet: bytes):
+        stats.packets_sent += 1
+        stats.wire_bytes_sent += self._packet_wire_payload_len(packet)
+        stats.udp_app_bytes_sent += len(packet)
+
+    def _update_rates(self, stats: SenderStats, payload_len: int, wire_payload_len: int,
+        ack_time: float, tx_time: float):
         elapsed = max(ack_time - stats.started_at, 1e-6)
         ack_elapsed = max(ack_time - tx_time, 1e-6)
 
         stats.last_rtt_ms = ack_elapsed * 1000.0
+        stats.last_wire_payload_len = wire_payload_len
         stats.current_rate_kib_s = (payload_len / 1024.0) / ack_elapsed
-        stats.estimated_ps_rate_kib_s = (transfer_len / 1024.0) / ack_elapsed
+        stats.current_wire_rate_kib_s = (wire_payload_len / 1024.0) / ack_elapsed
         stats.average_rate_kib_s = (stats.bytes_sent / 1024.0) / elapsed
         stats.delivered_rate_kib_s = (stats.bytes_acked / 1024.0) / elapsed
+        stats.wire_delivered_rate_kib_s = (stats.wire_bytes_acked / 1024.0) / elapsed
+        stats.udp_app_tx_rate_kib_s = (stats.udp_app_bytes_sent / 1024.0) / elapsed
         stats.packets_sent_per_second = stats.packets_sent / elapsed
         stats.ack_received_per_second = stats.ack_received / elapsed
 
@@ -548,6 +566,7 @@ class UdpSender:
                 packet_cache[completed_seq] = None
                 stats.bytes_sent = max(stats.bytes_sent, completed_entry["end"])
                 stats.bytes_acked += completed_entry["payload_len"]
+                stats.wire_bytes_acked += completed_entry["wire_payload_len"]
                 stats.chunks_acked += 1
 
             if outstanding:
@@ -565,7 +584,7 @@ class UdpSender:
             self._update_rates(
                 stats,
                 last_entry["payload_len"],
-                transfer_len,
+                last_entry["wire_payload_len"],
                 ack_time,
                 last_entry["tx_time"],
             )
@@ -591,7 +610,8 @@ class UdpSender:
                 if (ack_time - oldest_entry["tx_time"]) >= busy_retry_delay:
                     oldest_entry["retry_deadline"] = min(oldest_entry["retry_deadline"], ack_time)
                     oldest_entry["retry_reason"] = "gap"
-            self._update_rates(stats, entry["payload_len"], transfer_len, ack_time, entry["tx_time"])
+            self._update_rates(stats, entry["payload_len"], entry["wire_payload_len"],
+                ack_time, entry["tx_time"])
             if self.config.verbose_events:
                 self._emit(callback, "ack_status", {
                     "seq": ack_seq,
@@ -679,17 +699,19 @@ class UdpSender:
                     self._apply_rate_limit(stats.bytes_sent + (end - start), stats.started_at)
                     tx_time = time.time()
                     sock.sendto(packet, destination)
+                    wire_payload_len = self._packet_wire_payload_len(packet)
                     outstanding[next_seq] = {
                         "start": start,
                         "end": end,
                         "payload_len": end - start,
+                        "wire_payload_len": wire_payload_len,
                         "attempts": 1,
                         "tx_time": tx_time,
                         "retry_deadline": tx_time + self.config.timeout,
                         "retry_reason": "timeout",
                         "blocked_by_gap": False,
                     }
-                    stats.packets_sent += 1
+                    self._record_packet_send(stats, packet)
                     stats.bytes_sent = max(stats.bytes_sent, end)
                     made_progress = True
                     if self.config.verbose_events:
@@ -764,7 +786,7 @@ class UdpSender:
                     entry["retry_reason"] = "timeout"
                     entry["blocked_by_gap"] = False
                     sock.sendto(packet, destination)
-                    stats.packets_sent += 1
+                    self._record_packet_send(stats, packet)
                     stats.retries_used += 1
                     if reason == "timeout":
                         stats.timeout_count += 1
@@ -840,10 +862,13 @@ class UdpSender:
                     tx_time = time.time()
                     packet = self._build_packet(seq, chunk)
                     sock.sendto(packet, destination)
-                    stats.packets_sent += 1
+                    wire_payload_len = self._packet_wire_payload_len(packet)
+                    self._record_packet_send(stats, packet)
+                    stats.bytes_sent = max(stats.bytes_sent, end)
                     outstanding[seq] = {
                         "packet": packet,
                         "chunk": chunk,
+                        "wire_payload_len": wire_payload_len,
                         "start": start,
                         "end": end,
                         "attempts": 1,
@@ -905,6 +930,7 @@ class UdpSender:
                             acked[completed_seq] = True
                             stats.bytes_sent = max(stats.bytes_sent, completed_entry["end"])
                             stats.bytes_acked += len(completed_entry["chunk"])
+                            stats.wire_bytes_acked += completed_entry["wire_payload_len"]
                             stats.chunks_acked += 1
 
                         while base_seq < total_chunks and acked[base_seq]:
@@ -925,7 +951,7 @@ class UdpSender:
                         self._update_rates(
                             stats,
                             len(last_entry["chunk"]),
-                            transfer_len,
+                            last_entry["wire_payload_len"],
                             ack_time,
                             last_entry["tx_time"],
                         )
@@ -951,7 +977,8 @@ class UdpSender:
                             if (ack_time - oldest_entry["tx_time"]) >= busy_retry_delay:
                                 oldest_entry["retry_deadline"] = min(oldest_entry["retry_deadline"], ack_time)
                                 oldest_entry["retry_reason"] = "gap"
-                        self._update_rates(stats, len(chunk), transfer_len, ack_time, entry["tx_time"])
+                        self._update_rates(stats, len(chunk), entry["wire_payload_len"],
+                            ack_time, entry["tx_time"])
                         if self.config.verbose_events:
                             self._emit(callback, "ack_status", {
                                 "seq": ack_seq,
@@ -1016,7 +1043,7 @@ class UdpSender:
                     entry["retry_reason"] = "timeout"
                     entry["blocked_by_gap"] = False
                     sock.sendto(entry["packet"], destination)
-                    stats.packets_sent += 1
+                    self._record_packet_send(stats, entry["packet"])
                     if reason == "timeout":
                         stats.timeout_count += 1
                     if self.config.verbose_events:
@@ -1076,28 +1103,30 @@ def run_cli(args) -> int:
             stats = payload_dict["stats"]
             print(
                 f"seq={payload_dict['seq']} payload_len={payload_dict['payload_len']} ack=OK "
-                f"transfer_len={payload_dict['transfer_len']} progress={stats.bytes_sent}/{stats.total_size} "
-                f"rtt_ms={stats.last_rtt_ms:.2f} avg_rate={stats.average_rate_kib_s:.2f} KiB/s "
-                f"est_ps_rate={stats.estimated_ps_rate_kib_s:.2f} KiB/s"
+                f"ack_payload={payload_dict['transfer_len']} progress={stats.bytes_sent}/{stats.total_size} "
+                f"rtt_ms={stats.last_rtt_ms:.2f} app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
+                f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx={stats.udp_app_tx_rate_kib_s:.2f} KiB/s"
             )
         elif event_name == "ack_status":
             print(
                 f"seq={payload_dict['seq']} payload_len={payload_dict['payload_len']} "
-                f"ack_status={payload_dict['status_name']} transfer_len={payload_dict['transfer_len']} "
+                f"ack_status={payload_dict['status_name']} ack_payload={payload_dict['transfer_len']} "
                 f"retry={payload_dict['attempt']} rtt_ms={payload_dict['rtt_ms']:.2f}"
             )
         elif event_name == "ack_ignored":
             print(
                 f"ack_ignored seq={payload_dict['seq']} status={payload_dict['status_name']} "
-                f"transfer_len={payload_dict['transfer_len']}"
+                f"ack_payload={payload_dict['transfer_len']}"
             )
         elif event_name == "progress":
             stats = payload_dict["stats"]
             if args.throughput_mode:
                 print(
-                    f"THR acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
-                    f"inflight={payload_dict['window_used']} send={stats.average_rate_kib_s:.2f} KiB/s "
-                    f"deliv={stats.delivered_rate_kib_s:.2f} KiB/s ps_est={stats.estimated_ps_rate_kib_s:.2f} KiB/s "
+                    f"THR app_ack={stats.bytes_acked}/{stats.total_size} app_sched={stats.bytes_sent}/{stats.total_size} "
+                    f"wire_ack={stats.wire_bytes_acked} udp_tx={stats.udp_app_bytes_sent} "
+                    f"inflight={payload_dict['window_used']} app_sched_rate={stats.average_rate_kib_s:.2f} KiB/s "
+                    f"app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
+                    f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx={stats.udp_app_tx_rate_kib_s:.2f} KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"rtt={stats.last_rtt_ms:.2f} ms retry={stats.retries_used} timeout={stats.timeout_count} "
                     f"busy={stats.ack_busy} pending={stats.ack_pending} "
@@ -1107,8 +1136,10 @@ def run_cli(args) -> int:
                 )
             else:
                 print(
-                    f"progress acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
-                    f"inflight={payload_dict['window_used']} delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
+                    f"progress app_ack={stats.bytes_acked}/{stats.total_size} app_sched={stats.bytes_sent}/{stats.total_size} "
+                    f"wire_ack={stats.wire_bytes_acked} udp_tx={stats.udp_app_bytes_sent} "
+                    f"inflight={payload_dict['window_used']} app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
+                    f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx_rate={stats.udp_app_tx_rate_kib_s:.2f} KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"rtt={stats.last_rtt_ms:.2f} ms busy={stats.ack_busy} pending={stats.ack_pending}"
                 )
@@ -1116,8 +1147,10 @@ def run_cli(args) -> int:
             stats = payload_dict["stats"]
             elapsed = max(stats.finished_at - stats.started_at, 1e-6)
             print(
-                f"done sent={stats.bytes_sent} acked={stats.bytes_acked} elapsed={elapsed:.3f}s "
-                f"avg_sent={stats.average_rate_kib_s:.2f} KiB/s delivered={stats.delivered_rate_kib_s:.2f} KiB/s "
+                f"done app_sched={stats.bytes_sent} app_ack={stats.bytes_acked} "
+                f"wire_ack={stats.wire_bytes_acked} udp_tx={stats.udp_app_bytes_sent} elapsed={elapsed:.3f}s "
+                f"app_sched_rate={stats.average_rate_kib_s:.2f} KiB/s app_deliv={stats.delivered_rate_kib_s:.2f} KiB/s "
+                f"wire_acc={stats.wire_delivered_rate_kib_s:.2f} KiB/s udp_tx={stats.udp_app_tx_rate_kib_s:.2f} KiB/s "
                 f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                 f"ack_ok={stats.ack_ok} ack_pending={stats.ack_pending} timeouts={stats.timeout_count}"
             )

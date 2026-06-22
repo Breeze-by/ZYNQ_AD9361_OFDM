@@ -297,9 +297,9 @@ class SenderGui:
             ("Last Seq", self.seq_var),
             ("Inflight", self.window_used_var),
             ("RTT", self.rtt_var),
-            ("Delivered", self.current_rate_var),
-            ("Avg Sent", self.avg_rate_var),
-            ("Last ACK Rate", self.ps_rate_var),
+            ("App Delivered", self.current_rate_var),
+            ("UDP TX", self.avg_rate_var),
+            ("Wire Accepted", self.ps_rate_var),
             ("ACK OK", self.ack_ok_var),
             ("Pending", self.pending_count_var),
             ("Timeouts", self.timeout_count_var),
@@ -327,8 +327,8 @@ class SenderGui:
         chart_grid.pack(fill=tk.BOTH, expand=True)
 
         chart_defs = [
-            ("Delivered KiB/s", "#1976D2"),
-            ("Last ACK KiB/s", "#2E7D32"),
+            ("App Delivered KiB/s", "#1976D2"),
+            ("Wire Accepted KiB/s", "#2E7D32"),
             ("RTT ms", "#EF6C00"),
         ]
 
@@ -579,8 +579,8 @@ class SenderGui:
             self.window_used_var.set(str(payload.get("window_used", 0)))
             self.rtt_var.set(f"{stats.last_rtt_ms:.2f} ms")
             self.current_rate_var.set(f"{stats.delivered_rate_kib_s:.2f} KiB/s")
-            self.avg_rate_var.set(f"{stats.average_rate_kib_s:.2f} KiB/s")
-            self.ps_rate_var.set(f"{stats.estimated_ps_rate_kib_s:.2f} KiB/s")
+            self.avg_rate_var.set(f"{stats.udp_app_tx_rate_kib_s:.2f} KiB/s")
+            self.ps_rate_var.set(f"{stats.wire_delivered_rate_kib_s:.2f} KiB/s")
             self.ack_ok_var.set(str(stats.ack_ok))
             self.pending_count_var.set(str(stats.ack_pending))
             self.timeout_count_var.set(str(stats.timeout_count))
@@ -602,7 +602,7 @@ class SenderGui:
             self.status_text_var.set("Sending")
 
             self.sent_speed_chart.add_point(stats.delivered_rate_kib_s)
-            self.ps_speed_chart.add_point(stats.estimated_ps_rate_kib_s)
+            self.ps_speed_chart.add_point(stats.wire_delivered_rate_kib_s)
             self.rtt_chart.add_point(stats.last_rtt_ms)
 
             now = time.time()
@@ -612,8 +612,10 @@ class SenderGui:
             if self.verbose_var.get() or (now - self.last_summary_log_time) >= log_interval_s:
                 self.last_summary_log_time = now
                 self._append_log(
-                    f"PROGRESS acked={stats.bytes_acked}/{stats.total_size} sent={stats.bytes_sent}/{stats.total_size} "
-                    f"inflight={payload.get('window_used', 0)} delivered={stats.delivered_rate_kib_s:.2f}KiB/s "
+                    f"PROGRESS app_ack={stats.bytes_acked}/{stats.total_size} app_sched={stats.bytes_sent}/{stats.total_size} "
+                    f"wire_ack={stats.wire_bytes_acked} udp_tx={stats.udp_app_bytes_sent} "
+                    f"inflight={payload.get('window_used', 0)} app_deliv={stats.delivered_rate_kib_s:.2f}KiB/s "
+                    f"wire_acc={stats.wire_delivered_rate_kib_s:.2f}KiB/s udp_tx_rate={stats.udp_app_tx_rate_kib_s:.2f}KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
                     f"occ={stats.outstanding_window_avg:.1f}/{stats.outstanding_window_max} "
                     f"win={stats.effective_window_size}/{self.sender.config.window_size if self.sender else 0} "
@@ -663,7 +665,7 @@ class SenderGui:
             self.status_text_var.set(f"ACK {payload['status_name']} seq={payload['seq']}")
             if self.verbose_var.get():
                 self._append_log(
-                    f"ACK {payload['status_name']} seq={payload['seq']} transfer_len={payload['transfer_len']} "
+                    f"ACK {payload['status_name']} seq={payload['seq']} ack_payload={payload['transfer_len']} "
                     f"attempt={payload['attempt']} rtt={payload['rtt_ms']:.2f}ms"
                 )
             return
@@ -675,7 +677,8 @@ class SenderGui:
                 self.status_text_var.set(f"ACK OK seq={payload['seq']}")
                 self._append_log(
                     f"ACK OK seq={payload['seq']} progress={stats.bytes_acked}/{stats.total_size} "
-                    f"delivered={stats.delivered_rate_kib_s:.2f}KiB/s"
+                    f"app_deliv={stats.delivered_rate_kib_s:.2f}KiB/s "
+                    f"wire_acc={stats.wire_delivered_rate_kib_s:.2f}KiB/s"
                 )
             return
 
@@ -683,7 +686,7 @@ class SenderGui:
             if self.verbose_var.get():
                 self._append_log(
                     f"ACK IGNORED seq={payload['seq']} status={payload['status_name']} "
-                    f"transfer_len={payload['transfer_len']}"
+                    f"ack_payload={payload['transfer_len']}"
                 )
             return
 
@@ -691,8 +694,10 @@ class SenderGui:
             stats = payload["stats"]
             self.status_text_var.set("Done")
             self._append_log(
-                f"DONE acked={stats.bytes_acked} sent={stats.bytes_sent} "
-                f"avg_sent={stats.average_rate_kib_s:.2f}KiB/s delivered={stats.delivered_rate_kib_s:.2f}KiB/s "
+                f"DONE app_ack={stats.bytes_acked} app_sched={stats.bytes_sent} "
+                f"wire_ack={stats.wire_bytes_acked} udp_tx={stats.udp_app_bytes_sent} "
+                f"app_deliv={stats.delivered_rate_kib_s:.2f}KiB/s "
+                f"wire_acc={stats.wire_delivered_rate_kib_s:.2f}KiB/s udp_tx_rate={stats.udp_app_tx_rate_kib_s:.2f}KiB/s "
                 f"ack_ok={stats.ack_ok} timeouts={stats.timeout_count}"
             )
             self._on_done()
