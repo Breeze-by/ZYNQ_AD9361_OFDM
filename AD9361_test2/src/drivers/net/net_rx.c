@@ -625,6 +625,8 @@ static void net_loopback_poll_s2mm(void)
     uint32_t tx_crc;
     uint32_t mismatch_index;
     uint32_t compare_len;
+    uint32_t rx_prefix_len;
+    const uint8_t *rx_payload_ptr;
     int mismatch_found;
     int should_log;
     XTime now_time;
@@ -694,11 +696,16 @@ static void net_loopback_poll_s2mm(void)
     Xil_DCacheInvalidateRange((UINTPTR)loopback_rx_buffer, loopback_rx_expected_len);
 
     should_log = net_loopback_should_log(loopback_rx_transfer_id);
-    compare_len = loopback_tx_expected_len;
-    if (compare_len > loopback_rx_expected_len) {
-        compare_len = loopback_rx_expected_len;
+    rx_prefix_len = NET_LOOPBACK_RX_PREFIX_BYTES;
+    if (rx_prefix_len > loopback_rx_expected_len) {
+        rx_prefix_len = loopback_rx_expected_len;
     }
-    rx_crc = Net_Protocol_Crc32(loopback_rx_buffer, compare_len);
+    rx_payload_ptr = &loopback_rx_buffer[rx_prefix_len];
+    compare_len = loopback_tx_expected_len;
+    if (compare_len > (loopback_rx_expected_len - rx_prefix_len)) {
+        compare_len = loopback_rx_expected_len - rx_prefix_len;
+    }
+    rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
     tx_crc = 0U;
     mismatch_index = 0U;
     mismatch_found = 0;
@@ -710,7 +717,7 @@ static void net_loopback_poll_s2mm(void)
         }
         tx_crc = Net_Protocol_Crc32(block->buffer_ptr, compare_len);
         for (mismatch_index = 0U; mismatch_index < compare_len; ++mismatch_index) {
-            if (loopback_rx_buffer[mismatch_index] != block->buffer_ptr[mismatch_index]) {
+            if (rx_payload_ptr[mismatch_index] != block->buffer_ptr[mismatch_index]) {
                 mismatch_found = 1;
                 break;
             }
@@ -718,10 +725,11 @@ static void net_loopback_poll_s2mm(void)
     }
 
     if (should_log != 0) {
-        UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
+        UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu rx_prefix=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
             (unsigned long)loopback_rx_transfer_id,
             (unsigned long)loopback_rx_expected_len,
             (unsigned long)loopback_tx_expected_len,
+            (unsigned long)rx_prefix_len,
             (unsigned long)compare_len,
             (unsigned long)RxIrqStatusLast,
             (unsigned long)RxDmaSrLast,
@@ -731,11 +739,12 @@ static void net_loopback_poll_s2mm(void)
         if (mismatch_found != 0) {
             UART_Printf(" first_diff=%lu rx=0x%02X tx=0x%02X",
                 (unsigned long)mismatch_index,
-                (unsigned)loopback_rx_buffer[mismatch_index],
+                (unsigned)rx_payload_ptr[mismatch_index],
                 (unsigned)agg_blocks[dma_block_index].buffer_ptr[mismatch_index]);
         }
         UART_Printf(" done=%lu\r\n", (unsigned long)loopback_rx_done_count);
         net_loopback_print_words("S2MM rx_head", loopback_rx_buffer, loopback_rx_expected_len);
+        net_loopback_print_words("S2MM rx_payload_head", rx_payload_ptr, compare_len);
         if (dma_block_index >= 0) {
             net_loopback_print_words("S2MM tx_head", agg_blocks[dma_block_index].buffer_ptr,
                 agg_blocks[dma_block_index].transfer_len);
