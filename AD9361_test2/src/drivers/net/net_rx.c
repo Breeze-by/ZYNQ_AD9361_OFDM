@@ -510,6 +510,52 @@ static uint32_t net_load_le32(const uint8_t *ptr)
         ((uint32_t)ptr[3] << 24);
 }
 
+static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
+    uint32_t tx_transfer_len)
+{
+#if NET_LOOPBACK_S2MM_DEBUG_ENABLE
+    uint32_t timestamp_lo;
+    uint32_t timestamp_hi;
+    uint32_t meta0;
+    uint32_t meta1;
+    uint32_t length_field;
+    uint32_t payload_len_guess;
+    uint32_t rate_guess;
+
+    if (length < NET_LOOPBACK_RX_PREFIX_BYTES) {
+        UART_Printf("S2MM rx_hdr short len=%lu prefix=%u\r\n",
+            (unsigned long)length,
+            (unsigned)NET_LOOPBACK_RX_PREFIX_BYTES);
+        return;
+    }
+
+    timestamp_lo = net_load_le32(&buffer[0]);
+    timestamp_hi = net_load_le32(&buffer[4]);
+    meta0 = net_load_le32(&buffer[8]);
+    meta1 = net_load_le32(&buffer[12]);
+    length_field = meta1 & 0xFFFFU;
+    payload_len_guess = (length_field >= 4U) ? (length_field - 4U) : length_field;
+    rate_guess = (meta1 >> 16) & 0xFFU;
+
+    UART_Printf(
+        "S2MM rx_hdr ts=%08lX_%08lX meta0=0x%08lX meta1=0x%08lX "
+        "len_field=%lu payload_guess=%lu rate_guess=0x%02lX tx_transfer=%lu match=%s\r\n",
+        (unsigned long)timestamp_hi,
+        (unsigned long)timestamp_lo,
+        (unsigned long)meta0,
+        (unsigned long)meta1,
+        (unsigned long)length_field,
+        (unsigned long)payload_len_guess,
+        (unsigned long)rate_guess,
+        (unsigned long)tx_transfer_len,
+        (payload_len_guess == tx_transfer_len) ? "yes" : "no");
+#else
+    (void)buffer;
+    (void)length;
+    (void)tx_transfer_len;
+#endif
+}
+
 static void net_loopback_print_words(const char *tag, const uint8_t *buffer, uint32_t length)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
@@ -744,6 +790,8 @@ static void net_loopback_poll_s2mm(void)
         }
         UART_Printf(" done=%lu\r\n", (unsigned long)loopback_rx_done_count);
         net_loopback_print_words("S2MM rx_head", loopback_rx_buffer, loopback_rx_expected_len);
+        net_loopback_print_rx_header(loopback_rx_buffer, loopback_rx_expected_len,
+            loopback_tx_expected_len);
         net_loopback_print_words("S2MM rx_payload_head", rx_payload_ptr, compare_len);
         if (dma_block_index >= 0) {
             net_loopback_print_words("S2MM tx_head", agg_blocks[dma_block_index].buffer_ptr,
