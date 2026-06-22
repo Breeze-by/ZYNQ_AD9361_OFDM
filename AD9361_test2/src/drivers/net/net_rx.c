@@ -59,6 +59,7 @@ static int session_valid;
 static int current_session_validate_crc;
 static uint8_t *loopback_rx_buffer;
 static uint32_t loopback_rx_expected_len;
+static uint32_t loopback_tx_expected_len;
 static uint32_t loopback_rx_transfer_id;
 static uint32_t loopback_rx_done_count;
 static uint32_t loopback_rx_error_count;
@@ -360,6 +361,7 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc)
     TxDmaBuffLenLast = 0U;
     RxDmaBuffLenLast = 0U;
     loopback_rx_expected_len = 0U;
+    loopback_tx_expected_len = 0U;
     loopback_rx_transfer_id = 0U;
     loopback_rx_done_count = 0U;
     loopback_rx_error_count = 0U;
@@ -549,6 +551,8 @@ static void net_loopback_release_dma_block_if_done(void)
     agg_blocks[dma_block_index].transfer_len = 0U;
     agg_blocks[dma_block_index].submit_order = 0U;
     dma_block_index = -1;
+    loopback_rx_expected_len = 0U;
+    loopback_tx_expected_len = 0U;
     loopback_rx_done_for_current = 0;
     net_update_queue_stats();
     net_start_dma_transfer();
@@ -564,14 +568,15 @@ static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index
     }
 
     if ((block->transfer_len == 0U) || (block->transfer_len > RX_TRANSFER_LENGTH_BYTES)) {
-        UART_Printf("S2MM arm failed block=%d transfer=%lu rx_capacity=%u\r\n",
+        UART_Printf("S2MM arm failed block=%d tx_transfer=%lu rx_capacity=%u\r\n",
             block_index,
             (unsigned long)block->transfer_len,
             (unsigned)RX_TRANSFER_LENGTH_BYTES);
         return -1;
     }
 
-    loopback_rx_expected_len = block->transfer_len;
+    loopback_tx_expected_len = block->transfer_len;
+    loopback_rx_expected_len = RX_TRANSFER_LENGTH_BYTES;
     loopback_rx_transfer_id += 1U;
     loopback_rx_done_for_current = 0;
     XTime_GetTime(&loopback_rx_start_time);
@@ -597,10 +602,11 @@ static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index
 
     loopback_rx_busy = 1;
     if (net_loopback_should_log(loopback_rx_transfer_id) != 0) {
-        UART_Printf("S2MM start id=%lu block=%d expect=%lu tx_payload=%lu\r\n",
+        UART_Printf("S2MM start id=%lu block=%d capture=%lu tx_transfer=%lu tx_payload=%lu\r\n",
             (unsigned long)loopback_rx_transfer_id,
             block_index,
             (unsigned long)loopback_rx_expected_len,
+            (unsigned long)loopback_tx_expected_len,
             (unsigned long)block->payload_len);
     }
     return 0;
@@ -664,10 +670,11 @@ static void net_loopback_poll_s2mm(void)
         if (wait_elapsed_us >= NET_LOOPBACK_S2MM_WAIT_LOG_US) {
             total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
             loopback_rx_last_wait_log_time = now_time;
-            UART_Printf("S2MM wait id=%lu expect=%lu waited_ms=%lu txdone=%d rxdone=%d "
+            UART_Printf("S2MM wait id=%lu capture=%lu tx_transfer=%lu waited_ms=%lu txdone=%d rxdone=%d "
                 "tx_irq=0x%08lX rx_irq=0x%08lX rx_sr=0x%08lX rx_cr=0x%08lX rx_buflen=%lu\r\n",
                 (unsigned long)loopback_rx_transfer_id,
                 (unsigned long)loopback_rx_expected_len,
+                (unsigned long)loopback_tx_expected_len,
                 (unsigned long)(total_wait_us / 1000ULL),
                 TxDone,
                 RxDone,
@@ -687,16 +694,19 @@ static void net_loopback_poll_s2mm(void)
     Xil_DCacheInvalidateRange((UINTPTR)loopback_rx_buffer, loopback_rx_expected_len);
 
     should_log = net_loopback_should_log(loopback_rx_transfer_id);
-    rx_crc = Net_Protocol_Crc32(loopback_rx_buffer, loopback_rx_expected_len);
+    compare_len = loopback_tx_expected_len;
+    if (compare_len > loopback_rx_expected_len) {
+        compare_len = loopback_rx_expected_len;
+    }
+    rx_crc = Net_Protocol_Crc32(loopback_rx_buffer, compare_len);
     tx_crc = 0U;
     mismatch_index = 0U;
     mismatch_found = 0;
 
     if (dma_block_index >= 0) {
         block = &agg_blocks[dma_block_index];
-        compare_len = block->transfer_len;
-        if (compare_len > loopback_rx_expected_len) {
-            compare_len = loopback_rx_expected_len;
+        if (compare_len > block->transfer_len) {
+            compare_len = block->transfer_len;
         }
         tx_crc = Net_Protocol_Crc32(block->buffer_ptr, compare_len);
         for (mismatch_index = 0U; mismatch_index < compare_len; ++mismatch_index) {
@@ -708,9 +718,11 @@ static void net_loopback_poll_s2mm(void)
     }
 
     if (should_log != 0) {
-        UART_Printf("S2MM done id=%lu len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
+        UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
             (unsigned long)loopback_rx_transfer_id,
             (unsigned long)loopback_rx_expected_len,
+            (unsigned long)loopback_tx_expected_len,
+            (unsigned long)compare_len,
             (unsigned long)RxIrqStatusLast,
             (unsigned long)RxDmaSrLast,
             (unsigned long)rx_crc,
@@ -1126,6 +1138,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     TxDmaBuffLenLast = 0U;
     RxDmaBuffLenLast = 0U;
     loopback_rx_expected_len = 0U;
+    loopback_tx_expected_len = 0U;
     loopback_rx_transfer_id = 0U;
     loopback_rx_done_count = 0U;
     loopback_rx_error_count = 0U;

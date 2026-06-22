@@ -67,7 +67,7 @@ AD9361_test2/tools/pc_sender/sender_gui.py
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。Legacy 模式下 chunk 最大建议不超过 `2984`，因为 wire payload 还要加 16 字节 OFDM 头。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；新增 S2MM 时必须在 DMA 完成后 invalidate。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
-- 当前已开启第一阶段 PL->PS S2MM 回环调试：每次 MM2S 前 arm 同长度 S2MM，完成后打印 `S2MM done/wait/error`、CRC、首部 word 和 TX/RX 比较结果；尚未实现回环数据 UDP 发回 PC。
+- 当前已开启第一阶段 PL->PS S2MM 回环调试：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后按 `tx_transfer` 长度比较 RX 前段和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word 和 TX/RX 比较结果；尚未实现回环数据 UDP 发回 PC。
 
 ## 常用验证命令
 
