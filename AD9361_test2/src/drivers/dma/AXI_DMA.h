@@ -12,6 +12,12 @@ extern volatile int TxError;
 extern volatile int RxError;
 extern volatile u32 TxIrqStatusLast;
 extern volatile u32 RxIrqStatusLast;
+extern volatile u32 TxDmaSrLast;
+extern volatile u32 RxDmaSrLast;
+extern volatile u32 TxDmaCrLast;
+extern volatile u32 RxDmaCrLast;
+extern volatile u32 TxDmaBuffLenLast;
+extern volatile u32 RxDmaBuffLenLast;
 
 #define RESET_TIMEOUT_COUNTER 10000
 

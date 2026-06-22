@@ -353,6 +353,12 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc)
     RxError = 0;
     TxIrqStatusLast = 0U;
     RxIrqStatusLast = 0U;
+    TxDmaSrLast = 0U;
+    RxDmaSrLast = 0U;
+    TxDmaCrLast = 0U;
+    RxDmaCrLast = 0U;
+    TxDmaBuffLenLast = 0U;
+    RxDmaBuffLenLast = 0U;
     loopback_rx_expected_len = 0U;
     loopback_rx_transfer_id = 0U;
     loopback_rx_done_count = 0U;
@@ -573,6 +579,9 @@ static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index
     RxDone = 0;
     RxError = 0;
     RxIrqStatusLast = 0U;
+    RxDmaSrLast = 0U;
+    RxDmaCrLast = 0U;
+    RxDmaBuffLenLast = 0U;
     Xil_DCacheInvalidateRange((UINTPTR)loopback_rx_buffer, loopback_rx_expected_len);
 
     status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)loopback_rx_buffer,
@@ -622,9 +631,19 @@ static void net_loopback_poll_s2mm(void)
 
     if (RxError != 0) {
         loopback_rx_error_count += 1U;
-        UART_Printf("S2MM error id=%lu irq=0x%08lX errors=%lu\r\n",
+        UART_Printf("S2MM error id=%lu irq=0x%08lX sr=0x%08lX cr=0x%08lX buflen=%lu "
+            "err_int=%u err_slv=%u err_dec=%u err_sg_int=%u err_sg_slv=%u err_sg_dec=%u errors=%lu\r\n",
             (unsigned long)loopback_rx_transfer_id,
             (unsigned long)RxIrqStatusLast,
+            (unsigned long)RxDmaSrLast,
+            (unsigned long)RxDmaCrLast,
+            (unsigned long)RxDmaBuffLenLast,
+            (unsigned)((RxDmaSrLast & XAXIDMA_ERR_INTERNAL_MASK) != 0U),
+            (unsigned)((RxDmaSrLast & XAXIDMA_ERR_SLAVE_MASK) != 0U),
+            (unsigned)((RxDmaSrLast & XAXIDMA_ERR_DECODE_MASK) != 0U),
+            (unsigned)((RxDmaSrLast & XAXIDMA_ERR_SG_INT_MASK) != 0U),
+            (unsigned)((RxDmaSrLast & XAXIDMA_ERR_SG_SLV_MASK) != 0U),
+            (unsigned)((RxDmaSrLast & XAXIDMA_ERR_SG_DEC_MASK) != 0U),
             (unsigned long)loopback_rx_error_count);
         RxError = 0;
         Error = 0;
@@ -645,14 +664,18 @@ static void net_loopback_poll_s2mm(void)
         if (wait_elapsed_us >= NET_LOOPBACK_S2MM_WAIT_LOG_US) {
             total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
             loopback_rx_last_wait_log_time = now_time;
-            UART_Printf("S2MM wait id=%lu expect=%lu waited_ms=%lu txdone=%d rxdone=%d tx_irq=0x%08lX rx_irq=0x%08lX\r\n",
+            UART_Printf("S2MM wait id=%lu expect=%lu waited_ms=%lu txdone=%d rxdone=%d "
+                "tx_irq=0x%08lX rx_irq=0x%08lX rx_sr=0x%08lX rx_cr=0x%08lX rx_buflen=%lu\r\n",
                 (unsigned long)loopback_rx_transfer_id,
                 (unsigned long)loopback_rx_expected_len,
                 (unsigned long)(total_wait_us / 1000ULL),
                 TxDone,
                 RxDone,
                 (unsigned long)TxIrqStatusLast,
-                (unsigned long)RxIrqStatusLast);
+                (unsigned long)RxIrqStatusLast,
+                (unsigned long)XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_SR_OFFSET),
+                (unsigned long)XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_CR_OFFSET),
+                (unsigned long)XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_BUFFLEN_OFFSET));
         }
         return;
     }
@@ -685,10 +708,11 @@ static void net_loopback_poll_s2mm(void)
     }
 
     if (should_log != 0) {
-        UART_Printf("S2MM done id=%lu len=%lu irq=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
+        UART_Printf("S2MM done id=%lu len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
             (unsigned long)loopback_rx_transfer_id,
             (unsigned long)loopback_rx_expected_len,
             (unsigned long)RxIrqStatusLast,
+            (unsigned long)RxDmaSrLast,
             (unsigned long)rx_crc,
             (unsigned long)tx_crc,
             (mismatch_found != 0) ? "DIFF" : "OK");
@@ -729,6 +753,9 @@ static void net_start_dma_transfer(void)
     TxDone = 0;
     TxError = 0;
     TxIrqStatusLast = 0U;
+    TxDmaSrLast = 0U;
+    TxDmaCrLast = 0U;
+    TxDmaBuffLenLast = 0U;
 
     if (net_configure_tx_frame(block->payload_len, block->transfer_len) != 0) {
         UART_Printf("TX frame config failed block=%d payload=%lu transfer=%lu max=%u\r\n",
@@ -1092,6 +1119,12 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     RxError = 0;
     TxIrqStatusLast = 0U;
     RxIrqStatusLast = 0U;
+    TxDmaSrLast = 0U;
+    RxDmaSrLast = 0U;
+    TxDmaCrLast = 0U;
+    RxDmaCrLast = 0U;
+    TxDmaBuffLenLast = 0U;
+    RxDmaBuffLenLast = 0U;
     loopback_rx_expected_len = 0U;
     loopback_rx_transfer_id = 0U;
     loopback_rx_done_count = 0U;
@@ -1142,10 +1175,20 @@ void Net_RxPoll(void)
     }
 
     if (TxError != 0) {
-        UART_Printf("MM2S error block=%d len=%lu irq=0x%08lX\r\n",
+        UART_Printf("MM2S error block=%d len=%lu irq=0x%08lX sr=0x%08lX cr=0x%08lX buflen=%lu "
+            "err_int=%u err_slv=%u err_dec=%u err_sg_int=%u err_sg_slv=%u err_sg_dec=%u\r\n",
             dma_block_index,
             (dma_block_index >= 0) ? (unsigned long)agg_blocks[dma_block_index].transfer_len : 0UL,
-            (unsigned long)TxIrqStatusLast);
+            (unsigned long)TxIrqStatusLast,
+            (unsigned long)TxDmaSrLast,
+            (unsigned long)TxDmaCrLast,
+            (unsigned long)TxDmaBuffLenLast,
+            (unsigned)((TxDmaSrLast & XAXIDMA_ERR_INTERNAL_MASK) != 0U),
+            (unsigned)((TxDmaSrLast & XAXIDMA_ERR_SLAVE_MASK) != 0U),
+            (unsigned)((TxDmaSrLast & XAXIDMA_ERR_DECODE_MASK) != 0U),
+            (unsigned)((TxDmaSrLast & XAXIDMA_ERR_SG_INT_MASK) != 0U),
+            (unsigned)((TxDmaSrLast & XAXIDMA_ERR_SG_SLV_MASK) != 0U),
+            (unsigned)((TxDmaSrLast & XAXIDMA_ERR_SG_DEC_MASK) != 0U));
         NetStats_OnDmaError();
         dma_fatal_error = 1;
         dma_busy = 0;

@@ -10,6 +10,12 @@ volatile int TxError;
 volatile int RxError;
 volatile u32 TxIrqStatusLast;
 volatile u32 RxIrqStatusLast;
+volatile u32 TxDmaSrLast;
+volatile u32 RxDmaSrLast;
+volatile u32 TxDmaCrLast;
+volatile u32 RxDmaCrLast;
+volatile u32 TxDmaBuffLenLast;
+volatile u32 RxDmaBuffLenLast;
 
 
 /*****************************************************************************
@@ -80,6 +86,9 @@ void TxIntrHandler(void *Callback)
 	//读取挂起的中断，获取被声明的中断的位掩码
 	IrqStatus = XAxiDma_IntrGetIrq(AxiDmaInst, XAXIDMA_DMA_TO_DEVICE);
 	TxIrqStatusLast = IrqStatus;
+	TxDmaSrLast = XAxiDma_ReadReg(AxiDmaInst->RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_SR_OFFSET);
+	TxDmaCrLast = XAxiDma_ReadReg(AxiDmaInst->RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_CR_OFFSET);
+	TxDmaBuffLenLast = XAxiDma_ReadReg(AxiDmaInst->RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_BUFFLEN_OFFSET);
 
 	//确认挂起的中断
 	XAxiDma_IntrAckIrq(AxiDmaInst, IrqStatus, XAXIDMA_DMA_TO_DEVICE);
@@ -144,6 +153,9 @@ void RxIntrHandler(void *Callback)
 	//读取挂起的中断
 	IrqStatus = XAxiDma_IntrGetIrq(AxiDmaInst, XAXIDMA_DEVICE_TO_DMA);
 	RxIrqStatusLast = IrqStatus;
+	RxDmaSrLast = XAxiDma_ReadReg(AxiDmaInst->RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_SR_OFFSET);
+	RxDmaCrLast = XAxiDma_ReadReg(AxiDmaInst->RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_CR_OFFSET);
+	RxDmaBuffLenLast = XAxiDma_ReadReg(AxiDmaInst->RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_BUFFLEN_OFFSET);
 
 	//确认挂起的中断
 	XAxiDma_IntrAckIrq(AxiDmaInst, IrqStatus, XAXIDMA_DEVICE_TO_DMA);
