@@ -9,7 +9,16 @@
 - 阅读文件优先用 `rtk read`，搜索优先用 `rtk grep` 或 `rtk rg --files`，避免普通命令输出过大。
 - 只保留根目录 `README.md` 作为项目说明。协议、构建、调参、PC 工具说明都写进根 README。
 - `AD9361_test2_bsp/` 和 `System_wrapper_hw_platform_0/` 是 Xilinx 生成产物；除非任务明确要求，不要手动改 BSP、lwIP 源码或硬件平台文件。
-- 之后让你做了什么额外的事情，比如需要注意什么，你需要往这个AGENT.md里写入，以便后续的agent都直到这个事项
+- 之后用户提出了额外协作要求或项目注意事项，需要同步写入本 `AGENT.md`，让后续 agent 知道。
+
+## 用户协作约定
+
+- 每次完成代码或文档修改后，必须 `git commit` 并 `git push` 到远程；不要让用户自己 push。提交前后都要用 `rtk git status --short` 确认工作区状态。
+- 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`OFDM Legacy Wrap`、`PL Verify Pattern` 等。
+- 用户当前要发送纯 payload，不要默认要求勾选 `OFDM Legacy Wrap`，也不要默认给 `--ofdm-legacy` 之类的命令行参数。若确实需要 Legacy 模式，必须先说明原因并明确让用户在 GUI 勾选 `OFDM Legacy Wrap`。
+- 调试 PL 回环要分阶段做。由于本地无法板级验证，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
+- 需要用户反馈时，明确列出要复制的串口日志行，例如 `S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`STAT rate/state`、`MM2S error`。
+- 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
 ## 当前工程定位
 
