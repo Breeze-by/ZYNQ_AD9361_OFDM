@@ -263,6 +263,26 @@
 #define XPAR_PS7_SLCR_0_S_AXI_HIGHADDR 0xF8000FFF
 
 
+/* Definitions for peripheral OPENOFDM_TX_0 */
+#define XPAR_OPENOFDM_TX_0_BASEADDR 0x40000000
+#define XPAR_OPENOFDM_TX_0_HIGHADDR 0x40000FFF
+
+
+/* Definitions for peripheral TX_INTF_0 */
+#define XPAR_TX_INTF_0_BASEADDR 0x40001000
+#define XPAR_TX_INTF_0_HIGHADDR 0x40001FFF
+
+
+/* Definitions for peripheral OPENOFDM_RX_0 */
+#define XPAR_OPENOFDM_RX_0_BASEADDR 0x40002000
+#define XPAR_OPENOFDM_RX_0_HIGHADDR 0x40002FFF
+
+
+/* Definitions for peripheral RX_INTF_0 */
+#define XPAR_RX_INTF_0_BASEADDR 0x40003000
+#define XPAR_RX_INTF_0_HIGHADDR 0x40003FFF
+
+
 /******************************************************************/
 
 /* Definitions for driver GPIOPS */

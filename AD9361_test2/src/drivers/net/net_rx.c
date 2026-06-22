@@ -8,8 +8,9 @@
 #include "lwip/ip_addr.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
+#include "xil_io.h"
 #include "xtime_l.h"
-
+extern void OpenWifi_Tx_Rearm(uint32_t psdu_len);
 typedef enum {
     NET_AGG_BLOCK_FREE = 0,
     NET_AGG_BLOCK_FILLING,
@@ -57,6 +58,17 @@ static uint16_t current_session_id;
 static int session_valid;
 static int current_session_validate_crc;
 
+#define TX_INTF_BASE_ADDR 0x40001000U
+#define TX_INTF_REG2_OFFSET 0x08U
+#define TX_INTF_REG8_OFFSET 0x20U
+#define TX_INTF_REG17_OFFSET 0x44U
+#define TX_INTF_LEN_MASK 0x1FFFU
+#define TX_INTF_AUTO_START_EN_MASK (1U << 3)
+#define TX_INTF_AUTO_START_TH_SHIFT 4U
+#define TX_INTF_AUTO_START_TH_MASK (0x3FFU << TX_INTF_AUTO_START_TH_SHIFT)
+
+static int net_should_report_packet_log(void);
+
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
     if ((end_time <= start_time) || (COUNTS_PER_SECOND == 0U)) {
@@ -64,6 +76,54 @@ static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
     }
 
     return ((uint64_t)(end_time - start_time) * 1000000ULL) / (uint64_t)COUNTS_PER_SECOND;
+}
+
+static int net_configure_tx_frame(uint32_t psdu_len, uint32_t transfer_len)
+{
+    uint32_t expected_transfer_len;
+    uint32_t dma_words;
+    uint32_t auto_start_threshold;
+    uint32_t reg_value;
+
+    if ((psdu_len == 0U) || (psdu_len > NET_OFDM_MAX_PSDU_BYTES)) {
+        return -1;
+    }
+
+    expected_transfer_len = Net_Protocol_Align8(psdu_len);
+    if (transfer_len != expected_transfer_len) {
+        return -1;
+    }
+
+    dma_words = transfer_len / 8U;
+    auto_start_threshold = dma_words + 1U;
+    if ((dma_words == 0U) || (dma_words > NET_OFDM_MAX_DMA_WORDS) ||
+        (auto_start_threshold > 0x3FFU)) {
+        return -1;
+    }
+
+    reg_value = Xil_In32(TX_INTF_BASE_ADDR + TX_INTF_REG17_OFFSET);
+    reg_value = (reg_value & ~TX_INTF_LEN_MASK) | (psdu_len & TX_INTF_LEN_MASK);
+    Xil_Out32(TX_INTF_BASE_ADDR + TX_INTF_REG17_OFFSET, reg_value);
+
+    reg_value = Xil_In32(TX_INTF_BASE_ADDR + TX_INTF_REG8_OFFSET);
+    reg_value = (reg_value & ~TX_INTF_LEN_MASK) | (dma_words & TX_INTF_LEN_MASK);
+    Xil_Out32(TX_INTF_BASE_ADDR + TX_INTF_REG8_OFFSET, reg_value);
+
+    reg_value = Xil_In32(TX_INTF_BASE_ADDR + TX_INTF_REG2_OFFSET);
+    reg_value = (reg_value & ~(TX_INTF_AUTO_START_TH_MASK | TX_INTF_AUTO_START_EN_MASK)) |
+        ((auto_start_threshold << TX_INTF_AUTO_START_TH_SHIFT) & TX_INTF_AUTO_START_TH_MASK) |
+        TX_INTF_AUTO_START_EN_MASK;
+    Xil_Out32(TX_INTF_BASE_ADDR + TX_INTF_REG2_OFFSET, reg_value);
+
+    if (net_should_report_packet_log() != 0) {
+        UART_Printf("TX frame cfg psdu=%lu transfer=%lu words=%lu threshold=%lu\r\n",
+            (unsigned long)psdu_len,
+            (unsigned long)transfer_len,
+            (unsigned long)dma_words,
+            (unsigned long)auto_start_threshold);
+    }
+
+    return 0;
 }
 
 static int net_should_report_packet_log(void)
@@ -416,6 +476,22 @@ static void net_start_dma_transfer(void)
     TxDone = 0;
     Error = 0;
 
+    if (net_configure_tx_frame(block->payload_len, block->transfer_len) != 0) {
+        UART_Printf("TX frame config failed block=%d payload=%lu transfer=%lu max=%u\r\n",
+            ready_index,
+            (unsigned long)block->payload_len,
+            (unsigned long)block->transfer_len,
+            (unsigned)NET_OFDM_MAX_PSDU_BYTES);
+        NetStats_OnDmaError();
+        dma_fatal_error = 1;
+        dma_block_index = ready_index;
+        dma_busy = 0;
+        TxDone = 0;
+        Error = 0;
+        net_update_queue_stats();
+        return;
+    }
+    OpenWifi_Tx_Rearm(block->payload_len);
     Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
     status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)block->buffer_ptr,
         block->transfer_len, XAXIDMA_DMA_TO_DEVICE);
@@ -441,8 +517,9 @@ static void net_start_dma_transfer(void)
     net_update_queue_stats();
 
     if (net_should_report_packet_log() != 0) {
-        UART_Printf("DMA start block=%d len=%lu\r\n",
+        UART_Printf("DMA start block=%d payload=%lu transfer=%lu\r\n",
             ready_index,
+            (unsigned long)block->payload_len,
             (unsigned long)block->transfer_len);
     }
 }
