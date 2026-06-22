@@ -250,12 +250,6 @@ int main(void)
     UART_Printf("main start\r\n");
 
     TxBufferPtr = (uint8_t *)TX_BUFFER_BASE;
-    //
-    //将指针 RxBufferPtr 指向 RX_BUFFER_BASE
-	#define RX_BUFFER_BASE 0x1400000 //RX 缓冲区的基地址
-    uint64_t *RxBufferPtr; //接收数据的指针
-    RxBufferPtr = (uint64_t *)RX_BUFFER_BASE;
-    //
 
     ScuGic_Init();
 
@@ -293,14 +287,6 @@ int main(void)
         if (debug_print_count >= DEBUG_PRINT_INTERVAL) {
             debug_print_count = 0U;
             OpenWifi_RxDebugPrint();
-        }
-        RxDone = 0;
-        Xil_DCacheFlushRange((UINTPTR)RxBufferPtr, 4000*8);
-        XAxiDma_SimpleTransfer(&AxiDma0,(UINTPTR) RxBufferPtr,400*8, XAXIDMA_DEVICE_TO_DMA);
-        //等待 TX 完成、或者 RX 完成、或者传输错误，否则一直等待
-        while (!RxDone)//&& !RxDone
-        {
-        	/* 等待 */
         }
     }
 }
