@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from air_protocol import AIR_MAGIC
+from sender_core import ensure_airv_h264_source, find_existing_airv_h264
 from video_protocol import (
     AIRV_FRAME_KEY,
     AIRV_HEADER_BYTES,
@@ -129,6 +132,22 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertEqual(len(stream) % 1440, 0)
         header = parse_airv_header(stream[:AIRV_HEADER_BYTES])
         self.assertEqual(header.frame_seq, 0)
+
+    def test_airv_h264_sidecar_is_reused_for_mp4(self):
+        with TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            mp4_path = directory / "clip.mp4"
+            h264_path = directory / "clip.h264"
+            mp4_path.write_bytes(b"not a real mp4")
+            h264_path.write_bytes(b"\x00\x00\x00\x01\x65")
+            self.assertEqual(find_existing_airv_h264(mp4_path), h264_path)
+            self.assertEqual(ensure_airv_h264_source(str(mp4_path)), h264_path)
+
+    def test_airv_h264_input_is_used_directly(self):
+        with TemporaryDirectory() as temp_dir:
+            h264_path = Path(temp_dir) / "clip.264"
+            h264_path.write_bytes(b"\x00\x00\x00\x01\x65")
+            self.assertEqual(ensure_airv_h264_source(str(h264_path)), h264_path)
 
 
 if __name__ == "__main__":

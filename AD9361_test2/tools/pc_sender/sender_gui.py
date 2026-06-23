@@ -17,6 +17,7 @@ from sender_core import (
     TRANSFER_PROTOCOL_AIRV,
     TRANSFER_PROTOCOL_RAW,
     UdpSender,
+    ensure_airv_h264_source,
     load_payload,
 )
 
@@ -423,13 +424,22 @@ class SenderGui:
     def _clear_log(self):
         self.log_text.delete("1.0", tk.END)
 
-    def _build_payload(self) -> bytes:
+    def _build_payload(self, transfer_protocol: str):
         if self.mode_var.get() == "file":
             file_path = self.file_path_var.get().strip()
             if not file_path:
                 raise ValueError("Select a file first")
-            return load_payload(file_path=file_path)
-        return load_payload(test_size=int(self.test_size_var.get().strip()))
+            actual_path = Path(file_path)
+            if transfer_protocol == TRANSFER_PROTOCOL_AIRV:
+                actual_path = ensure_airv_h264_source(file_path)
+                if actual_path != Path(file_path):
+                    self.file_path_var.set(str(actual_path))
+                    self.file_info_var.set(
+                        f"{actual_path.name} | {actual_path.suffix.lower()} | "
+                        f"{actual_path.stat().st_size} bytes"
+                    )
+            return load_payload(file_path=str(actual_path)), actual_path
+        return load_payload(test_size=int(self.test_size_var.get().strip())), None
 
     def _start_send(self):
         try:
@@ -442,10 +452,10 @@ class SenderGui:
             if throughput_mode:
                 self.verbose_var.set(False)
 
-            payload = self._build_payload()
             transfer_protocol = self.transfer_protocol_var.get()
             if transfer_protocol == TRANSFER_PROTOCOL_AIRV and self.mode_var.get() != "file":
                 raise ValueError("AIRV Realtime Video requires File source")
+            payload, actual_source_path = self._build_payload(transfer_protocol)
             config = SenderConfig(
                 ip=self.ip_var.get().strip(),
                 port=int(self.port_var.get().strip()),
@@ -471,6 +481,8 @@ class SenderGui:
         self.send_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
         self.status_text_var.set("Sending")
+        if actual_source_path is not None and transfer_protocol == TRANSFER_PROTOCOL_AIRV:
+            self._append_log(f"AIRV source file={actual_source_path}")
         self._append_log(
             f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
             f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "

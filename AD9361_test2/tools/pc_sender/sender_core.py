@@ -3,11 +3,14 @@ import argparse
 import binascii
 import errno
 import random
+import shutil
 import socket
 import struct
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from air_protocol import (
@@ -72,6 +75,7 @@ TRANSFER_PROTOCOL_CHOICES = (
     TRANSFER_PROTOCOL_AIRV,
     TRANSFER_PROTOCOL_RAW,
 )
+AIRV_SOURCE_SUFFIXES = (".h264", ".264")
 
 
 @dataclass
@@ -184,6 +188,120 @@ def load_payload(test_size: int = 0, file_path: Optional[str] = None) -> bytes:
         with open(file_path, "rb") as fp:
             return fp.read()
     raise ValueError("one of test_size or file_path is required")
+
+
+def _candidate_h264_paths(source_path: Path):
+    candidates = []
+    for suffix in AIRV_SOURCE_SUFFIXES:
+        candidates.append(source_path.with_suffix(suffix))
+    candidates.append(source_path.with_name(f"{source_path.stem}_airv.h264"))
+
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        yield candidate
+
+
+def find_existing_airv_h264(source_path: Path) -> Optional[Path]:
+    if source_path.suffix.lower() in AIRV_SOURCE_SUFFIXES:
+        return source_path
+    for candidate in _candidate_h264_paths(source_path):
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _run_ffmpeg(command):
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return completed.returncode, completed.stderr.strip()
+
+
+def ensure_airv_h264_source(file_path: str) -> Path:
+    source_path = Path(file_path)
+    if not source_path.exists():
+        raise ValueError(f"source file does not exist: {source_path}")
+
+    existing = find_existing_airv_h264(source_path)
+    if existing is not None:
+        return existing
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(
+            "AIRV selected an MP4/container source but no same-name .h264/.264 file exists, "
+            "and ffmpeg was not found in PATH"
+        )
+
+    output_path = source_path.with_suffix(".h264")
+    temp_path = output_path.with_suffix(".h264.tmp")
+
+    copy_command = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-f",
+        "h264",
+        str(temp_path),
+    ]
+    return_code, copy_error = _run_ffmpeg(copy_command)
+    if return_code != 0:
+        transcode_command = [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_path),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-profile:v",
+            "baseline",
+            "-pix_fmt",
+            "yuv420p",
+            "-g",
+            "30",
+            "-bf",
+            "0",
+            "-f",
+            "h264",
+            str(temp_path),
+        ]
+        return_code, transcode_error = _run_ffmpeg(transcode_command)
+        if return_code != 0:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise RuntimeError(
+                "ffmpeg could not extract or generate an AIRV H.264 elementary stream. "
+                f"copy error: {copy_error[-800:]} transcode error: {transcode_error[-800:]}"
+            )
+
+    if not temp_path.exists() or temp_path.stat().st_size <= 0:
+        raise RuntimeError("ffmpeg completed but did not create a non-empty H.264 file")
+    temp_path.replace(output_path)
+    return output_path
 
 
 def align8(length: int) -> int:
@@ -1155,10 +1273,20 @@ class UdpSender:
 
 
 def run_cli(args) -> int:
-    payload = load_payload(test_size=args.test_size, file_path=args.file)
     transfer_protocol = args.transfer_protocol
     if transfer_protocol is None:
         transfer_protocol = TRANSFER_PROTOCOL_AIR0 if args.air_protocol else TRANSFER_PROTOCOL_RAW
+    file_path = args.file
+    if transfer_protocol == TRANSFER_PROTOCOL_AIRV:
+        if args.test_size > 0:
+            raise ValueError("AIRV realtime video requires --file, not --test-size")
+        if not file_path:
+            raise ValueError("AIRV realtime video requires --file")
+        airv_path = ensure_airv_h264_source(file_path)
+        if Path(file_path) != airv_path:
+            print(f"AIRV source prepared {airv_path}")
+        file_path = str(airv_path)
+    payload = load_payload(test_size=args.test_size, file_path=file_path)
     sender = UdpSender(SenderConfig(
         ip=args.ip,
         port=args.port,

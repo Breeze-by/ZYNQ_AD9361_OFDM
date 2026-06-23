@@ -86,7 +86,7 @@ AD9361_test2/tools/pc_sender/video_receiver_core.py
 
 - 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。DDR 中每个聚合 slot 的有效 payload 是 3000 字节，但 `NET_AGG_BLOCK_STRIDE_BYTES = 3008`，队列深度为 697；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
 - 默认 `Chunk Bytes = 1440` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1440`，其中 `64` 字节是 PC-only AIR0 头，最多 `1376` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后每包 wire payload 为原始文件/测试 payload。
-- AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV 头、最多 `1376` 字节 encoded video fragment 和零填充。第一阶段推荐 `.h264/.264` Annex-B 裸流作为输入，不建议直接用 MP4 容器测试实时模式。
+- AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV 头、最多 `1376` 字节 encoded video fragment 和零填充。发送端选择 MP4 时会自动在同目录查找同名 `.h264/.264`；找不到就调用 `ffmpeg` 生成并保存同名 `.h264`，以后复用该裸流。不要再要求用户手工准备 H.264 裸流。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 3000。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
@@ -122,7 +122,7 @@ Receiver Idle Finish(s) 10
 ```text
 Sender Transfer Mode    airv_video
 Sender Mode             File
-Sender file             H.264 Annex-B elementary stream
+Sender file             MP4 video or H.264 Annex-B elementary stream
 Chunk Bytes             1440
 Window Size             1
 ACK Timeout(s)          2.0

@@ -418,7 +418,16 @@ AIRV 使用 64 字节固定头，`Chunk Bytes=1440` 时每个 PC->PS wire payloa
 64-byte AIRV header + up to 1376-byte encoded video frame fragment + optional zero padding
 ```
 
-AIRV v1 头包含 `session_id/stream_id/frame_seq/frag_index/frag_count/frame_type/frame_size/fragment_offset/fragment_len/chunk_bytes/frame_crc32/fragment_crc32/pts_us` 等字段。为保持 64 字节头，`tx_timestamp_us` 当前只携带低 32 bit，主要用于诊断。发送端会把 H.264 Annex-B elementary stream 按 access unit 粗分帧；如果输入文件没有 Annex-B start code，则先作为单个 encoded frame 分片发送。因此第一阶段推荐输入 `.h264` / `.264` 裸 H.264 码流，不建议直接把普通 MP4 容器当实时视频源。
+AIRV v1 头包含 `session_id/stream_id/frame_seq/frag_index/frag_count/frame_type/frame_size/fragment_offset/fragment_len/chunk_bytes/frame_crc32/fragment_crc32/pts_us` 等字段。为保持 64 字节头，`tx_timestamp_us` 当前只携带低 32 bit，主要用于诊断。发送端会把 H.264 Annex-B elementary stream 按 access unit 粗分帧；如果输入文件没有 Annex-B start code，则先作为单个 encoded frame 分片发送。
+
+AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸流：
+
+- 如果选择的就是 `.h264` / `.264`，直接发送该文件。
+- 如果选择的是 `.mp4` 等容器文件，先在同目录查找同名 `.h264` / `.264`，例如 `clip.mp4` 对应 `clip.h264`。
+- 如果同名裸流不存在，则调用 `ffmpeg` 在同目录生成 `clip.h264` 并保存下来；后续再选同一个 MP4 会直接复用这个 `.h264`。
+- 如果 MP4 内部已经是 H.264，优先无损提取；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30 的裸流。
+
+因此第一阶段可以直接在发送 GUI 里选择 MP4，但本机必须能在 `PATH` 中找到 `ffmpeg`。
 
 AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，用于后续展示可见损伤。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop。AIRV 第一阶段不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
 
@@ -436,7 +445,7 @@ DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 b
 ```text
 Sender Transfer Mode    airv_video
 Sender Mode             File
-Sender file             H.264 Annex-B elementary stream, no audio
+Sender file             MP4 video or H.264 Annex-B elementary stream
 Chunk Bytes             1440
 Window Size             1
 ACK Timeout(s)          2.0

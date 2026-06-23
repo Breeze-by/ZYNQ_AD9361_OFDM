@@ -11,6 +11,7 @@ Stage 1 is implemented in the PC tools:
 - Added sender `transfer_protocol` support and sender GUI `Transfer Mode`.
 - Added receiver auto-detection for AIR0 vs AIRV and `VIDEO` / `DONE VIDEO` logs.
 - Added Python unit tests for AIRV header, fragmentation, bad CRC behavior, bad header CRC rejection, and AIR0/AIRV magic separation.
+- Added automatic AIRV MP4 preparation: reuse same-name `.h264/.264` when present, otherwise generate and save same-name `.h264` via `ffmpeg`.
 
 Stage 1 does not yet include actual decoded video preview. It validates the AIRV transport and realtime frame assembly through the existing PS/PL loopback path. Keep PS/PL payload-agnostic.
 
