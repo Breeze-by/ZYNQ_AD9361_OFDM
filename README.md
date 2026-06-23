@@ -454,7 +454,7 @@ Idle Finish(s)      Expected Bytes 为 0 时，收到数据后空闲多久自动
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
-当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Expected Bytes` 仍可填写原文件大小作为人工核对。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。
+当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Expected Bytes` 仍可填写原文件大小作为人工核对。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。如果最终存在缺失 AIR0 包，`INCOMPLETE` / `DONE` 还会输出 `missing_seq=...`，用逗号分隔缺失 `packet_seq` 范围，例如 `missing_seq=120-124,301,488`；范围很多时会截断为 `...(+N ranges)`。
 
 如果接收 GUI 出现 `INCOMPLETE`，或者 `DONE` 中 `gaps` 不为 0、`saved` 为空，说明 PC 接收端没有拿到完整连续 payload；此时工具不会保存带洞文件。大文件测试时优先确认 `rx` 最终等于原文件大小、`high` 等于原文件大小、`gaps=0`、`crc=0`、`len=0`。
 
@@ -529,6 +529,7 @@ saved       已保存的恢复文件路径。
 air         是否自动识别到 AIR0 payload header。
 air_rx      已通过 AIR0 header/payload CRC 校验的数据包数 / AIR0 总包数。
 miss        AIR0 packet_seq 统计出的缺失包数量。
+missing_seq 最终缺失 AIR0 packet_seq 范围；仅在 INCOMPLETE/DONE 且 miss>0 时输出。
 bad_hdr     AIR0 header magic/version/length/header_crc 校验失败次数。
 bad_payload AIR0 payload_crc32 校验失败次数。
 dup         AIR0 重复 packet_seq 数量。
@@ -583,7 +584,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 - 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
 - 所有 `LB UDP sent` 行。
 - 同一轮的 `STAT rate` / `STAT state` 行。
-- 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...` 和 `DONE ... saved=...` 行。
+- 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
 - 如果出现 `cmp=DIFF`，提供紧随其后的 `S2MM rx_head` 和 `S2MM tx_head`。
 
 如果只看到 `S2MM start` 和周期性 `S2MM wait`，说明 S2MM 没有完成，重点看 PL 是否输出 TLAST、S2MM 中断是否接到 GIC、RX stream 是否有数据。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。

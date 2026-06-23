@@ -314,7 +314,10 @@ class ReceiverGui:
         self.air_var.set(
             f"{stats.air_packets}/{stats.air_total_packets}" if stats.air_mode else "off"
         )
-        self.air_missing_var.set(str(stats.air_missing_packets))
+        if stats.air_missing_ranges:
+            self.air_missing_var.set(f"{stats.air_missing_packets} ({stats.air_missing_ranges})")
+        else:
+            self.air_missing_var.set(str(stats.air_missing_packets))
         self.air_error_var.set(
             f"{stats.air_bad_header} / {stats.air_bad_payload_crc} / {stats.air_duplicates}"
         )
@@ -381,13 +384,21 @@ class ReceiverGui:
             stats = payload["stats"]
             self._update_stats(stats)
             self.status_var.set("Incomplete")
-            self._append_log(f"INCOMPLETE {payload['reason']}")
+            missing_ranges = (
+                f" missing_seq={stats.air_missing_ranges}"
+                if stats.air_missing_ranges else ""
+            )
+            self._append_log(f"INCOMPLETE {payload['reason']}{missing_ranges}")
             return
 
         if event_name == "done":
             stats = payload["stats"]
             self._update_stats(stats)
             self.status_var.set("Done" if stats.saved_path else "Incomplete")
+            missing_ranges = (
+                f" missing_seq={stats.air_missing_ranges}"
+                if stats.air_missing_ranges else ""
+            )
             self._append_log(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
@@ -395,7 +406,7 @@ class ReceiverGui:
                 f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
                 f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates} "
                 f"file_crc={int(stats.air_file_crc_ok)} saved={stats.saved_path} "
-                f"reason={stats.incomplete_reason}"
+                f"reason={stats.incomplete_reason}{missing_ranges}"
             )
             self._on_done()
             return

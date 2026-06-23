@@ -88,6 +88,7 @@ class ReceiverStats:
     air_file_size: int = 0
     air_file_crc32: int = 0
     air_file_crc_ok: bool = False
+    air_missing_ranges: str = ""
 
 
 def parse_args():
@@ -422,6 +423,45 @@ class LoopbackReceiver:
                 0,
             )
 
+    def _format_air_missing_ranges(self, stats: ReceiverStats, max_ranges: int = 16) -> str:
+        if stats.air_total_packets <= 0 or stats.air_missing_packets <= 0:
+            return ""
+
+        ranges = []
+        omitted_ranges = 0
+        range_start = None
+        previous_missing = None
+
+        for seq in range(stats.air_total_packets + 1):
+            is_missing = seq < stats.air_total_packets and seq not in self._air_received_seqs
+            if is_missing:
+                if range_start is None:
+                    range_start = seq
+                previous_missing = seq
+                continue
+
+            if range_start is None:
+                continue
+
+            if len(ranges) < max_ranges:
+                if range_start == previous_missing:
+                    ranges.append(str(range_start))
+                else:
+                    ranges.append(f"{range_start}-{previous_missing}")
+            else:
+                omitted_ranges += 1
+
+            range_start = None
+            previous_missing = None
+
+        if omitted_ranges != 0:
+            ranges.append(f"...(+{omitted_ranges} ranges)")
+        return ",".join(ranges)
+
+    def _refresh_air_missing_ranges(self, stats: ReceiverStats):
+        self._update_air_missing(stats)
+        stats.air_missing_ranges = self._format_air_missing_ranges(stats)
+
     def _try_enable_air_mode(self, stats: ReceiverStats):
         if self._air_checked:
             return
@@ -544,6 +584,8 @@ class LoopbackReceiver:
             })
 
     def _mark_incomplete(self, stats: ReceiverStats, callback, reason: str):
+        if stats.air_mode:
+            self._refresh_air_missing_ranges(stats)
         stats.incomplete_reason = reason
         self._emit(callback, "incomplete", {"reason": reason, "stats": stats})
 
@@ -579,6 +621,7 @@ class LoopbackReceiver:
                 return False
             if stats.air_missing_packets != 0:
                 if force:
+                    self._refresh_air_missing_ranges(stats)
                     self._mark_incomplete(
                         stats,
                         callback,
@@ -698,6 +741,8 @@ class LoopbackReceiver:
             self._discard_unsaved()
             raise
 
+        if stats.air_mode:
+            self._refresh_air_missing_ranges(stats)
         self._discard_unsaved()
         self._emit_progress(callback, stats, force=True)
         self._emit(callback, "done", {"stats": stats})
@@ -749,13 +794,22 @@ def run_cli(args) -> int:
             print(f"SAVED {payload['path']}")
         elif event_name == "incomplete":
             stats = payload["stats"]
+            missing_ranges = (
+                f" missing_seq={stats.air_missing_ranges}"
+                if stats.air_missing_ranges else ""
+            )
             print(
                 f"INCOMPLETE {payload['reason']} rx={stats.contiguous_bytes} "
                 f"high={stats.highest_end} gaps={stats.gap_count} "
                 f"air={int(stats.air_mode)} miss={stats.air_missing_packets}"
+                f"{missing_ranges}"
             )
         elif event_name == "done":
             stats = payload["stats"]
+            missing_ranges = (
+                f" missing_seq={stats.air_missing_ranges}"
+                if stats.air_missing_ranges else ""
+            )
             print(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
@@ -763,7 +817,7 @@ def run_cli(args) -> int:
                 f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
                 f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates} "
                 f"file_crc={int(stats.air_file_crc_ok)} saved={stats.saved_path} "
-                f"reason={stats.incomplete_reason}"
+                f"reason={stats.incomplete_reason}{missing_ranges}"
             )
 
     receiver.run(callback=callback)
