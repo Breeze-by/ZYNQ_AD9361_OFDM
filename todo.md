@@ -1,261 +1,300 @@
-# TODO: Realtime Video Transport Mode
+# TODO: AIRV Realtime Video Handoff
 
-This file captures the next protocol milestone for a future agent. It is a task plan, not the main project documentation. Keep the complete project documentation in `README.md` after implementation.
+This file is the active task handoff for the next agent. It is a roadmap and lab log, not the main project documentation. Keep stable user-facing documentation in root `README.md` after implementation.
 
-## Status
+## Current State
 
-Stage 1 is implemented in the PC tools:
+AIR0 exact file/test-data recovery is working and should be preserved.
 
-- Added `video_protocol.py` with AIRV v1 64-byte fixed header and H.264 Annex-B frame fragmentation.
-- Added `video_receiver_core.py` with realtime frame assembly metrics.
-- Added sender `transfer_protocol` support and sender GUI `Transfer Mode`.
-- Added receiver auto-detection for AIR0 vs AIRV and `VIDEO` / `DONE VIDEO` logs.
-- Added Python unit tests for AIRV header, fragmentation, bad CRC behavior, bad header CRC rejection, and AIR0/AIRV magic separation.
-- Added automatic AIRV MP4 preparation: reuse same-name `.h264/.264` when present, otherwise generate and save same-name `.h264` via `ffmpeg`.
-- Refined AIRV Stage 1 metrics and framing: receiver `fps` now uses AIRV PTS instead of Python processing bursts, generated H.264 inserts AUD, and the Annex-B parser uses AUD/slice headers to reduce multi-slice overcounting.
+AIRV Stage 1 transport is implemented in the PC tools and has passed board loopback validation. PS/PL remain payload-agnostic: after `net_data_header_t`, AIR0/AIRV bytes are still ordinary wire payload forwarded through PS DDR -> AXI DMA MM2S -> PL loopback -> S2MM -> PS UDP return.
 
-Stage 1 does not yet include actual decoded video preview. It validates the AIRV transport and realtime frame assembly through the existing PS/PL loopback path. Keep PS/PL payload-agnostic.
-
-## Goal
-
-Add a separate realtime video transport mode in addition to the existing file/test-data AIR0 mode.
-
-Current AIR0 mode is a file recovery protocol: it restores the exact original byte stream and saves it only when complete. The new mode should behave like a realtime video stream:
-
-- Sender GUI can choose the transfer mode.
-- Receiver GUI/CLI auto-detects the payload mode and dispatches to the correct handler.
-- Realtime video is displayed while it is being received.
-- If packets/fragments are lost, skip the affected frame and continue with the next valid frame.
-- If video frame payload bytes are corrupted but the frame header is still usable, do not drop the frame just because payload CRC fails. Try to decode/display it so visual corruption can be demonstrated.
-- If the frame header is corrupted, the fragment cannot be assigned to a frame, or required fragments are missing past the realtime deadline, drop that frame and resynchronize at the next valid frame/keyframe.
-- No audio is needed.
-- Do not add receiver-side ACK/retransmission or FEC in this milestone.
-- Keep PS/PL payload-agnostic. PS and PL must continue treating the PC->PS payload after `net_data_header_t` as ordinary wire payload.
-
-## Terminology
-
-- `AIR0`: current PC-only file/test-data payload header. It is for complete file recovery and CRC-verified save.
-- `AIRV`: proposed PC-only realtime video payload header. It is for frame-fragment streaming and live playback.
-- `wire payload`: bytes after `net_data_header_t`; PS/PL forward this without parsing.
-- `video frame`: one encoded access unit intended for decode/display.
-- `fragment`: one piece of a video frame small enough to fit inside one PC->PS wire payload.
-
-## Mode Selection
-
-Sender side:
-
-- Add a transfer mode selector separate from existing `File` / `Test Data` source selection.
-- Suggested modes:
-  - `AIR0 File/Test` for current exact recovery behavior.
-  - `AIRV Realtime Video` for live video playback.
-- In AIRV mode, source should be a video file path for now. Live camera capture can be a later milestone.
-- Keep `Payload CRC32` enabled by default for PC->PS transport integrity.
-- AIRV mode should still use `Chunk Bytes=1440` by default.
-
-Receiver side:
-
-- Auto-detect mode from the returned wire payload stream:
-  - AIR0 magic `0x30524941` at expected header positions means current file recovery path.
-  - AIRV magic should dispatch to realtime video path.
-  - Raw fallback remains as existing raw assembler behavior.
-- The receiver UI should not require the user to preselect AIR0 vs AIRV.
-
-## Proposed AIRV Header
-
-Add `AD9361_test2/tools/pc_sender/video_protocol.py`.
-
-Use a fixed-size little-endian header, designed for one fragment per PC->PS packet:
+Relevant files:
 
 ```text
-magic               4 bytes  "AIRV" little-endian constant, e.g. 0x56524941
-version             1 byte
-header_len          1 byte
-flags               2 bytes
-session_id          4 bytes
-stream_id           4 bytes
-frame_seq           4 bytes
-frag_index          2 bytes
-frag_count          2 bytes
-frame_type          1 byte   unknown / keyframe / delta
-reserved0           1 byte
-header_crc32        4 bytes
-frame_size          4 bytes
-fragment_offset     4 bytes
-fragment_len        2 bytes
-chunk_bytes         2 bytes
-frame_crc32         4 bytes  diagnostic only; do not require it for display
-fragment_crc32      4 bytes  diagnostic only; do not require it for display
-pts_us              8 bytes
-tx_timestamp_us     8 bytes
+AD9361_test2/tools/pc_sender/video_protocol.py
+    AIRV v1 header, H.264 Annex-B parsing, frame fragmentation.
+
+AD9361_test2/tools/pc_sender/video_receiver_core.py
+    AIRV realtime frame assembler and metrics.
+
+AD9361_test2/tools/pc_sender/sender_core.py
+    transfer_protocol selection, AIRV MP4/.h264 preparation, ffmpeg fallback.
+
+AD9361_test2/tools/pc_sender/sender_gui.py
+    Sender GUI Transfer Mode.
+
+AD9361_test2/tools/pc_sender/receiver_core.py
+    AIR0/AIRV auto-detection from loopback payload stream.
+
+AD9361_test2/tools/pc_sender/receiver_gui.py
+    AIRV metrics display and VIDEO logs.
 ```
 
-This layout is 64 bytes if packed carefully. Keep it at 64 bytes if possible so `Chunk Bytes=1440` leaves `1376` bytes for video fragment data, matching AIR0.
+## Latest Verified Board Results
 
-Suggested flags:
+### AIR0 Regression
+
+User tested 64 MiB AIR0 with:
 
 ```text
-DATA          0x0001
-KEYFRAME      0x0002
-LAST_FRAGMENT 0x0004
-CONFIG        0x0008   optional codec extradata / SPS/PPS packet
+Transfer Mode           air0_file
+Mode                    Test Data
+Test Bytes              67108864
+Chunk Bytes             1440
+Window Size             1
+Rate Limit KiB/s        400
+Throughput Mode         checked
+Payload CRC32           checked
 ```
 
-Header validation should be strict:
-
-- magic/version/header_len/header_crc32 must be valid.
-- `frag_index < frag_count`.
-- `fragment_len <= chunk_bytes - header_len`.
-- `fragment_offset + fragment_len <= frame_size`.
-- `LAST_FRAGMENT` should only appear on `frag_index == frag_count - 1`.
-
-Payload CRC policy:
-
-- Record `bad_fragment_crc` and `bad_frame_crc` counters.
-- Do not automatically drop a frame only because fragment/frame CRC fails.
-- If the header is valid and enough fragments arrived, assemble and feed the decoder anyway. This intentionally allows visible corruption for demonstrations.
-
-## Sender Implementation Plan
-
-Start in PC tools only:
-
-- Update `sender_core.py` with an explicit transfer protocol enum or config field:
-  - `air0_file`
-  - `airv_video`
-  - raw legacy fallback if still needed
-- Keep current AIR0 behavior unchanged.
-- Add AIRV packet builder in `video_protocol.py`.
-- Add GUI controls in `sender_gui.py`:
-  - Transfer Mode: `File/Test AIR0` and `Realtime Video AIRV`.
-  - For AIRV, source path should be a video file.
-  - Keep current network controls.
-
-Video extraction/transcoding:
-
-- Prefer PyAV if available. If not, use `ffmpeg` CLI as a subprocess fallback.
-- First milestone may require users to provide H.264 elementary stream or MP4 with H.264 video.
-- Recommended encoding profile for testing:
-  - H.264
-  - no audio
-  - no B-frames
-  - short GOP, e.g. keyframe every 15 to 30 frames
-  - baseline or main profile
-- Sender should extract encoded video frames/access units and fragment each encoded frame across AIRV packets.
-- Send SPS/PPS / codec extradata before keyframes or periodically if needed.
-
-Do not try to stream arbitrary MP4 file bytes directly for realtime playback. MP4 is a container and does not provide simple packet loss recovery or frame boundary semantics by itself.
-
-## Receiver Implementation Plan
-
-Add a realtime video path alongside existing AIR0 file recovery:
-
-- Add `video_receiver_core.py` or keep a clearly separated class in `receiver_core.py`.
-- On AIRV detection, create a `VideoStreamAssembler`.
-- Track frames by `frame_seq`.
-- For each frame:
-  - Collect fragments by `frag_index`.
-  - Allow corrupt fragment payload if header is valid.
-  - If all required fragments arrive before the frame deadline, assemble the frame and send it to decoder.
-  - If fragments are missing after deadline, drop the frame and count `drop_missing`.
-  - If header/meta is invalid and frame cannot be reconstructed, count `bad_header` / `bad_meta` and resync at next valid header/frame.
-- Use a small jitter buffer:
-  - Start with 100 to 300 ms.
-  - GUI should expose this later if needed.
-- Maintain realtime order:
-  - Display frames in increasing `frame_seq`.
-  - If a frame is missing past deadline, skip it and continue.
-
-Decoder/playback:
-
-- First implementation target can use PyAV to decode H.264 packets and convert to frames.
-- Display frames in a Tkinter canvas or separate OpenCV window.
-- If decoder errors after a corrupt frame, keep the pipeline alive and resume at the next decodable frame.
-- If a reference frame is missing and the decoder becomes unstable, wait until the next keyframe before displaying again.
-
-Important behavior decision from user:
-
-- Do not drop frames just because payload CRC is bad. Try to display corrupted frames if the frame can be assembled and the decoder accepts it.
-- Drop/skip only when packets/fragments are missing, frame headers are unusable, or the decoder cannot recover.
-
-## Receiver Metrics
-
-Add separate AIRV metrics so AIR0 file metrics remain clear:
+Result was successful:
 
 ```text
-airv=1
-frame_rx=...
-frame_show=...
-frame_drop=...
-frag_rx=...
-frag_missing=...
-bad_hdr=...
-bad_meta=...
-bad_frag_crc=...
-bad_frame_crc=...
-keyframe_rx=...
-waiting_keyframe=...
-latency_ms=...
-fps=...
+Sender DONE app_ack=67108864 app_sched=67108864 wire_ack=70230208 udp_tx=71042576 ack_ok=48771 timeouts=0
+Receiver DONE rx=67108864 high=67108864 gaps=0 air=1 air_rx=48771/48771 miss=0 bad_hdr=0 bad_payload=0 bad_meta=0 dup=0 file_crc=1 got_last=1 saved=output\test.bin
 ```
 
-For logs:
+Conclusion: AIR0 exact recovery path is good. Do not regress it.
 
-- `PROGRESS` should use streaming terms, not AIR0 file terms.
-- Example:
+### AIRV Transport
+
+User tested AIRV with an MP4 source. Sender auto-prepared same-name `.h264` through ffmpeg. Test settings were effectively:
 
 ```text
-VIDEO frame_rx=1200 frame_show=1187 frame_drop=13 frag_rx=9000 frag_missing=27 bad_frag_crc=5 waiting_keyframe=0 fps=24.8 latency_ms=180
+Transfer Mode           airv_video
+Mode                    File
+Chunk Bytes             1440
+Window Size             1
+Rate Limit KiB/s        400
+Throughput Mode         checked
+Payload CRC32           checked
+Receiver Raw Expected   0
+Receiver Idle Finish(s) 10
 ```
 
-## Testing Plan
+Latest receiver result:
 
-Local Python-only tests:
+```text
+VIDEO frame_rx=18825 frame_show=18825 frame_drop=0 frag_rx=112386 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=126 waiting_keyframe=0 fps=30.0 latency_ms=45.3
+VIDEO frame_rx=18881 frame_show=18881 frame_drop=0 frag_rx=112682 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=126 waiting_keyframe=0 fps=30.0 latency_ms=30.9
+VIDEO frame_rx=18921 frame_show=18921 frame_drop=0 frag_rx=112948 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=127 waiting_keyframe=0 fps=30.0 latency_ms=26.6
+VIDEO_DONE frame_rx=18947 frame_show=18947 frame_drop=0 frag_rx=113005 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0
+DONE VIDEO frame_rx=18947 frame_show=18947 frame_drop=0 frag_rx=113005 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=127 waiting_keyframe=0 fps=30.0 latency_ms=0.0 reason=AIRV stream idle finish; realtime mode does not save an exact file
+```
 
-- AIRV header build/parse roundtrip.
-- Fragment a fake frame and reassemble exactly.
-- Drop one fragment and verify frame is skipped after deadline.
-- Corrupt fragment payload with valid header and verify frame is still assembled and marked `bad_frag_crc`.
-- Corrupt header CRC and verify fragment is rejected/resync works.
-- Mix AIR0 and AIRV samples and verify receiver mode auto-detection dispatches correctly.
-- Regression: current AIR0 file save still passes.
+Latest sender result:
 
-Board tests:
+```text
+DONE app_ack=162727200 app_sched=162727200 wire_ack=162727200 udp_tx=164612448 app_deliv=400.00KiB/s wire_acc=400.00KiB/s udp_tx_rate=404.63KiB/s ack_ok=113005 timeouts=0
+```
 
-1. Keep current small AIR0 test to verify existing file path still works.
-2. AIRV low-rate test:
-   - small H.264 test clip
-   - `Chunk Bytes=1440`
-   - `Window Size=1`
-   - `Rate Limit KiB/s=400`
-3. AIRV moderate-rate test:
-   - `Window Size=4`
-   - `Rate Limit KiB/s=550` or near observed stable throughput
-4. Confirm:
-   - video displays while receiving
-   - no full-file wait before display
-   - missing fragments increment drop counters
-   - corrupt payload can produce visible artifacts rather than automatic file-level rejection
+Conclusion: AIRV transport integrity is good at 400 KiB/s, window 1. No missing fragments, no bad headers, no bad metadata, no payload/frame CRC errors, no sender timeouts.
 
-## Documentation Updates After Implementation
+## Important Interpretation Notes
 
-Update root `README.md` with:
+- `frame_rx/frame_show` currently means "assembled encoded AIRV frames", not decoded/displayed frames.
+- `fps` now comes from AIRV `pts_us`, not Python burst processing speed. It currently defaults to about 30fps because sender writes `frame_interval_us=33333` unless improved.
+- `latency_ms` is currently first-fragment-to-frame-complete assembler time. It is not end-to-end RF/video latency.
+- Final `DONE VIDEO ... latency_ms=0.0` is not meaningful; it is caused by final idle-finish bookkeeping after no new frame. Do not treat that as measured latency.
+- AIRV does not save a recovered file by design. AIR0 remains the exact file recovery mode.
 
-- AIR0 vs AIRV mode descriptions.
-- Sender GUI field descriptions.
-- Receiver auto-detection behavior.
-- AIRV metrics.
-- Recommended H.264 encoding settings.
-- Clear note: PS/PL still do not parse AIR0/AIRV payloads.
+## Completed Implementation
 
-Update root `AGENTS.md` with:
+- AIRV v1 fixed 64-byte header.
+- Sender GUI `Transfer Mode`: `air0_file`, `airv_video`, `raw`.
+- AIRV MP4 preparation:
+  - If user selects `.h264` / `.264`, use directly.
+  - If user selects MP4, reuse same-name `.h264/.264` if present.
+  - Otherwise call `ffmpeg` to create same-name `.h264`.
+  - Generated H.264 inserts AUD to help frame boundary detection.
+- H.264 Annex-B parser uses AUD and slice header `first_mb_in_slice` to reduce multi-slice frame overcounting.
+- Receiver auto-detects AIR0 vs AIRV from loopback payload magic.
+- AIRV assembler:
+  - strict header validation;
+  - collect fragments by `frame_seq/frag_index`;
+  - count bad fragment/frame CRC but still assemble if header/meta and fragments are usable;
+  - drop incomplete stale frames;
+  - emit `VIDEO`, `VIDEO_FRAME`, `VIDEO_DONE`, `DONE VIDEO`.
+- Unit tests currently cover AIRV header roundtrip, fragmentation, CRC behavior, bad header rejection, MP4 sidecar reuse, ffmpeg runner edge case, H.264 AUD/slice parsing, and PTS-based FPS.
 
-- New GUI test settings for AIRV.
-- New log lines users should copy.
-- Reminder that AIRV is realtime and not expected to save an exact file.
+## Immediate Next Goal
 
-## Non-goals For This Milestone
+Implement actual realtime video preview on the receiver side.
 
-- No FEC.
-- No receiver-side ACK or retransmission.
+The user originally wanted realtime video behavior, not just transport statistics:
+
+- Display video while AIRV frames are being received.
+- Do not wait for the full file.
+- If fragments are missing, skip/drop that frame and continue.
+- If header/meta is good but payload/frame CRC is bad, still try to decode/display the frame so visible corruption can be demonstrated.
+- If decoder state breaks after corrupt/missing reference frames, wait for the next keyframe and resume.
 - No audio.
-- No PS/PL parsing of video headers.
-- No guaranteed exact file recovery in AIRV mode. AIR0 remains the exact recovery mode.
+- No receiver ACK/retransmission/FEC for this milestone.
+
+## Recommended Next Implementation Plan
+
+### Step 1: Add Decode/Preview Path Locally
+
+Prefer PyAV if available because it can decode H.264 packets in-process and return frames suitable for Tkinter display.
+
+Add a separate receiver-side component, for example:
+
+```text
+AD9361_test2/tools/pc_sender/video_playback.py
+```
+
+Responsibilities:
+
+- Accept assembled AIRV encoded frames from `VideoStreamAssembler`.
+- Feed each frame as an H.264 packet into a decoder.
+- Convert decoded frames to RGB/PIL/Tk image.
+- Keep decoder alive across recoverable decode errors.
+- If decode errors persist after missing/corrupt delta frames, set `waiting_keyframe=1` and resume on next keyframe.
+
+If PyAV is not installed, either:
+
+- show a clear GUI error with install guidance, or
+- fall back to OpenCV if available, but PyAV is better for packet-level H.264.
+
+Do not make PS/PL parse AIRV. This is PC receiver-only.
+
+### Step 2: Integrate With Receiver GUI
+
+Extend `receiver_gui.py`:
+
+- Add a video preview area or a separate preview window.
+- Subscribe to `video_frame` events from `receiver_core.py`.
+- Feed frames into the decoder/playback component.
+- Display decoded frames as they arrive.
+- Add visible status fields:
+  - decoded frames
+  - displayed frames
+  - decoder errors
+  - waiting keyframe
+  - dropped missing frames
+
+Keep existing AIR0 metrics visible and unchanged.
+
+### Step 3: Improve AIRV Timing Metadata
+
+Current sender uses default `frame_interval_us=33333`. This is fine for initial validation but not robust for arbitrary MP4.
+
+Implement source FPS detection:
+
+- Use `ffprobe` if available, or parse `ffmpeg` metadata output.
+- Determine source frame rate from MP4.
+- Pass real `frame_interval_us` into `build_airv_stream()`.
+- If FPS cannot be detected, fall back to 30fps and log that fallback.
+
+Potential API change:
+
+```python
+ensure_airv_h264_source(...) -> AirvSource(path: Path, fps: float)
+build_airv_stream(..., frame_interval_us=round(1_000_000 / fps))
+```
+
+Update GUI log so the user sees:
+
+```text
+AIRV source file=... fps=...
+```
+
+### Step 4: Make Final Metrics Less Misleading
+
+Fix final `DONE VIDEO ... latency_ms=0.0` behavior:
+
+- Track `last_nonzero_latency_ms`.
+- Add average/max assemble latency:
+  - `latency_avg_ms`
+  - `latency_max_ms`
+- On final idle finish, report last/avg/max rather than resetting to 0.
+
+This is a metrics fix, not a transport fix.
+
+### Step 5: Board Test After Preview Is Added
+
+Ask user to test in GUI only.
+
+Recommended first AIRV preview test:
+
+```text
+Sender Transfer Mode    airv_video
+Sender Mode             File
+Sender file             MP4 video
+Chunk Bytes             1440
+Window Size             1
+ACK Timeout(s)          2.0
+Max Retries             200
+Rate Limit KiB/s        400
+Throughput Mode         checked
+Payload CRC32           checked
+
+Receiver Raw Expected   0
+Receiver Idle Finish(s) 10
+```
+
+Ask user to copy:
+
+```text
+Receiver:
+RX target registered ...
+VIDEO ...
+VIDEO_FRAME ... only if present
+VIDEO_DONE ...
+DONE VIDEO ...
+Any decoder/playback error lines
+
+Sender:
+PROGRESS ...
+DONE ...
+
+Board serial:
+RXCFG loopback peer
+S2MM start/wait/done/error
+S2MM rx_hdr
+LB UDP sent
+STAT rate/state
+```
+
+Expected transport result should remain:
+
+```text
+frame_drop=0
+frag_missing=0
+bad_hdr=0
+bad_meta=0
+bad_frag_crc=0
+bad_frame_crc=0
+sender timeouts=0
+```
+
+Expected preview result:
+
+```text
+decoded/displayed frames increase during transfer
+no full-file wait before display starts
+if corrupt payload is later induced, decoder attempts display and recovers at keyframe
+```
+
+## Later Work
+
+- Add jitter buffer controls, initially 100-300 ms.
+- Add sender pacing by video PTS for "wall-clock realtime" mode. Current sender is transport-rate limited by KiB/s, not frame-time paced.
+- Add optional loss/corruption injection in receiver or sender for visual artifact demos.
+- Add live camera capture as a later milestone.
+- Consider adaptive rate/window tests after preview works:
+  - Window Size 4
+  - Rate Limit KiB/s 550 or near observed stable throughput
+- Do not add FEC, receiver ACK, retransmission, audio, or PS/PL AIRV parsing in this milestone unless user explicitly changes scope.
+
+## Local Verification Commands
+
+Use RTK prefix:
+
+```bash
+rtk python AD9361_test2/tools/pc_sender/test_airv_protocol.py
+rtk python -m py_compile AD9361_test2/tools/pc_sender/air_protocol.py AD9361_test2/tools/pc_sender/video_protocol.py AD9361_test2/tools/pc_sender/video_receiver_core.py AD9361_test2/tools/pc_sender/sender_core.py AD9361_test2/tools/pc_sender/sender_gui.py AD9361_test2/tools/pc_sender/receiver_core.py AD9361_test2/tools/pc_sender/receiver_gui.py AD9361_test2/tools/pc_sender/send_data.py AD9361_test2/tools/pc_sender/recv_data.py
+rtk git status --short
+```
+
+This environment usually cannot build the Xilinx SDK project from shell. For C/board behavior, do static checks locally and rely on user board logs.
