@@ -435,6 +435,7 @@ Bind Port           本机接收 loopback UDP 端口。默认 15002
 Board IP            板端 IP。默认 192.168.1.50
 Board Port          板端 UDP 端口。默认 5001
 Register RX target  勾选后发送 RXCFG，把本机注册为回传目标
+Socket Buffer       本机 UDP 接收缓冲，默认 16777216
 Output Directory    恢复文件保存目录。默认 output
 File Name           可选输出文件名；不填则按时间自动命名并推断扩展名
 Expected Bytes      期望恢复的连续字节数；知道原文件大小时填文件大小
@@ -443,7 +444,9 @@ Idle Finish(s)      Expected Bytes 为 0 时，收到数据后空闲多久自动
 
 单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。双电脑测试时，在接收电脑先启动 `receiver_gui.py` 并注册；发送电脑只运行 `sender_gui.py`，目标 IP 仍填板端 `192.168.1.50`。
 
-要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`OFDM Legacy Wrap` 关闭，`PL Verify Pattern` 关闭，`Payload CRC32` 开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真传输下，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
+要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`OFDM Legacy Wrap` 关闭，`PL Verify Pattern` 关闭，`Payload CRC32` 开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
+
+如果接收 GUI 出现 `INCOMPLETE`，或者 `DONE` 中 `gaps` 不为 0、`saved` 为空，说明 PC 接收端没有拿到完整连续 payload；此时工具不会保存带洞文件。大文件测试时优先确认 `rx` 最终等于原文件大小、`high` 等于原文件大小、`gaps=0`、`crc=0`、`len=0`。
 
 ## Raw 与 OFDM Legacy payload
 
@@ -595,6 +598,8 @@ NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 ```
 
 每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前 `tx_transfer` 长度比较 RX payload 和 TX buffer。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
+
+MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_configure_tx_frame()` 写入最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 `OpenWifi_Tx_Rearm()` 放在 `net_configure_tx_frame()` 后面，否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
 关键日志：
 

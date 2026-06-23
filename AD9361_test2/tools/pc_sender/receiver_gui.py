@@ -11,6 +11,7 @@ from receiver_core import (
     DEFAULT_IDLE_FINISH_S,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_RECEIVER_PORT,
+    DEFAULT_SOCKET_BUFFER_BYTES,
     LoopbackReceiver,
     ReceiverConfig,
 )
@@ -34,7 +35,7 @@ class ReceiverGui:
         self.board_ip_var = tk.StringVar(value=DEFAULT_BOARD_IP)
         self.board_port_var = tk.StringVar(value=str(DEFAULT_BOARD_PORT))
         self.register_var = tk.BooleanVar(value=True)
-        self.socket_buffer_var = tk.StringVar(value=str(4 * 1024 * 1024))
+        self.socket_buffer_var = tk.StringVar(value=str(DEFAULT_SOCKET_BUFFER_BYTES))
         self.output_dir_var = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
         self.output_name_var = tk.StringVar(value="")
         self.expected_bytes_var = tk.StringVar(value="0")
@@ -353,13 +354,21 @@ class ReceiverGui:
             self._append_log(f"SAVED {payload['path']}")
             return
 
+        if event_name == "incomplete":
+            stats = payload["stats"]
+            self._update_stats(stats)
+            self.status_var.set("Incomplete")
+            self._append_log(f"INCOMPLETE {payload['reason']}")
+            return
+
         if event_name == "done":
             stats = payload["stats"]
             self._update_stats(stats)
-            self.status_var.set("Done")
+            self.status_var.set("Done" if stats.saved_path else "Incomplete")
             self._append_log(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
-                f"pkt={stats.packets} blk={stats.blocks} saved={stats.saved_path}"
+                f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
+                f"saved={stats.saved_path} reason={stats.incomplete_reason}"
             )
             self._on_done()
             return

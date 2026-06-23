@@ -18,7 +18,7 @@
 - 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`OFDM Legacy Wrap`、`PL Verify Pattern` 等。
 - 用户当前要发送纯 payload，不要默认要求勾选 `OFDM Legacy Wrap`，也不要默认给 `--ofdm-legacy` 之类的命令行参数。若确实需要 Legacy 模式，必须先说明原因并明确让用户在 GUI 勾选 `OFDM Legacy Wrap`。
 - 调试 PL 回环要分阶段做。由于本地无法板级验证，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
-- 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...` 和 `DONE ... saved=...` 行。
+- 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ...` 和 `DONE ... gaps=... saved=...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
 ## 当前工程定位
@@ -82,7 +82,8 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
-- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；如果比较结果为 `cmp=DIFF`，现在会强制打印，不受 128 块间隔限制。随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回已注册的接收 GUI/CLI。接收端按 `stream_offset + chunk_offset` 恢复连续 payload，检查分片 CRC、长度和缺口，并把图片/视频等原始文件保存到 `output`。
+- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；如果比较结果为 `cmp=DIFF`，现在会强制打印，不受 128 块间隔限制。随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回已注册的接收 GUI/CLI。接收端按 `stream_offset + chunk_offset` 恢复连续 payload，检查分片 CRC、长度和缺口，并把图片/视频等原始文件保存到 `output`；如果存在缺口，接收端应报 `INCOMPLETE` 且不保存带洞文件。
+- MM2S 启动前必须先 `OpenWifi_Tx_Rearm(payload_len)`，再调用 `net_configure_tx_frame()` 写最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 re-arm 放在配置之后；否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
 ## 当前推荐 GUI 测试设置
 

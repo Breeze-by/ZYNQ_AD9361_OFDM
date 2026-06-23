@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import bisect
 import binascii
 import os
 import random
@@ -29,6 +30,7 @@ DEFAULT_BOARD_IP = "192.168.1.50"
 DEFAULT_BOARD_PORT = 5001
 DEFAULT_IDLE_FINISH_S = 2.0
 DEFAULT_OUTPUT_DIR = "output"
+DEFAULT_SOCKET_BUFFER_BYTES = 16 * 1024 * 1024
 
 
 @dataclass
@@ -38,7 +40,7 @@ class ReceiverConfig:
     board_ip: str = DEFAULT_BOARD_IP
     board_port: int = DEFAULT_BOARD_PORT
     register_with_board: bool = True
-    socket_buffer_bytes: int = 4 * 1024 * 1024
+    socket_buffer_bytes: int = DEFAULT_SOCKET_BUFFER_BYTES
     output_dir: str = DEFAULT_OUTPUT_DIR
     output_name: str = ""
     expected_bytes: int = 0
@@ -69,6 +71,7 @@ class ReceiverStats:
     gap_count: int = 0
     contiguous_bytes: int = 0
     saved_path: str = ""
+    incomplete_reason: str = ""
 
 
 def parse_args():
@@ -80,7 +83,7 @@ def parse_args():
     parser.add_argument("--board-port", type=int, default=DEFAULT_BOARD_PORT, help="Zynq UDP port")
     parser.add_argument("--no-register", action="store_true",
         help="listen only; do not send RXCFG registration to the board")
-    parser.add_argument("--socket-buffer-bytes", type=int, default=4 * 1024 * 1024,
+    parser.add_argument("--socket-buffer-bytes", type=int, default=DEFAULT_SOCKET_BUFFER_BYTES,
         help="host socket receive buffer size")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="output directory")
     parser.add_argument("--output-name", default="", help="output file name; extension is inferred if omitted")
@@ -221,23 +224,27 @@ class SparseFileAssembler:
         end = offset + len(payload)
         if end > self.highest_end:
             self.highest_end = end
-        self.ranges.append((offset, end))
+        self._add_range(offset, end)
 
-    def _merged_ranges(self):
-        if not self.ranges:
-            return []
-        merged = []
-        for start, end in sorted(self.ranges):
-            if not merged or start > merged[-1][1]:
-                merged.append([start, end])
-            elif end > merged[-1][1]:
-                merged[-1][1] = end
-        return merged
+    def _add_range(self, start: int, end: int):
+        index = bisect.bisect_left(self.ranges, (start, end))
+        if index > 0 and self.ranges[index - 1][1] >= start:
+            index -= 1
+            start = min(start, self.ranges[index][0])
+            end = max(end, self.ranges[index][1])
+            self.ranges.pop(index)
+
+        while index < len(self.ranges) and self.ranges[index][0] <= end:
+            start = min(start, self.ranges[index][0])
+            end = max(end, self.ranges[index][1])
+            self.ranges.pop(index)
+
+        self.ranges.insert(index, (start, end))
 
     def coverage(self) -> Tuple[int, int]:
         contiguous = 0
         gaps = 0
-        for start, end in self._merged_ranges():
+        for start, end in self.ranges:
             if start > contiguous:
                 gaps += 1
                 continue
@@ -384,16 +391,21 @@ class LoopbackReceiver:
                 stats.highest_end = absolute_offset + payload_len
 
         self._refresh_rates(stats)
-        self._emit(callback, "packet", {
-            "status": status,
-            "block_id": packet["block_id"],
-            "stream_offset": stream_offset,
-            "chunk_offset": chunk_offset,
-            "payload_len": payload_len,
-            "crc": calc_crc,
-            "crc_expected": packet["payload_crc32"],
-            "stats": stats,
-        })
+        if status != "OK":
+            self._emit(callback, "packet", {
+                "status": status,
+                "block_id": packet["block_id"],
+                "stream_offset": stream_offset,
+                "chunk_offset": chunk_offset,
+                "payload_len": payload_len,
+                "crc": calc_crc,
+                "crc_expected": packet["payload_crc32"],
+                "stats": stats,
+            })
+
+    def _mark_incomplete(self, stats: ReceiverStats, callback, reason: str):
+        stats.incomplete_reason = reason
+        self._emit(callback, "incomplete", {"reason": reason, "stats": stats})
 
     def _save_if_ready(self, stats: ReceiverStats, callback, force: bool = False) -> bool:
         if self._saved:
@@ -403,14 +415,30 @@ class LoopbackReceiver:
         stats.contiguous_bytes = contiguous
         stats.gap_count = gaps
 
-        if not force:
-            if self.config.expected_bytes > 0:
-                if contiguous < self.config.expected_bytes:
-                    return False
-            else:
+        if self.config.expected_bytes > 0:
+            if contiguous < self.config.expected_bytes:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"expected {self.config.expected_bytes} contiguous bytes, got {contiguous}",
+                    )
+                return False
+            byte_count = self.config.expected_bytes
+        else:
+            if not force:
+                return False
+            if contiguous <= 0:
+                return False
+            if gaps != 0 or contiguous < self._assembler.highest_end:
+                self._mark_incomplete(
+                    stats,
+                    callback,
+                    f"received data has gaps: contiguous={contiguous}, highest={self._assembler.highest_end}, gaps={gaps}",
+                )
                 return False
 
-        byte_count = self.config.expected_bytes if self.config.expected_bytes > 0 else contiguous
+            byte_count = contiguous
         if byte_count <= 0:
             return False
 
@@ -450,10 +478,12 @@ class LoopbackReceiver:
                         data, _addr = sock.recvfrom(4096)
                     except socket.timeout:
                         now = time.time()
-                        if (last_payload_time > 0.0 and self.config.expected_bytes == 0 and
-                            self.config.idle_finish_s > 0.0 and
+                        if (last_payload_time > 0.0 and self.config.idle_finish_s > 0.0 and
                             (now - last_payload_time) >= self.config.idle_finish_s):
                             if self._save_if_ready(stats, callback, force=True):
+                                if self.config.stop_after_save:
+                                    break
+                            elif stats.incomplete_reason:
                                 if self.config.stop_after_save:
                                     break
                         continue
@@ -531,11 +561,18 @@ def run_cli(args) -> int:
             )
         elif event_name == "saved":
             print(f"SAVED {payload['path']}")
+        elif event_name == "incomplete":
+            stats = payload["stats"]
+            print(
+                f"INCOMPLETE {payload['reason']} rx={stats.contiguous_bytes} "
+                f"high={stats.highest_end} gaps={stats.gap_count}"
+            )
         elif event_name == "done":
             stats = payload["stats"]
             print(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
-                f"pkt={stats.packets} blk={stats.blocks} saved={stats.saved_path}"
+                f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
+                f"saved={stats.saved_path} reason={stats.incomplete_reason}"
             )
 
     receiver.run(callback=callback)

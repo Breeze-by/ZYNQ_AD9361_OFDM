@@ -959,6 +959,7 @@ static void net_start_dma_transfer(void)
     TxDmaCrLast = 0U;
     TxDmaBuffLenLast = 0U;
 
+    OpenWifi_Tx_Rearm(block->payload_len);
     if (net_configure_tx_frame(block->payload_len, block->transfer_len) != 0) {
         UART_Printf("TX frame config failed block=%d payload=%lu transfer=%lu max=%u\r\n",
             ready_index,
@@ -990,7 +991,6 @@ static void net_start_dma_transfer(void)
         return;
     }
 
-    OpenWifi_Tx_Rearm(block->payload_len);
     Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
     status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)block->buffer_ptr,
         block->transfer_len, XAXIDMA_DMA_TO_DEVICE);
