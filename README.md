@@ -71,8 +71,8 @@ AD9361_test2/src/drivers/net/net_stats.c
     周期性串口统计输出。
 
 AD9361_test2/tools/pc_sender/sender_core.py
-    Python 发送核心；滑动窗口、reset/session、重传、OFDM legacy 封装、
-    PL verify pattern、CLI 参数。
+    Python 发送核心；滑动窗口、reset/session、重传、Payload CRC32、
+    AIR0 payload header、CLI 参数。
 
 AD9361_test2/tools/pc_sender/send_data.py
     命令行入口。
@@ -160,7 +160,7 @@ typedef struct {
 ```text
 bit15      RESET flag
 bit14      NO_CRC flag
-bit13      OFDM_LEGACY flag
+bit13      reserved，当前置 0
 bit12:0    session id
 ```
 
@@ -186,7 +186,6 @@ DATA header      16 bytes
 ACK packet       16 bytes
 RESET flag       0x8000
 NO_CRC flag      0x4000
-OFDM_LEGACY flag 0x2000
 session mask     0x1FFF
 ```
 
@@ -205,8 +204,6 @@ ACK 状态：
 每次 PC 发送工具开始传输前，都会先发送 `RESET flag=1, payload_len=0, seq=0` 的控制包。板端只有在 DMA 空闲且无 fatal error 时接受 reset，随后清空序号、历史记录、聚合队列和统计，并切换到新的 13-bit session id。普通数据包必须带同一个 session id。
 
 `NO_CRC` 由 PC 工具的 Payload CRC32 开关决定。关闭 payload CRC 时，reset 包携带 `NO_CRC`，普通包的 `payload_crc32=0`；开启 `--payload-crc` 或 GUI 对应选项后，PC 对 wire payload 计算 CRC32，PS 接收后校验。GUI 默认开启 Payload CRC32，高负载测试时曾观察到少量 PC->PS payload CRC 错误，开启后坏包会被 PS 拒收并由发送端重传，最终 loopback 校验才可信。
-
-`OFDM_LEGACY` 只标记本次传输模式并写入板端 reset 日志。PS 不解析 OFDM `addr0/addr1`，它只把应用层包头后的 wire payload 原样写入 DMA buffer。
 
 ## UDP Loopback 回传协议
 
@@ -329,14 +326,13 @@ raw payload:
   每包 wire payload = 1440 bytes
   典型每个 DMA block = 2 * 1440 = 2880 bytes
 
-OFDM Legacy Wrap:
-  MPDU payload = 1440 bytes
-  Legacy frame = addr0 8 bytes + addr1 8 bytes + align8(MPDU)
-  每包 wire payload = 16 + 1440 = 1456 bytes
-  典型每个 DMA block = 2 * 1456 = 2912 bytes
+AIR0 enabled:
+  每包 wire payload 仍为 1440 bytes
+  其中 64 bytes 是 PC-only AIR0 header
+  最多 1376 bytes 是原始文件/测试 payload
 ```
 
-如果修改 PC chunk 大小，需要满足 PS 侧 `payload_len <= 3000`。raw 模式下 chunk 最大为 `3000`；Legacy 模式下 wire payload 为 `16 + align8(chunk)`，因此 chunk 最大建议不超过 `2984`。为避免普通 1500 MTU 下 IP 分片，推荐继续使用默认 `1440`。
+如果修改 PC chunk 大小，需要满足 PS 侧 `payload_len <= 3000`。开启 AIR0 时，chunk 必须大于 64 字节，实际业务 payload 为 `chunk_size - 64`。为避免普通 1500 MTU 下 IP 分片，推荐继续使用默认 `1440`。
 
 ## Cache 和 DMA 一致性
 
@@ -384,18 +380,14 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --port                  UDP 端口，默认 5001
 --test-size             生成测试数据字节数
 --file                  从文件读取 payload
---chunk-size            每个 MPDU/raw chunk 的原始 payload 字节数，默认 1440
+--chunk-size            每个 UDP wire payload 字节数，默认 1440
 --window-size           滑动窗口，默认 1
 --throughput-mode       轻量吞吐输出
 --target-rate-kib-s     主机侧限速，默认 400 KiB/s，0 表示不限速
---ofdm-legacy           启用 Legacy OFDM 输入帧封装
---raw-payload           发送原始 payload，不添加 OFDM addr0/addr1
---ofdm-rate-mbps        Legacy RATE 字段，可选 6/9/12/18/24/36/48/54
 --payload-crc           启用应用层 payload CRC32；高负载/完整性测试推荐开启
 --no-payload-crc        关闭应用层 payload CRC32
 --air-protocol          启用 PC-only AIR0 payload header，默认开启
 --no-air-protocol       关闭 AIR0，发送旧版原始文件/测试字节流
---pl-verify-pattern     用 PL 可见测试头和可预测 pattern 替换 payload
 ```
 
 ## PC-only AIR0 payload header
@@ -408,15 +400,13 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 
 PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payload。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 当前不做 FEC、不做接收端 ACK、不做空口重传，只用于让接收端明确知道是否完整以及缺了哪些包。
 
-AIR0 默认只支持 raw payload 模式；`OFDM Legacy Wrap` 和 `PL Verify Pattern` 与 AIR0 互斥。如需回到旧版纯字节流，对发送 GUI 取消勾选 `AIR0 Packet Header`，或 CLI 使用 `--no-air-protocol`。
+如需回到旧版纯字节流，对发送 GUI 取消勾选 `AIR0 Packet Header`，或 CLI 使用 `--no-air-protocol`。
 
 推荐 GUI/CLI 吞吐配置：
 
 ```text
 模式                    Test Data
 Throughput Mode         开启
-OFDM Legacy Wrap        按 PL 当前期望选择；不需要 OFDM 头时关闭
-OFDM Rate               6 Mbps 起步
 Payload CRC32           开启
 AIR0 Packet Header      开启
 Verbose Packet Events   关闭
@@ -428,8 +418,6 @@ Rate Limit KiB/s        400
 Progress ms             1000
 Test Bytes              64 MiB 或 256 MiB
 ```
-
-GUI 运行中切换 OFDM Rate 只影响之后新生成的包。已经发出的包和缓存中的重传包保持首次生成时的 rate、payload 和 CRC。
 
 发送 GUI 里的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。只要发送端最终 `app_ack` 等于总字节数，接收端最终 `rx/high` 等于原文件大小且 `gaps=0 crc=0 len=0`，说明当前这次恢复文件是连续完整的。`Recoverable Errors` 中常见的是板端 payload CRC 拒收后重传成功；如果该计数持续升高，可以降低 `Window Size` 或设置 `Rate Limit KiB/s` 继续压低主机发包压力。
 
@@ -464,84 +452,27 @@ Idle Finish(s)      Expected Bytes 为 0 时，收到数据后空闲多久自动
 
 单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。双电脑测试时，在接收电脑先启动 `receiver_gui.py` 并注册；发送电脑只运行 `sender_gui.py`，目标 IP 仍填板端 `192.168.1.50`。
 
-要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`OFDM Legacy Wrap` 关闭，`PL Verify Pattern` 关闭，`Payload CRC32` 开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
+要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
 当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Expected Bytes` 仍可填写原文件大小作为人工核对。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。
 
 如果接收 GUI 出现 `INCOMPLETE`，或者 `DONE` 中 `gaps` 不为 0、`saved` 为空，说明 PC 接收端没有拿到完整连续 payload；此时工具不会保存带洞文件。大文件测试时优先确认 `rx` 最终等于原文件大小、`high` 等于原文件大小、`gaps=0`、`crc=0`、`len=0`。
 
-## Raw 与 OFDM Legacy payload
+## PC->PS payload 格式
 
-raw 模式下，PC->PS 应用层包头后直接是原始 payload：
-
-```text
-net_data_header_t + raw payload
-```
-
-Legacy 模式下，PC 将每个 chunk 当作一个 MPDU，封装为一个 Legacy OFDM 输入帧：
+PC->PS 应用层包头后始终是普通 wire payload，PS 和 PL 不根据 payload 内容做额外交互：
 
 ```text
-net_data_header_t
-+ addr0: Legacy L-SIG 控制 word，64 bit little-endian
-+ addr1: 0，64 bit
-+ MPDU payload
-+ 8-byte padding if needed
+net_data_header_t + wire payload
 ```
 
-`L-SIG LENGTH = MPDU_LEN + 4`，默认 `RATE=6 Mbps`。PS 侧仍只处理 `net_data_header_t`，协议头后的所有字节都作为 DMA data 原样交给 PL。
-
-## PL Verify Pattern
-
-开启 `--pl-verify-pattern` 或 GUI 的 `PL Verify Pattern` 后，PC 不再发送原始文件/测试数据内容，而是在每个 MPDU/raw chunk 内生成固定测试内容。每个 chunk 长度仍由 `Chunk Bytes` 决定，且最后一个 chunk 必须至少能容纳 32 字节测试头。
-
-每个 chunk 前 32 字节为 little-endian 测试头：
+默认开启 AIR0 时，wire payload 内部为：
 
 ```text
-offset  size  field
-0       4     magic = 0x30544C50，即 ASCII "PLT0"
-4       2     header_bytes = 32
-6       2     flags_version，低 8 bit 为 version=1，bit8=OFDM legacy，bit9=last chunk
-8       4     seq，从 0 递增
-12      4     total_chunks
-16      4     chunk_len
-20      4     byte_offset = seq * Chunk Bytes
-24      4     total_size
-28      4     pattern_seed = 0x13579BDF
+64-byte AIR0 header + original file/test payload fragment
 ```
 
-从 offset 32 开始：
-
-```text
-payload_byte[i] = (0xDF + seq + (i - 32)) & 0xff
-```
-
-PL 侧用 ILA 抓 64-bit little-endian 数据时，测试头前 4 个 word 是：
-
-```text
-word0 = flags_version << 48 | 32 << 32 | 0x30544C50
-word1 = total_chunks << 32 | seq
-word2 = byte_offset << 32 | chunk_len
-word3 = 0x13579BDF << 32 | total_size
-```
-
-Legacy 模式下，DMA 中每个 MPDU 的结构是：
-
-```text
-addr0 Legacy L-SIG word
-addr1 0
-PLT0 test header, 32 bytes
-test pattern bytes
-8-byte padding if needed
-```
-
-raw 模式下：
-
-```text
-PLT0 test header, 32 bytes
-test pattern bytes
-```
-
-建议 PL 端先检查 `magic` 是否按 MPDU/chunk 边界周期出现，再检查 `seq` 连续性、`chunk_len`、最后一包标记和 pattern 字节公式。
+关闭 AIR0 时，wire payload 就是原始文件/测试数据片段。无论是否开启 AIR0，PS 都只校验 `net_data_header_t` 和可选 payload CRC32，然后把 wire payload 原样写入 DDR 聚合块并通过 DMA 送入 PL。
 
 ## 串口统计
 
@@ -578,8 +509,8 @@ agg_avg/min/max   聚合块 payload_len 统计
 PC 发送工具现在把速率拆成三个真实口径：
 
 ```text
-app_deliv   原始业务 payload 被 ACK 的速率；raw/Legacy 下都按用户输入数据计数。
-wire_acc    PS 已接受的 wire payload 速率；对应板端 `acc`，Legacy 模式会包含 16 字节 OFDM 头和 padding。
+app_deliv   原始业务 payload 被 ACK 的速率；按用户输入数据计数。
+wire_acc    PS 已接受的 wire payload 速率；对应板端 `acc`，AIR0 模式会包含 64 字节 AIR0 header。
 udp_tx      主机实际送入 UDP socket 的应用层字节速率；包含 16 字节 PC->PS 包头和重传。
 ```
 
@@ -611,7 +542,7 @@ file_crc    AIR0 恢复文件 CRC32 是否匹配。
 - 看 PL 实际收到多少 DMA 数据，用板端 `dma`。
 - 看主机实际发包压力，用 PC `udp_tx`，它会随重传和 ACK/BUSY/PENDING 变化。
 
-`rx` 是板端输入尝试流量，主机发太快或重传多时可能高于 `acc`。Legacy 模式下 `app_deliv` 与 `wire_acc/acc/dma` 本来就不应完全相等，因为 wire payload 额外包含 OFDM `addr0/addr1` 和 8 字节对齐 padding。
+`rx` 是板端输入尝试流量，主机发太快或重传多时可能高于 `acc`。AIR0 模式下 `app_deliv` 与 `wire_acc/acc/dma` 本来就不应完全相等，因为 wire payload 额外包含 64 字节 AIR0 header。
 
 ## PL->PS S2MM 回环调试
 
@@ -684,7 +615,7 @@ SDK 工程当前 Debug 配置使用 Cortex-A9 hard-float flags：
 
 - 改协议结构、flag、ACK 语义、CRC 默认值或 PC 发送策略时，同时改 `net_protocol.h`、`net_config.h` 和 `sender_core.py`，并更新本 README。
 - 改 `NET_AGG_BLOCK_BYTES` 时，必须同时检查 `NET_AGG_BLOCK_STRIDE_BYTES`、`NET_MAX_PAYLOAD_BYTES`、`NET_OFDM_MAX_PSDU_BYTES`、8 字节对齐、AXI DMA simple transfer 长度限制，以及 `tx_intf` auto-start 阈值。DMA slot stride 必须保持 cache-line 对齐，不能让相邻 slot 共享 cache line。
-- 改 PC `chunk_size` 默认值时，确认 raw/Legacy 两种 wire payload 都不超过 PS 侧最大 payload，并考虑 1500 MTU 分片。
+- 改 PC `chunk_size` 默认值时，确认 raw/AIR0 wire payload 不超过 PS 侧最大 payload，并考虑 1500 MTU 分片。
 - 改 cache 开关或新增 S2MM 路径时，先把 flush/invalidate 点设计清楚。
 - BSP 和硬件导出目录尽量由 Xilinx 工具再生成，不做零散手改。
 - 仓库只保留根目录 `README.md`；不要在子目录重新添加 README。

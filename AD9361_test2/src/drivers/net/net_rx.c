@@ -1164,10 +1164,9 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             loopback_return_port = port;
             loopback_return_peer_valid = 1;
         }
-        UART_Printf("UDP RX reset session=%u crc=%s ofdm=%s\r\n",
+        UART_Printf("UDP RX reset session=%u crc=%s\r\n",
             (unsigned)current_session_id,
-            (current_session_validate_crc != 0) ? "on" : "off",
-            ((packet_flags & NET_DATA_FLAG_OFDM_LEGACY) != 0U) ? "legacy" : "raw");
+            (current_session_validate_crc != 0) ? "on" : "off");
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, 0U);
         pbuf_free(p);
         return;

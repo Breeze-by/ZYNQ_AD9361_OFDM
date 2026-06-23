@@ -47,45 +47,24 @@ LOOPBACK_FORMAT = "<IIIHHHHIIIII"
 DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
 LOOPBACK_HEADER_SIZE = struct.calcsize(LOOPBACK_FORMAT)
-PL_VERIFY_MAGIC = 0x30544C50
-PL_VERIFY_HEADER_BYTES = 32
-PL_VERIFY_VERSION = 1
-PL_VERIFY_FLAG_OFDM_LEGACY = 0x0100
-PL_VERIFY_FLAG_LAST_CHUNK = 0x0200
-PL_VERIFY_PATTERN_SEED = 0x13579BDF
-PL_VERIFY_HEADER_FORMAT = "<IHHIIIIII"
-PL_VERIFY_HEADER_SIZE = struct.calcsize(PL_VERIFY_HEADER_FORMAT)
-if PL_VERIFY_HEADER_SIZE != PL_VERIFY_HEADER_BYTES:
-    raise RuntimeError("PL verify header format size mismatch")
 
 DATA_FLAG_RESET = 0x8000
 DATA_FLAG_NO_CRC = 0x4000
-DATA_FLAG_OFDM_LEGACY = 0x2000
 DATA_SESSION_MASK = 0x1FFF
 LOOPBACK_FLAG_LAST_CHUNK = 0x0001
 
-DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
+DEFAULT_CHUNK_SIZE = 1440
 DEFAULT_WINDOW_SIZE = 1
 DEFAULT_ACK_TIMEOUT_S = 2.0
 DEFAULT_RETRIES = 200
 DEFAULT_TARGET_RATE_KIB_S = 400.0
-OFDM_LEGACY_RATE_BITS = {
-    6: 0b1101,
-    9: 0b1111,
-    12: 0b0101,
-    18: 0b0111,
-    24: 0b1001,
-    36: 0b1011,
-    48: 0b0001,
-    54: 0b0011,
-}
 
 
 @dataclass
 class SenderConfig:
     ip: str
     port: int = 5001
-    chunk_size: int = DEFAULT_OFDM_LEGACY_CHUNK_SIZE
+    chunk_size: int = DEFAULT_CHUNK_SIZE
     timeout: float = DEFAULT_ACK_TIMEOUT_S
     retries: int = DEFAULT_RETRIES
     target_rate_kib_s: float = DEFAULT_TARGET_RATE_KIB_S
@@ -94,10 +73,7 @@ class SenderConfig:
     progress_interval_s: float = 0.1
     verbose_events: bool = False
     throughput_mode: bool = False
-    ofdm_legacy: bool = False
-    ofdm_rate_mbps: int = 6
     validate_payload_crc: bool = False
-    pl_verify_pattern: bool = False
     air_protocol: bool = True
 
 
@@ -149,8 +125,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UDP sliding-window sender for AD9361_test2")
     parser.add_argument("--ip", required=True, help="Zynq target IP address")
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
-    parser.add_argument("--chunk-size", type=int, default=DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
-        help="payload bytes per UDP chunk; 1440 fits a 1500 byte MTU in raw and OFDM legacy modes")
+    parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
+        help="payload bytes per UDP chunk; 1440 fits a 1500 byte MTU")
     parser.add_argument("--timeout", type=float, default=DEFAULT_ACK_TIMEOUT_S,
         help="ACK timeout in seconds")
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES,
@@ -167,21 +143,12 @@ def parse_args():
         help="print or emit per-packet events instead of throttled summaries")
     parser.add_argument("--throughput-mode", action="store_true",
         help="suppress packet events and print lightweight aggregate progress")
-    parser.add_argument("--ofdm-legacy", dest="ofdm_legacy", action="store_true", default=False,
-        help="wrap each MPDU chunk as one legacy OFDM input frame before sending")
-    parser.add_argument("--raw-payload", dest="ofdm_legacy", action="store_false",
-        help="send raw UDP payload without legacy OFDM addr0/addr1 words")
-    parser.add_argument("--ofdm-rate-mbps", type=int, default=6,
-        choices=sorted(OFDM_LEGACY_RATE_BITS.keys()),
-        help="legacy OFDM RATE field in Mbps")
     parser.add_argument("--payload-crc", dest="validate_payload_crc",
         action="store_true", default=False,
         help="enable PC-generated and PS-validated application payload CRC32")
     parser.add_argument("--no-payload-crc", dest="validate_payload_crc",
         action="store_false",
         help="disable PC-generated and PS-validated application payload CRC32 for this transfer")
-    parser.add_argument("--pl-verify-pattern", action="store_true",
-        help="replace each MPDU/raw chunk with a PL-visible test header and deterministic byte pattern")
     parser.add_argument("--air-protocol", dest="air_protocol", action="store_true", default=True,
         help="wrap payload chunks in a PC-only AIR0 header for loss/error accounting")
     parser.add_argument("--no-air-protocol", dest="air_protocol", action="store_false",
@@ -202,76 +169,16 @@ def load_payload(test_size: int = 0, file_path: Optional[str] = None) -> bytes:
     raise ValueError("one of test_size or file_path is required")
 
 
-def parity_odd(value: int) -> int:
-    value ^= value >> 16
-    value ^= value >> 8
-    value ^= value >> 4
-    value &= 0xF
-    return (0x6996 >> value) & 1
-
-
-def calc_lsig_parity(rate_bits: int, length: int) -> int:
-    lsig_without_parity = ((length & 0x0FFF) << 5) | (rate_bits & 0x0F)
-    return parity_odd(lsig_without_parity)
-
-
 def align8(length: int) -> int:
     return (length + 7) & ~7
-
-
-def build_pl_verify_payload(payload: bytes, seq: int, total_chunks: int, total_size: int,
-    byte_offset: int, ofdm_legacy: bool) -> bytes:
-    chunk_len = len(payload)
-    if chunk_len < PL_VERIFY_HEADER_BYTES:
-        raise ValueError(
-            f"PL verify pattern needs each chunk to be at least {PL_VERIFY_HEADER_BYTES} bytes")
-
-    flags = PL_VERIFY_VERSION
-    if ofdm_legacy:
-        flags |= PL_VERIFY_FLAG_OFDM_LEGACY
-    if total_chunks > 0 and seq == (total_chunks - 1):
-        flags |= PL_VERIFY_FLAG_LAST_CHUNK
-
-    header = struct.pack(
-        PL_VERIFY_HEADER_FORMAT,
-        PL_VERIFY_MAGIC,
-        PL_VERIFY_HEADER_BYTES,
-        flags,
-        seq & 0xFFFFFFFF,
-        total_chunks & 0xFFFFFFFF,
-        chunk_len & 0xFFFFFFFF,
-        byte_offset & 0xFFFFFFFF,
-        total_size & 0xFFFFFFFF,
-        PL_VERIFY_PATTERN_SEED,
-    )
-    pattern_len = chunk_len - PL_VERIFY_HEADER_BYTES
-    seed_byte = PL_VERIFY_PATTERN_SEED & 0xFF
-    pattern = bytes((seed_byte + seq + index) & 0xFF for index in range(pattern_len))
-    return header + pattern
-
-
-def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
-    if rate_mbps not in OFDM_LEGACY_RATE_BITS:
-        raise ValueError(f"unsupported legacy OFDM rate {rate_mbps} Mbps")
-
-    lsig_length = len(mpdu_payload) + 4
-    if lsig_length > 0x0FFF:
-        raise ValueError("legacy OFDM L-SIG LENGTH exceeds 12 bits")
-
-    rate_bits = OFDM_LEGACY_RATE_BITS[rate_mbps]
-    parity = calc_lsig_parity(rate_bits, lsig_length)
-    word0 = ((parity & 0x1) << 17) | ((lsig_length & 0x0FFF) << 5) | (rate_bits & 0x0F)
-    padded_payload = mpdu_payload + bytes(align8(len(mpdu_payload)) - len(mpdu_payload))
-
-    return struct.pack("<Q", word0) + struct.pack("<Q", 0) + padded_payload
 
 
 def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None,
     session_id: int = 0, total_chunks: int = 0, total_size: int = 0,
     byte_offset: int = 0, file_crc32: int = 0, file_id: int = 0) -> bytes:
-    mpdu_payload = payload
+    wire_payload = payload
     if config is not None and config.air_protocol:
-        mpdu_payload = build_air_packet(
+        wire_payload = build_air_packet(
             payload,
             packet_seq=seq,
             total_packets=total_chunks,
@@ -283,24 +190,6 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
             file_id=file_id,
         )
 
-    if config is not None and config.pl_verify_pattern:
-        mpdu_payload = build_pl_verify_payload(
-            payload,
-            seq,
-            total_chunks,
-            total_size,
-            byte_offset,
-            config.ofdm_legacy,
-        )
-
-    wire_payload = payload
-    flags = 0
-    if config is not None and config.ofdm_legacy:
-        wire_payload = build_ofdm_legacy_frame(mpdu_payload, config.ofdm_rate_mbps)
-        flags |= DATA_FLAG_OFDM_LEGACY
-    else:
-        wire_payload = mpdu_payload
-
     if len(wire_payload) > 0xFFFF:
         raise ValueError("PC->PS payload exceeds 16-bit payload_len field")
 
@@ -311,19 +200,16 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
         DATA_MAGIC,
         seq,
         len(wire_payload),
-        flags | (session_id & DATA_SESSION_MASK),
+        session_id & DATA_SESSION_MASK,
         crc32,
     )
     return header + wire_payload
 
 
-def build_reset_packet(session_id: int, validate_payload_crc: bool = False,
-    ofdm_legacy: bool = False) -> bytes:
+def build_reset_packet(session_id: int, validate_payload_crc: bool = False) -> bytes:
     flags = DATA_FLAG_RESET
     if not validate_payload_crc:
         flags |= DATA_FLAG_NO_CRC
-    if ofdm_legacy:
-        flags |= DATA_FLAG_OFDM_LEGACY
 
     return struct.pack(
         DATA_HEADER_FORMAT,
@@ -453,40 +339,19 @@ class UdpSender:
     def stop(self):
         self._stop_requested = True
 
-    def set_ofdm_rate_mbps(self, rate_mbps: int):
-        if rate_mbps not in OFDM_LEGACY_RATE_BITS:
-            raise ValueError(f"unsupported legacy OFDM rate {rate_mbps} Mbps")
-        with self._config_lock:
-            self.config.ofdm_rate_mbps = rate_mbps
-
     def _validate_config(self):
         with self._config_lock:
             chunk_size = self.config.chunk_size
             window_size = self.config.window_size
-            ofdm_legacy = self.config.ofdm_legacy
-            ofdm_rate_mbps = self.config.ofdm_rate_mbps
-            pl_verify_pattern = self.config.pl_verify_pattern
             air_protocol = self.config.air_protocol
 
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
         if window_size <= 0:
             raise ValueError("window_size must be positive")
-        if ofdm_legacy:
-            if ofdm_rate_mbps not in OFDM_LEGACY_RATE_BITS:
-                raise ValueError(f"unsupported legacy OFDM rate {ofdm_rate_mbps} Mbps")
-            if (chunk_size + 4) > 0x0FFF:
-                raise ValueError("chunk_size is too large for the 12-bit legacy L-SIG LENGTH field")
-        if pl_verify_pattern and chunk_size < PL_VERIFY_HEADER_BYTES:
-            raise ValueError(
-                f"chunk_size must be at least {PL_VERIFY_HEADER_BYTES} bytes when PL Verify Pattern is enabled")
         if air_protocol:
             if chunk_size <= AIR_HEADER_BYTES:
                 raise ValueError(f"chunk_size must be greater than AIR header size {AIR_HEADER_BYTES}")
-            if pl_verify_pattern:
-                raise ValueError("AIR0 protocol and PL Verify Pattern are mutually exclusive")
-            if ofdm_legacy:
-                raise ValueError("AIR0 protocol currently supports raw payload mode only")
 
     def _prepare_transfer(self, payload: bytes):
         payload_chunk_size = self._payload_chunk_size()
@@ -500,22 +365,12 @@ class UdpSender:
             self._session_id,
         )
 
-        if self.config.pl_verify_pattern and total_chunks > 0:
-            last_chunk_len = len(payload) - ((total_chunks - 1) * payload_chunk_size)
-            if last_chunk_len < PL_VERIFY_HEADER_BYTES:
-                raise ValueError(
-                    "PL Verify Pattern requires the final chunk to fit a 32-byte header; "
-                    "use a test size that is a multiple of Chunk Bytes or leaves at least 32 bytes")
-
         return total_chunks
 
     def _build_packet(self, seq: int, payload: bytes) -> bytes:
         with self._config_lock:
-            ofdm_legacy = self.config.ofdm_legacy
-            ofdm_rate_mbps = self.config.ofdm_rate_mbps
             validate_payload_crc = self.config.validate_payload_crc
             session_id = self._session_id
-            pl_verify_pattern = self.config.pl_verify_pattern
             air_protocol = self.config.air_protocol
 
         config = SenderConfig(
@@ -530,10 +385,7 @@ class UdpSender:
             progress_interval_s=self.config.progress_interval_s,
             verbose_events=self.config.verbose_events,
             throughput_mode=self.config.throughput_mode,
-            ofdm_legacy=ofdm_legacy,
-            ofdm_rate_mbps=ofdm_rate_mbps,
             validate_payload_crc=validate_payload_crc,
-            pl_verify_pattern=pl_verify_pattern,
             air_protocol=air_protocol,
         )
         return build_packet(
@@ -555,8 +407,7 @@ class UdpSender:
         session_id = random.randint(1, DATA_SESSION_MASK)
         with self._config_lock:
             validate_payload_crc = self.config.validate_payload_crc
-            ofdm_legacy = self.config.ofdm_legacy
-        packet = build_reset_packet(session_id, validate_payload_crc, ofdm_legacy)
+        packet = build_reset_packet(session_id, validate_payload_crc)
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(reset_timeout_s)
@@ -1252,10 +1103,7 @@ def run_cli(args) -> int:
         ) / 1000.0,
         verbose_events=False if args.throughput_mode else args.verbose_events,
         throughput_mode=args.throughput_mode,
-        ofdm_legacy=args.ofdm_legacy,
-        ofdm_rate_mbps=args.ofdm_rate_mbps,
         validate_payload_crc=args.validate_payload_crc,
-        pl_verify_pattern=args.pl_verify_pattern,
         air_protocol=args.air_protocol,
     ))
 

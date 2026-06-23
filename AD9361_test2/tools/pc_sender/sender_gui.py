@@ -8,11 +8,10 @@ from tkinter import filedialog, messagebox, ttk
 
 from sender_core import (
     DEFAULT_ACK_TIMEOUT_S,
-    DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
+    DEFAULT_CHUNK_SIZE,
     DEFAULT_RETRIES,
     DEFAULT_TARGET_RATE_KIB_S,
     DEFAULT_WINDOW_SIZE,
-    OFDM_LEGACY_RATE_BITS,
     SenderConfig,
     UdpSender,
     load_payload,
@@ -100,7 +99,7 @@ class SenderGui:
         self.file_info_var = tk.StringVar(value="No file selected")
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
-        self.chunk_var = tk.StringVar(value=str(DEFAULT_OFDM_LEGACY_CHUNK_SIZE))
+        self.chunk_var = tk.StringVar(value=str(DEFAULT_CHUNK_SIZE))
         self.timeout_var = tk.StringVar(value=str(DEFAULT_ACK_TIMEOUT_S))
         self.retries_var = tk.StringVar(value=str(DEFAULT_RETRIES))
         self.target_rate_var = tk.StringVar(value=str(int(DEFAULT_TARGET_RATE_KIB_S)))
@@ -110,10 +109,7 @@ class SenderGui:
         self.progress_interval_var = tk.StringVar(value="1000")
         self.verbose_var = tk.BooleanVar(value=False)
         self.throughput_mode_var = tk.BooleanVar(value=True)
-        self.ofdm_legacy_var = tk.BooleanVar(value=False)
-        self.ofdm_rate_var = tk.StringVar(value="6")
         self.payload_crc_var = tk.BooleanVar(value=True)
-        self.pl_verify_pattern_var = tk.BooleanVar(value=False)
         self.air_protocol_var = tk.BooleanVar(value=True)
 
         self.status_text_var = tk.StringVar(value="Idle")
@@ -144,7 +140,6 @@ class SenderGui:
 
         self._build_ui()
         self._update_mode_widgets()
-        self._update_ofdm_widgets()
         self.root.after(100, self._drain_event_queue)
 
     def _build_ui(self):
@@ -241,41 +236,12 @@ class SenderGui:
         ttk.Checkbutton(net_box, text="Throughput Mode", variable=self.throughput_mode_var,
             command=self._update_throughput_mode).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
-        ofdm_row = ttk.Frame(net_box)
-        ofdm_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Checkbutton(
-            ofdm_row,
-            text="OFDM Legacy Wrap",
-            variable=self.ofdm_legacy_var,
-            command=self._on_ofdm_legacy_toggled,
-        ).pack(side=tk.LEFT)
-        self.ofdm_rate_label = ttk.Label(ofdm_row, text="Rate", width=8)
-        self.ofdm_rate_label.pack(side=tk.LEFT, padx=(16, 0))
-        self.ofdm_rate_combo = ttk.Combobox(
-            ofdm_row,
-            textvariable=self.ofdm_rate_var,
-            values=[str(rate) for rate in sorted(OFDM_LEGACY_RATE_BITS.keys())],
-            width=8,
-            state="readonly",
-        )
-        self.ofdm_rate_combo.pack(side=tk.LEFT)
-        self.ofdm_rate_combo.bind("<<ComboboxSelected>>", self._on_ofdm_rate_changed)
         ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(
             net_box,
             text="AIR0 Packet Header",
             variable=self.air_protocol_var,
         ).pack(anchor=tk.W, pady=(8, 0))
-        ttk.Checkbutton(
-            net_box,
-            text="PL Verify Pattern",
-            variable=self.pl_verify_pattern_var,
-        ).pack(anchor=tk.W, pady=(8, 0))
-        ttk.Label(
-            net_box,
-            text="PL Verify Pattern replaces each chunk payload with a 32-byte PLT0 header and byte pattern.",
-            foreground="#555555",
-        ).pack(anchor=tk.W, pady=(6, 0))
         ttk.Label(
             net_box,
             text="Throughput mode disables packet logs and uses at least 1000 ms progress updates.",
@@ -372,19 +338,6 @@ class SenderGui:
         self.file_entry.configure(state=tk.NORMAL if mode == "file" else tk.DISABLED)
         self.test_entry.configure(state=tk.NORMAL if mode == "test" else tk.DISABLED)
 
-    def _update_ofdm_widgets(self):
-        if self.ofdm_legacy_var.get():
-            self.ofdm_rate_combo.configure(state="readonly")
-            self.ofdm_rate_label.configure(text="Rate")
-        else:
-            self.ofdm_rate_combo.configure(state=tk.DISABLED)
-            self.ofdm_rate_label.configure(text="Rate N/A")
-
-    def _on_ofdm_legacy_toggled(self):
-        self._update_ofdm_widgets()
-        mode = "OFDM legacy wrapping" if self.ofdm_legacy_var.get() else "raw payload"
-        self._append_log(f"Payload mode set to {mode} for the next transfer")
-
     def _browse_file(self):
         file_path = filedialog.askopenfilename(title="Select file to send", filetypes=[("All files", "*.*")])
         if not file_path:
@@ -424,30 +377,7 @@ class SenderGui:
             if current_interval < 1000:
                 self.progress_interval_var.set("1000")
 
-    def _on_ofdm_rate_changed(self, _event=None):
-        if not self.ofdm_legacy_var.get():
-            return
-        if self.sender is None:
-            return
-
-        try:
-            rate_mbps = int(self.ofdm_rate_var.get().strip())
-            self.sender.set_ofdm_rate_mbps(rate_mbps)
-        except Exception as exc:
-            self._append_log(f"OFDM rate change rejected: {exc}")
-            return
-
-        self._append_log(
-            f"OFDM rate set to {rate_mbps} Mbps for newly generated packets"
-        )
-
     def _format_start_mode(self, config: SenderConfig) -> str:
-        if config.ofdm_legacy:
-            nominal_wire_chunk = 16 + ((config.chunk_size + 7) & ~7)
-            return (
-                f"payload_mode=ofdm_legacy rate={config.ofdm_rate_mbps}Mbps "
-                f"nominal_wire_chunk={nominal_wire_chunk}"
-            )
         return f"payload_mode=raw nominal_wire_chunk={config.chunk_size}"
 
     def _append_log(self, message: str):
@@ -490,10 +420,7 @@ class SenderGui:
                 progress_interval_s=max(progress_interval_ms, 10) / 1000.0,
                 verbose_events=verbose_events,
                 throughput_mode=throughput_mode,
-                ofdm_legacy=bool(self.ofdm_legacy_var.get()),
-                ofdm_rate_mbps=int(self.ofdm_rate_var.get().strip()),
                 validate_payload_crc=bool(self.payload_crc_var.get()),
-                pl_verify_pattern=bool(self.pl_verify_pattern_var.get()),
                 air_protocol=bool(self.air_protocol_var.get()),
             )
         except Exception as exc:
@@ -510,7 +437,6 @@ class SenderGui:
             f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
             f"{self._format_start_mode(config)} "
             f"payload_crc={config.validate_payload_crc} air0={config.air_protocol} "
-            f"pl_verify={config.pl_verify_pattern}"
         )
 
         self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)
