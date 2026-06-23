@@ -433,13 +433,13 @@ AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸
 
 AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计和可选实时预览路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，同时把 encoded H.264 access unit 交给预览解码器。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop，并使预览等待后续 keyframe 恢复。AIRV 不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
 
-接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1080x720`，不再挤占主窗口日志区域。AIRV 解码在后台线程执行，Tk 主线程只显示最近一帧，避免 PyAV 解码或坏码流导致 GUI 未响应。主窗口保留 `Preview/Preview Input/Decoded/Displayed/Decoder Errors/Waiting Key` 状态。预览依赖可选 Python 包 `av` 和 `Pillow`：
+接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1080x720`，不再挤占主窗口日志区域。AIRV 解码在后台线程执行，Tk 主线程只显示最近一帧，避免 PyAV 解码或坏码流导致 GUI 未响应。预览输入端会缓存最多 `240` 个 assembled encoded frame，并按 H.264 顺序送给解码器，避免为了追最新画面而跳过 P 帧参考链。只有预览队列真的满了，才清空预览队列并等待下一帧 keyframe 恢复；这只影响预览，不影响 AIRV 统计。主窗口保留 `Preview/Preview Input/Preview Backlog/Preview Drops/Decoded/Displayed/Decoder Errors/Waiting Key` 状态。预览依赖可选 Python 包 `av` 和 `Pillow`：
 
 ```bash
 python -m pip install av pillow
 ```
 
-如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；如果连续解码失败或参考帧状态不可用，会等待下一帧 keyframe 后重建 H.264 解码器并继续显示。
+如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；如果连续解码失败或参考帧状态不可用，会等待下一帧 keyframe 后重建 H.264 解码器并继续显示。
 
 AIRV 接收日志示例：
 

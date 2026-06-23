@@ -16,7 +16,12 @@ from receiver_core import (
     ReceiverConfig,
 )
 from sender_gui import Sparkline
+from video_protocol import AIRV_FRAME_KEY
 from video_playback import VideoPreviewDecoder
+
+
+PREVIEW_QUEUE_FRAMES = 240
+PREVIEW_RESULT_QUEUE_FRAMES = 2
 
 
 class ReceiverGui:
@@ -38,10 +43,12 @@ class ReceiverGui:
         self.preview_window = None
         self.preview_canvas = None
         self.preview_message = self.video_decoder.status_text()
-        self.preview_queue = queue.Queue(maxsize=2)
-        self.preview_result_queue = queue.Queue()
+        self.preview_queue = queue.Queue(maxsize=PREVIEW_QUEUE_FRAMES)
+        self.preview_result_queue = queue.Queue(maxsize=PREVIEW_RESULT_QUEUE_FRAMES)
         self.preview_stop_event = threading.Event()
         self.preview_thread = None
+        self.preview_waiting_input_keyframe = False
+        self.preview_input_drops = 0
 
         self.bind_ip_var = tk.StringVar(value="0.0.0.0")
         self.bind_port_var = tk.StringVar(value=str(DEFAULT_RECEIVER_PORT))
@@ -74,6 +81,8 @@ class ReceiverGui:
         self.airv_rate_var = tk.StringVar(value="0.0 fps / 0.0 ms")
         self.preview_status_var = tk.StringVar(value=self.video_decoder.status_text())
         self.preview_input_var = tk.StringVar(value="0")
+        self.preview_backlog_var = tk.StringVar(value="0")
+        self.preview_drop_var = tk.StringVar(value="0")
         self.preview_decoded_var = tk.StringVar(value="0")
         self.preview_displayed_var = tk.StringVar(value="0")
         self.preview_errors_var = tk.StringVar(value="0")
@@ -193,6 +202,8 @@ class ReceiverGui:
             ("AIRV FPS/Latency", self.airv_rate_var),
             ("Preview", self.preview_status_var),
             ("Preview Input", self.preview_input_var),
+            ("Preview Backlog", self.preview_backlog_var),
+            ("Preview Drops", self.preview_drop_var),
             ("Decoded", self.preview_decoded_var),
             ("Displayed", self.preview_displayed_var),
             ("Decoder Errors", self.preview_errors_var),
@@ -390,6 +401,8 @@ class ReceiverGui:
         self.airv_rate_var.set("0.0 fps / 0.0 ms")
         self.preview_decoded_var.set("0")
         self.preview_input_var.set("0")
+        self.preview_backlog_var.set("0")
+        self.preview_drop_var.set("0")
         self.preview_displayed_var.set("0")
         self.preview_errors_var.set("0")
         self.preview_waiting_var.set("1")
@@ -397,9 +410,11 @@ class ReceiverGui:
         self.output_path_var.set("-")
         self._stop_preview_worker()
         self.video_decoder = VideoPreviewDecoder()
-        self.preview_queue = queue.Queue(maxsize=2)
-        self.preview_result_queue = queue.Queue()
+        self.preview_queue = queue.Queue(maxsize=PREVIEW_QUEUE_FRAMES)
+        self.preview_result_queue = queue.Queue(maxsize=PREVIEW_RESULT_QUEUE_FRAMES)
         self.preview_stop_event = threading.Event()
+        self.preview_waiting_input_keyframe = False
+        self.preview_input_drops = 0
         self.preview_status_var.set(self.video_decoder.status_text())
         self.preview_photo = None
         self.preview_unavailable_logged = False
@@ -432,8 +447,8 @@ class ReceiverGui:
 
     def _start_preview_worker(self):
         self._stop_preview_worker()
-        self.preview_queue = queue.Queue(maxsize=2)
-        self.preview_result_queue = queue.Queue()
+        self.preview_queue = queue.Queue(maxsize=PREVIEW_QUEUE_FRAMES)
+        self.preview_result_queue = queue.Queue(maxsize=PREVIEW_RESULT_QUEUE_FRAMES)
         self.preview_stop_event = threading.Event()
         if not self.video_decoder.available:
             return
@@ -459,16 +474,34 @@ class ReceiverGui:
                 continue
             if item is None:
                 break
+            if item.get("reset_decoder", False):
+                self.video_decoder.wait_for_keyframe()
             result = self.video_decoder.decode(
                 item["payload"],
                 frame_type=item["frame_type"],
                 bad_fragment_crc=item["bad_fragment_crc"],
                 bad_frame_crc=item["bad_frame_crc"],
             )
-            self.preview_result_queue.put({
+            self._put_preview_result({
                 "result": result,
                 "stats": item["stats"],
+                "queue_size": self.preview_queue.qsize(),
             })
+
+    def _put_preview_result(self, payload: dict):
+        try:
+            self.preview_result_queue.put_nowait(payload)
+            return
+        except queue.Full:
+            pass
+        try:
+            self.preview_result_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self.preview_result_queue.put_nowait(payload)
+        except queue.Full:
+            pass
 
     def _drain_preview_result_queue(self):
         latest = None
@@ -549,29 +582,49 @@ class ReceiverGui:
             self.preview_status_var.set("Unavailable")
             self._set_preview_message(self.video_decoder.status_text(), clear_image=True)
             return
+        if self.preview_waiting_input_keyframe and payload["frame_type"] != AIRV_FRAME_KEY:
+            self.preview_input_drops += 1
+            self.preview_drop_var.set(str(self.preview_input_drops))
+            self.preview_status_var.set("Waiting keyframe")
+            return
         item = {
             "payload": encoded,
             "frame_type": payload["frame_type"],
             "bad_fragment_crc": payload["bad_fragment_crc"],
             "bad_frame_crc": payload["bad_frame_crc"],
             "stats": stats,
+            "reset_decoder": self.preview_waiting_input_keyframe,
         }
         try:
             self.preview_queue.put_nowait(item)
+            self.preview_waiting_input_keyframe = False
         except queue.Full:
-            try:
+            self.preview_input_drops += 1
+            self.preview_drop_var.set(str(self.preview_input_drops))
+            self._clear_preview_queue()
+            self.preview_waiting_input_keyframe = True
+            if payload["frame_type"] == AIRV_FRAME_KEY:
+                item["reset_decoder"] = True
+                try:
+                    self.preview_queue.put_nowait(item)
+                    self.preview_waiting_input_keyframe = False
+                except queue.Full:
+                    pass
+        backlog = self.preview_queue.qsize()
+        self.preview_backlog_var.set(str(backlog))
+        self.preview_status_var.set(f"Queued {backlog}")
+
+    def _clear_preview_queue(self):
+        try:
+            while True:
                 self.preview_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self.preview_queue.put_nowait(item)
-            except queue.Full:
-                pass
-        self.preview_status_var.set("Queued")
+        except queue.Empty:
+            pass
 
     def _handle_preview_result(self, payload: dict):
         result = payload["result"]
         stats = payload["stats"]
+        self.preview_backlog_var.set(str(payload.get("queue_size", 0)))
         waiting_keyframe = bool(result.waiting_keyframe or stats.airv_waiting_keyframe)
         self.preview_decoded_var.set(str(result.decoded_count))
         self.preview_displayed_var.set(str(result.displayed_count))

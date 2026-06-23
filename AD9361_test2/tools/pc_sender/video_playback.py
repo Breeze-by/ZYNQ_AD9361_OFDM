@@ -61,6 +61,11 @@ class VideoPreviewDecoder:
             return
         self._codec = self._av.CodecContext.create("h264", "r")
 
+    def wait_for_keyframe(self):
+        self.waiting_keyframe = True
+        self.consecutive_errors = 0
+        self._reset_decoder()
+
     def decode(
         self,
         encoded_frame: bytes,
