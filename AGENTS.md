@@ -101,9 +101,12 @@ Payload CRC32           checked
 AIR0 Packet Header      checked
 Verbose Packet Events   unchecked
 Progress ms             1000
+
+Receiver Raw Expected   0
+Receiver Idle Finish(s) 10
 ```
 
-这一组用于小数据量回环确认。先启动接收 GUI 并等待 `RX target registered ...`，再启动发送 GUI。预期板端串口出现 `RXCFG loopback peer`、`Loopback UDP return ready`、`S2MM done ... cmp=OK`、`LB UDP sent ...`，接收 GUI `DONE` 行中 `rx=16384` 且 `crc=0 len=0 gaps=0`。
+这一组用于小数据量回环确认。AIR0 模式下接收端会从 AIR0 头读取 `file_size`、`total_packets` 和 `file_crc32`，`Raw Expected` 保持 `0`，不要再要求用户预填文件大小。先启动接收 GUI 并等待 `RX target registered ...`，再启动发送 GUI。预期板端串口出现 `RXCFG loopback peer`、`Loopback UDP return ready`、`S2MM done ... cmp=OK`、`LB UDP sent ...`，接收 GUI `DONE` 行中 `rx=16384` 且 `crc=0 len=0 gaps=0`。
 
 ## 常用验证命令
 

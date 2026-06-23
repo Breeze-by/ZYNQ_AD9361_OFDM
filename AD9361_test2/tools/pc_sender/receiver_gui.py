@@ -124,7 +124,7 @@ class ReceiverGui:
 
         row = ttk.Frame(output_box)
         row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(row, text="Expected Bytes", width=14).pack(side=tk.LEFT)
+        ttk.Label(row, text="Raw Expected", width=14).pack(side=tk.LEFT)
         ttk.Entry(row, textvariable=self.expected_bytes_var, width=20).pack(side=tk.LEFT)
 
         row = ttk.Frame(output_box)
@@ -248,7 +248,7 @@ class ReceiverGui:
         self.status_var.set("Listening")
         self._append_log(
             f"Start bind={config.bind_ip}:{config.bind_port} board={config.board_ip}:{config.board_port} "
-            f"register={config.register_with_board} expected={config.expected_bytes} output={config.output_dir}"
+            f"register={config.register_with_board} raw_expected={config.expected_bytes} output={config.output_dir}"
         )
         self.receiver_thread = threading.Thread(target=self._worker_run, daemon=True)
         self.receiver_thread.start()

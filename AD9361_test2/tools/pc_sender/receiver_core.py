@@ -34,7 +34,7 @@ from sender_core import (
 DEFAULT_RECEIVER_PORT = 15002
 DEFAULT_BOARD_IP = "192.168.1.50"
 DEFAULT_BOARD_PORT = 5001
-DEFAULT_IDLE_FINISH_S = 2.0
+DEFAULT_IDLE_FINISH_S = 10.0
 DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_SOCKET_BUFFER_BYTES = 16 * 1024 * 1024
 
@@ -105,9 +105,9 @@ def parse_args():
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="output directory")
     parser.add_argument("--output-name", default="", help="output file name; extension is inferred if omitted")
     parser.add_argument("--expected-bytes", type=int, default=0,
-        help="finish once this many contiguous bytes are recovered; 0 means idle timeout")
+        help="raw-mode expected contiguous bytes; AIR0 uses file_size from its header, so 0 is normal")
     parser.add_argument("--idle-finish-s", type=float, default=DEFAULT_IDLE_FINISH_S,
-        help="finish after this many idle seconds when expected bytes is 0")
+        help="finish after this many idle seconds when data remains incomplete")
     parser.add_argument("--progress-interval-ms", type=int, default=500,
         help="minimum progress print interval")
     return parser.parse_args()
@@ -768,7 +768,7 @@ def run_cli(args) -> int:
         if event_name == "start":
             print(
                 f"listening {payload['bind_ip']}:{payload['bind_port']} "
-                f"output={payload['output_dir']} expected={payload['expected_bytes']}"
+                f"output={payload['output_dir']} raw_expected={payload['expected_bytes']}"
             )
         elif event_name == "registered":
             print(

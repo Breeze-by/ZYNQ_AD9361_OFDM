@@ -446,15 +446,15 @@ Register RX target  勾选后发送 RXCFG，把本机注册为回传目标
 Socket Buffer       本机 UDP 接收缓冲，默认 16777216
 Output Directory    恢复文件保存目录。默认 output
 File Name           可选输出文件名；不填则按时间自动命名并推断扩展名
-Expected Bytes      期望恢复的连续字节数；知道原文件大小时填文件大小
-Idle Finish(s)      Expected Bytes 为 0 时，收到数据后空闲多久自动保存
+Raw Expected        仅 raw 模式使用的期望连续字节数；AIR0 模式保持 0
+Idle Finish(s)      数据不完整时，收到最后一个回传分片后空闲多久判定结束
 ```
 
 单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。双电脑测试时，在接收电脑先启动 `receiver_gui.py` 并注册；发送电脑只运行 `sender_gui.py`，目标 IP 仍填板端 `192.168.1.50`。
 
-要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
+要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
-当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Expected Bytes` 仍可填写原文件大小作为人工核对。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。如果最终存在缺失 AIR0 包，`INCOMPLETE` / `DONE` 还会输出 `missing_seq=...`，用逗号分隔缺失 `packet_seq` 范围，例如 `missing_seq=120-124,301,488`；范围很多时会截断为 `...(+N ranges)`。
+当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Raw Expected` 只在关闭 AIR0 的 raw 模式下作为保存长度兜底。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。如果最终存在缺失 AIR0 包，`INCOMPLETE` / `DONE` 还会输出 `missing_seq=...`，用逗号分隔缺失 `packet_seq` 范围，例如 `missing_seq=120-124,301,488`；范围很多时会截断为 `...(+N ranges)`。`Idle Finish(s)` 仍保留，用于缺包或尾包未到达时触发最终 `INCOMPLETE` 判断。
 
 如果接收 GUI 出现 `INCOMPLETE`，或者 `DONE` 中 `gaps` 不为 0、`saved` 为空，说明 PC 接收端没有拿到完整连续 payload；此时工具不会保存带洞文件。大文件测试时优先确认 `rx` 最终等于原文件大小、`high` 等于原文件大小、`gaps=0`、`crc=0`、`len=0`。
 
