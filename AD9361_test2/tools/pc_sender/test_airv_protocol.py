@@ -281,6 +281,42 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["latency_avg_ms"], 20.0, delta=0.1)
         self.assertAlmostEqual(metrics["latency_max_ms"], 30.0, delta=0.1)
 
+    def test_video_latency_report_keeps_last_nonzero_value(self):
+        assembler = VideoStreamAssembler()
+        packets = []
+        for seq, frame in enumerate((b"abc", b"def")):
+            packets.append(build_airv_packet(
+                frame,
+                session_id=1,
+                stream_id=2,
+                frame_seq=seq,
+                frag_index=0,
+                frag_count=1,
+                frame_type=AIRV_FRAME_KEY,
+                frame_size=len(frame),
+                fragment_offset=0,
+                chunk_bytes=1440,
+                frame_crc32=crc32(frame),
+                pts_us=seq * 33333,
+            ))
+        times = iter([10.0, 10.012, 20.0, 20.0])
+
+        def fake_time():
+            try:
+                return next(times)
+            except StopIteration:
+                return 20.0
+
+        with mock.patch("video_receiver_core.time.time", side_effect=fake_time):
+            for packet in packets:
+                header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+                payload = packet[AIRV_HEADER_BYTES:AIRV_HEADER_BYTES + header.fragment_len]
+                assembler.process_fragment(header, payload, True)
+        metrics = assembler.metrics()
+        self.assertAlmostEqual(metrics["latency_ms"], 12.0, delta=0.1)
+        self.assertAlmostEqual(metrics["latency_avg_ms"], 6.0, delta=0.1)
+        self.assertAlmostEqual(metrics["latency_max_ms"], 12.0, delta=0.1)
+
 
 if __name__ == "__main__":
     unittest.main()

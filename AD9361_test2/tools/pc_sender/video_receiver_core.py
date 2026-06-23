@@ -52,6 +52,7 @@ class VideoStreamAssembler:
         self.keyframe_rx = 0
         self.waiting_keyframe = False
         self.last_latency_ms = 0.0
+        self.last_report_latency_ms = 0.0
         self.latency_sum_ms = 0.0
         self.latency_count = 0
         self.latency_max_ms = 0.0
@@ -120,6 +121,8 @@ class VideoStreamAssembler:
         now = time.time()
         latency_ms = (now - state.first_seen_at) * 1000.0
         self.last_latency_ms = latency_ms
+        if latency_ms >= 0.05:
+            self.last_report_latency_ms = latency_ms
         self.latency_sum_ms += latency_ms
         self.latency_count += 1
         self.latency_max_ms = max(self.latency_max_ms, latency_ms)
@@ -216,7 +219,7 @@ class VideoStreamAssembler:
             "bad_frame_crc": self.bad_frame_crc,
             "keyframe_rx": self.keyframe_rx,
             "waiting_keyframe": int(self.waiting_keyframe),
-            "latency_ms": self.last_latency_ms,
+            "latency_ms": self.last_report_latency_ms,
             "latency_avg_ms": (
                 self.latency_sum_ms / self.latency_count
                 if self.latency_count > 0 else 0.0

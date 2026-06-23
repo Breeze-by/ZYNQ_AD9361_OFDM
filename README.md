@@ -450,7 +450,7 @@ VIDEO_DONE frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 b
 DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1 latency_avg_ms=4.2 latency_max_ms=8.7
 ```
 
-AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再按 Python 瞬时组帧速度统计；发送端优先使用 `ffprobe` 探测源 FPS，失败时回退 30fps。`latency_ms` 是接收端从本帧首个分片到帧组齐的最近一次耗时，`latency_avg_ms` / `latency_max_ms` 是本次 AIRV 流的组帧平均/最大耗时；这些都不是严格端到端空口时延。
+AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再按 Python 瞬时组帧速度统计；发送端优先使用 `ffprobe` 探测源 FPS，失败时回退 30fps。`latency_ms` 是接收端从本帧首个分片到帧组齐的最近一次可报告耗时；如果最后一帧在同一轮解析中近似 0ms 完成，最终 `VIDEO_DONE` / `DONE VIDEO` 会保留上一条非零 latency，避免 idle finish 后显示 `0.0` 误导。`latency_avg_ms` / `latency_max_ms` 是本次 AIRV 流的组帧平均/最大耗时；这些都不是严格端到端空口时延。
 
 推荐第一阶段 AIRV GUI 测试：
 

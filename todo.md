@@ -129,6 +129,7 @@ Conclusion: AIRV transport integrity is good at 400 KiB/s, window 1. No missing 
 - Sender AIRV timing now probes source FPS with `ffprobe` and falls back to 30fps if unavailable; GUI/CLI log `AIRV source file=... fps=... fps_source=...`.
 - Sender AIRV source preparation now reuses an existing same-name `.h264/.264` immediately and reports `fps_source=sidecar_fallback`; `ffprobe` is only used when no sidecar exists and is capped at 2 seconds.
 - AIRV final metrics now keep last/average/max assembler latency instead of reporting a misleading idle-finish `0.0`.
+- `latency_ms` reporting now keeps the last nonzero assembler latency when a final near-zero frame would otherwise make `VIDEO_DONE` / `DONE VIDEO` print `0.0`; avg/max still include all assembled frames.
 - Unit tests now also cover frame-rate parsing, configured AIRV PTS interval, and latency avg/max metrics.
 
 ## Immediate Next Goal
