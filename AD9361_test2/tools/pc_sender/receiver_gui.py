@@ -52,6 +52,10 @@ class ReceiverGui:
         self.crc_var = tk.StringVar(value="0")
         self.len_var = tk.StringVar(value="0")
         self.gap_var = tk.StringVar(value="0")
+        self.air_var = tk.StringVar(value="0")
+        self.air_missing_var = tk.StringVar(value="0")
+        self.air_error_var = tk.StringVar(value="0 / 0 / 0")
+        self.file_crc_var = tk.StringVar(value="N/A")
         self.output_path_var = tk.StringVar(value="-")
 
         self.rate_chart = None
@@ -156,6 +160,10 @@ class ReceiverGui:
             ("CRC Errors", self.crc_var),
             ("Length Errors", self.len_var),
             ("Gaps", self.gap_var),
+            ("AIR0 Packets", self.air_var),
+            ("AIR0 Missing", self.air_missing_var),
+            ("AIR0 Errors", self.air_error_var),
+            ("File CRC", self.file_crc_var),
             ("Saved", self.output_path_var),
         ]
         for label_text, variable in metrics:
@@ -270,6 +278,10 @@ class ReceiverGui:
         self.crc_var.set("0")
         self.len_var.set("0")
         self.gap_var.set("0")
+        self.air_var.set("0")
+        self.air_missing_var.set("0")
+        self.air_error_var.set("0 / 0 / 0")
+        self.file_crc_var.set("N/A")
         self.output_path_var.set("-")
         self.rate_chart.reset()
         self.packet_chart.reset()
@@ -299,6 +311,14 @@ class ReceiverGui:
         self.crc_var.set(str(stats.crc_errors))
         self.len_var.set(str(stats.length_errors))
         self.gap_var.set(str(stats.gap_count))
+        self.air_var.set(
+            f"{stats.air_packets}/{stats.air_total_packets}" if stats.air_mode else "off"
+        )
+        self.air_missing_var.set(str(stats.air_missing_packets))
+        self.air_error_var.set(
+            f"{stats.air_bad_header} / {stats.air_bad_payload_crc} / {stats.air_duplicates}"
+        )
+        self.file_crc_var.set("OK" if stats.air_file_crc_ok else ("pending" if stats.air_mode else "N/A"))
         self.rate_chart.add_point(stats.rate_kib_s)
         self.packet_chart.add_point(stats.packet_rate_s)
 
@@ -328,7 +348,10 @@ class ReceiverGui:
                 self._append_log(
                     f"PROGRESS rx={stats.contiguous_bytes} high={stats.highest_end} "
                     f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
-                    f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count}"
+                    f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
+                    f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
+                    f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                    f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates}"
                 )
             return
 
@@ -368,7 +391,11 @@ class ReceiverGui:
             self._append_log(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
-                f"saved={stats.saved_path} reason={stats.incomplete_reason}"
+                f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
+                f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates} "
+                f"file_crc={int(stats.air_file_crc_ok)} saved={stats.saved_path} "
+                f"reason={stats.incomplete_reason}"
             )
             self._on_done()
             return

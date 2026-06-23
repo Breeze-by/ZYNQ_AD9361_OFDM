@@ -114,6 +114,7 @@ class SenderGui:
         self.ofdm_rate_var = tk.StringVar(value="6")
         self.payload_crc_var = tk.BooleanVar(value=True)
         self.pl_verify_pattern_var = tk.BooleanVar(value=False)
+        self.air_protocol_var = tk.BooleanVar(value=True)
 
         self.status_text_var = tk.StringVar(value="Idle")
         self.progress_text_var = tk.StringVar(value="0 / 0")
@@ -260,6 +261,11 @@ class SenderGui:
         self.ofdm_rate_combo.pack(side=tk.LEFT)
         self.ofdm_rate_combo.bind("<<ComboboxSelected>>", self._on_ofdm_rate_changed)
         ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Checkbutton(
+            net_box,
+            text="AIR0 Packet Header",
+            variable=self.air_protocol_var,
+        ).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(
             net_box,
             text="PL Verify Pattern",
@@ -488,6 +494,7 @@ class SenderGui:
                 ofdm_rate_mbps=int(self.ofdm_rate_var.get().strip()),
                 validate_payload_crc=bool(self.payload_crc_var.get()),
                 pl_verify_pattern=bool(self.pl_verify_pattern_var.get()),
+                air_protocol=bool(self.air_protocol_var.get()),
             )
         except Exception as exc:
             messagebox.showerror("Parameter Error", str(exc))
@@ -502,7 +509,8 @@ class SenderGui:
             f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
             f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
             f"{self._format_start_mode(config)} "
-            f"payload_crc={config.validate_payload_crc} pl_verify={config.pl_verify_pattern}"
+            f"payload_crc={config.validate_payload_crc} air0={config.air_protocol} "
+            f"pl_verify={config.pl_verify_pattern}"
         )
 
         self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)

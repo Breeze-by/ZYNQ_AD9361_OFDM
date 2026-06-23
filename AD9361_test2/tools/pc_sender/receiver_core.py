@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
+from air_protocol import (
+    AIR_HEADER_BYTES,
+    AIR_MAGIC,
+    crc32 as air_crc32,
+    parse_air_header,
+)
 from sender_core import (
     ACK_FORMAT,
     ACK_MAGIC,
@@ -72,6 +78,16 @@ class ReceiverStats:
     contiguous_bytes: int = 0
     saved_path: str = ""
     incomplete_reason: str = ""
+    air_mode: bool = False
+    air_packets: int = 0
+    air_total_packets: int = 0
+    air_missing_packets: int = 0
+    air_bad_header: int = 0
+    air_bad_payload_crc: int = 0
+    air_duplicates: int = 0
+    air_file_size: int = 0
+    air_file_crc32: int = 0
+    air_file_crc_ok: bool = False
 
 
 def parse_args():
@@ -195,9 +211,15 @@ def unique_output_path(output_dir: Path, requested_name: str, sample: bytes) -> 
 
 
 class SparseFileAssembler:
+    _instance_counter = 0
+
     def __init__(self, output_dir: Path):
         output_dir.mkdir(parents=True, exist_ok=True)
-        self.temp_path = output_dir / f".rx_{os.getpid()}_{int(time.time() * 1000)}.part"
+        SparseFileAssembler._instance_counter += 1
+        self.temp_path = output_dir / (
+            f".rx_{os.getpid()}_{int(time.time() * 1000)}_"
+            f"{SparseFileAssembler._instance_counter}.part"
+        )
         self.fp = open(self.temp_path, "w+b")
         self.ranges = []
         self.highest_end = 0
@@ -257,6 +279,24 @@ class SparseFileAssembler:
         self.fp.seek(0)
         return self.fp.read(length)
 
+    def read_at(self, offset: int, length: int) -> bytes:
+        self.fp.flush()
+        self.fp.seek(offset)
+        return self.fp.read(length)
+
+    def crc32_prefix(self, byte_count: int) -> int:
+        remaining = byte_count
+        crc = 0
+        self.fp.flush()
+        self.fp.seek(0)
+        while remaining > 0:
+            chunk = self.fp.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            crc = binascii.crc32(chunk, crc)
+            remaining -= len(chunk)
+        return crc & 0xFFFFFFFF
+
     def finalize(self, output_dir: Path, output_name: str, byte_count: int) -> Path:
         if byte_count <= 0:
             raise RuntimeError("no contiguous payload bytes were recovered")
@@ -275,10 +315,24 @@ class LoopbackReceiver:
         self._stop_requested = False
         self._last_progress_emit = 0.0
         self._saved = False
-        self._assembler = SparseFileAssembler(Path(config.output_dir))
+        output_dir = Path(config.output_dir)
+        self._raw_assembler = SparseFileAssembler(output_dir)
+        self._file_assembler = SparseFileAssembler(output_dir)
+        self._air_checked = False
+        self._air_mode = False
+        self._air_parse_offset = 0
+        self._air_received_seqs = set()
 
     def stop(self):
         self._stop_requested = True
+
+    def _active_assembler(self):
+        return self._file_assembler if self._air_mode else self._raw_assembler
+
+    def _discard_unsaved(self):
+        if not self._saved:
+            self._raw_assembler.discard()
+            self._file_assembler.discard()
 
     def _emit(self, callback: Optional[Callable[[str, dict], None]], event_name: str, payload: dict):
         if callback is not None:
@@ -296,8 +350,10 @@ class LoopbackReceiver:
         if not force and (now - self._last_progress_emit) < self.config.progress_interval_s:
             return
         self._last_progress_emit = now
-        contiguous, gaps = self._assembler.coverage()
+        active = self._active_assembler()
+        contiguous, gaps = active.coverage()
         stats.contiguous_bytes = contiguous
+        stats.highest_end = active.highest_end
         stats.gap_count = gaps
         self._refresh_rates(stats, now)
         self._emit(callback, "progress", {"stats": stats})
@@ -359,6 +415,89 @@ class LoopbackReceiver:
 
         raise RuntimeError("board did not ACK receiver registration")
 
+    def _update_air_missing(self, stats: ReceiverStats):
+        if stats.air_total_packets > 0:
+            stats.air_missing_packets = max(
+                stats.air_total_packets - len(self._air_received_seqs),
+                0,
+            )
+
+    def _try_enable_air_mode(self, stats: ReceiverStats):
+        if self._air_checked:
+            return
+
+        contiguous, _gaps = self._raw_assembler.coverage()
+        if contiguous < 4:
+            return
+
+        first_word = struct.unpack("<I", self._raw_assembler.read_at(0, 4))[0]
+        self._air_checked = True
+        if first_word == AIR_MAGIC:
+            self._air_mode = True
+            stats.air_mode = True
+            self._air_parse_offset = 0
+
+    def _parse_air_stream(self, stats: ReceiverStats):
+        contiguous, _gaps = self._raw_assembler.coverage()
+
+        self._try_enable_air_mode(stats)
+        if not self._air_mode:
+            return
+
+        while self._air_parse_offset + AIR_HEADER_BYTES <= contiguous:
+            header_bytes = self._raw_assembler.read_at(self._air_parse_offset, AIR_HEADER_BYTES)
+            if len(header_bytes) < AIR_HEADER_BYTES:
+                return
+
+            if struct.unpack("<I", header_bytes[:4])[0] != AIR_MAGIC:
+                scan_len = min(contiguous - self._air_parse_offset, 4096)
+                scan_data = self._raw_assembler.read_at(self._air_parse_offset, scan_len)
+                next_magic = scan_data.find(struct.pack("<I", AIR_MAGIC), 1)
+                if next_magic < 0:
+                    self._air_parse_offset = max(contiguous - 3, self._air_parse_offset)
+                    return
+                stats.air_bad_header += 1
+                self._air_parse_offset += next_magic
+                continue
+
+            try:
+                header = parse_air_header(header_bytes)
+            except ValueError:
+                stats.air_bad_header += 1
+                self._air_parse_offset += 1
+                continue
+
+            packet_len = header.header_len + header.payload_len
+            if self._air_parse_offset + packet_len > contiguous:
+                return
+
+            payload = self._raw_assembler.read_at(
+                self._air_parse_offset + header.header_len,
+                header.payload_len,
+            )
+            if len(payload) != header.payload_len:
+                return
+
+            stats.air_total_packets = max(stats.air_total_packets, header.total_packets)
+            stats.air_file_size = header.file_size
+            stats.air_file_crc32 = header.file_crc32
+
+            if air_crc32(payload) != header.payload_crc32:
+                stats.air_bad_payload_crc += 1
+                self._air_parse_offset += packet_len
+                self._update_air_missing(stats)
+                continue
+
+            if header.packet_seq in self._air_received_seqs:
+                stats.air_duplicates += 1
+            else:
+                self._air_received_seqs.add(header.packet_seq)
+                self._file_assembler.write(header.file_offset, payload)
+                stats.air_packets += 1
+
+            self._air_parse_offset += packet_len
+            self._update_air_missing(stats)
+
     def _process_loopback(self, packet: dict, stats: ReceiverStats, callback):
         payload = packet["payload"]
         payload_len = len(payload)
@@ -386,9 +525,10 @@ class LoopbackReceiver:
             status = "CRC"
 
         if status == "OK":
-            self._assembler.write(absolute_offset, payload)
+            self._raw_assembler.write(absolute_offset, payload)
             if absolute_offset + payload_len > stats.highest_end:
                 stats.highest_end = absolute_offset + payload_len
+            self._parse_air_stream(stats)
 
         self._refresh_rates(stats)
         if status != "OK":
@@ -411,11 +551,52 @@ class LoopbackReceiver:
         if self._saved:
             return True
 
-        contiguous, gaps = self._assembler.coverage()
+        active = self._active_assembler()
+        contiguous, gaps = active.coverage()
         stats.contiguous_bytes = contiguous
+        stats.highest_end = active.highest_end
         stats.gap_count = gaps
 
-        if self.config.expected_bytes > 0:
+        if self._air_mode:
+            expected_bytes = stats.air_file_size or self.config.expected_bytes
+            if expected_bytes <= 0:
+                return False
+            if contiguous < expected_bytes:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"AIR0 expected {expected_bytes} contiguous bytes, got {contiguous}",
+                    )
+                return False
+            if gaps != 0:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"AIR0 received data has gaps: contiguous={contiguous}, highest={active.highest_end}, gaps={gaps}",
+                    )
+                return False
+            if stats.air_missing_packets != 0:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"AIR0 missing {stats.air_missing_packets} packets of {stats.air_total_packets}",
+                    )
+                return False
+            actual_crc = active.crc32_prefix(expected_bytes)
+            stats.air_file_crc_ok = (actual_crc == stats.air_file_crc32)
+            if not stats.air_file_crc_ok:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"AIR0 file CRC mismatch rx=0x{actual_crc:08X} expected=0x{stats.air_file_crc32:08X}",
+                    )
+                return False
+            byte_count = expected_bytes
+        elif self.config.expected_bytes > 0:
             if contiguous < self.config.expected_bytes:
                 if force:
                     self._mark_incomplete(
@@ -430,11 +611,11 @@ class LoopbackReceiver:
                 return False
             if contiguous <= 0:
                 return False
-            if gaps != 0 or contiguous < self._assembler.highest_end:
+            if gaps != 0 or contiguous < active.highest_end:
                 self._mark_incomplete(
                     stats,
                     callback,
-                    f"received data has gaps: contiguous={contiguous}, highest={self._assembler.highest_end}, gaps={gaps}",
+                    f"received data has gaps: contiguous={contiguous}, highest={active.highest_end}, gaps={gaps}",
                 )
                 return False
 
@@ -443,10 +624,14 @@ class LoopbackReceiver:
             return False
 
         output_dir = Path(self.config.output_dir)
-        target_path = self._assembler.finalize(output_dir, self.config.output_name, byte_count)
+        target_path = active.finalize(output_dir, self.config.output_name, byte_count)
         stats.saved_path = str(target_path)
         stats.finished_at = time.time()
         self._saved = True
+        if self._air_mode:
+            self._raw_assembler.discard()
+        else:
+            self._file_assembler.discard()
         self._emit(callback, "saved", {"path": str(target_path), "stats": stats})
         return True
 
@@ -510,12 +695,10 @@ class LoopbackReceiver:
                 if not self._saved:
                     self._save_if_ready(stats, callback, force=True)
         except Exception:
-            if not self._saved:
-                self._assembler.discard()
+            self._discard_unsaved()
             raise
 
-        if not self._saved:
-            self._assembler.discard()
+        self._discard_unsaved()
         self._emit_progress(callback, stats, force=True)
         self._emit(callback, "done", {"stats": stats})
         return stats
@@ -552,7 +735,10 @@ def run_cli(args) -> int:
             print(
                 f"PROGRESS rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
-                f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count}"
+                f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
+                f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
+                f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates}"
             )
         elif event_name == "packet" and payload["status"] != "OK":
             print(
@@ -565,14 +751,19 @@ def run_cli(args) -> int:
             stats = payload["stats"]
             print(
                 f"INCOMPLETE {payload['reason']} rx={stats.contiguous_bytes} "
-                f"high={stats.highest_end} gaps={stats.gap_count}"
+                f"high={stats.highest_end} gaps={stats.gap_count} "
+                f"air={int(stats.air_mode)} miss={stats.air_missing_packets}"
             )
         elif event_name == "done":
             stats = payload["stats"]
             print(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
-                f"saved={stats.saved_path} reason={stats.incomplete_reason}"
+                f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
+                f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates} "
+                f"file_crc={int(stats.air_file_crc_ok)} saved={stats.saved_path} "
+                f"reason={stats.incomplete_reason}"
             )
 
     receiver.run(callback=callback)

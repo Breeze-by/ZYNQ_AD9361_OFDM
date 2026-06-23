@@ -18,7 +18,7 @@
 - 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`OFDM Legacy Wrap`、`PL Verify Pattern` 等。
 - 用户当前要发送纯 payload，不要默认要求勾选 `OFDM Legacy Wrap`，也不要默认给 `--ofdm-legacy` 之类的命令行参数。若确实需要 Legacy 模式，必须先说明原因并明确让用户在 GUI 勾选 `OFDM Legacy Wrap`。
 - 调试 PL 回环要分阶段做。由于本地无法板级验证，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
-- 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ...` 和 `DONE ... gaps=... saved=...` 行。
+- 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=...`、`INCOMPLETE ...` 和 `DONE ... gaps=... air=... air_rx=... miss=... file_crc=... saved=...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
 ## 当前工程定位
@@ -77,7 +77,7 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 ## 调参边界
 
 - 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。DDR 中每个聚合 slot 的有效 payload 是 3000 字节，但 `NET_AGG_BLOCK_STRIDE_BYTES = 3008`，队列深度为 697；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
-- 默认 `Chunk Bytes = 1440`。raw 模式每包 wire payload 为 `1440`；Legacy 模式为 `16 + align8(1440) = 1456`。
+- 默认 `Chunk Bytes = 1440` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1440`，其中 `64` 字节是 PC-only AIR0 头，最多 `1376` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后 raw 模式每包 wire payload 为 `1440`；Legacy 模式为 `16 + align8(1440) = 1456`。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。Legacy 模式下 chunk 最大建议不超过 `2984`，因为 wire payload 还要加 16 字节 OFDM 头。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
@@ -99,6 +99,7 @@ Rate Limit KiB/s        400
 Throughput Mode         checked
 OFDM Legacy Wrap        unchecked
 Payload CRC32           checked
+AIR0 Packet Header      checked
 PL Verify Pattern       unchecked
 Verbose Packet Events   unchecked
 Progress ms             1000

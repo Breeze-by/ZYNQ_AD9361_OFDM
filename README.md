@@ -393,8 +393,22 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --ofdm-rate-mbps        Legacy RATE 字段，可选 6/9/12/18/24/36/48/54
 --payload-crc           启用应用层 payload CRC32；高负载/完整性测试推荐开启
 --no-payload-crc        关闭应用层 payload CRC32
+--air-protocol          启用 PC-only AIR0 payload header，默认开启
+--no-air-protocol       关闭 AIR0，发送旧版原始文件/测试字节流
 --pl-verify-pattern     用 PL 可见测试头和可预测 pattern 替换 payload
 ```
+
+## PC-only AIR0 payload header
+
+当前第一阶段强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1440` 的 wire payload 封装成：
+
+```text
+64-byte AIR0 header + up to 1376-byte original file/test payload
+```
+
+PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payload。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 当前不做 FEC、不做接收端 ACK、不做空口重传，只用于让接收端明确知道是否完整以及缺了哪些包。
+
+AIR0 默认只支持 raw payload 模式；`OFDM Legacy Wrap` 和 `PL Verify Pattern` 与 AIR0 互斥。如需回到旧版纯字节流，对发送 GUI 取消勾选 `AIR0 Packet Header`，或 CLI 使用 `--no-air-protocol`。
 
 推荐 GUI/CLI 吞吐配置：
 
@@ -404,6 +418,7 @@ Throughput Mode         开启
 OFDM Legacy Wrap        按 PL 当前期望选择；不需要 OFDM 头时关闭
 OFDM Rate               6 Mbps 起步
 Payload CRC32           开启
+AIR0 Packet Header      开启
 Verbose Packet Events   关闭
 Chunk Bytes             1440
 Window Size             1
@@ -450,6 +465,8 @@ Idle Finish(s)      Expected Bytes 为 0 时，收到数据后空闲多久自动
 单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。双电脑测试时，在接收电脑先启动 `receiver_gui.py` 并注册；发送电脑只运行 `sender_gui.py`，目标 IP 仍填板端 `192.168.1.50`。
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`OFDM Legacy Wrap` 关闭，`PL Verify Pattern` 关闭，`Payload CRC32` 开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
+
+当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Expected Bytes` 仍可填写原文件大小作为人工核对。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。
 
 如果接收 GUI 出现 `INCOMPLETE`，或者 `DONE` 中 `gaps` 不为 0、`saved` 为空，说明 PC 接收端没有拿到完整连续 payload；此时工具不会保存带洞文件。大文件测试时优先确认 `rx` 最终等于原文件大小、`high` 等于原文件大小、`gaps=0`、`crc=0`、`len=0`。
 
@@ -578,6 +595,13 @@ crc         loopback UDP 分片 CRC 错误数。
 len         loopback 分片实际长度与包头 chunk_len 不一致的错误数。
 gaps        当前已收到区间中 offset 0 之后的缺口数量。
 saved       已保存的恢复文件路径。
+air         是否自动识别到 AIR0 payload header。
+air_rx      已通过 AIR0 header/payload CRC 校验的数据包数 / AIR0 总包数。
+miss        AIR0 packet_seq 统计出的缺失包数量。
+bad_hdr     AIR0 header magic/version/length/header_crc 校验失败次数。
+bad_payload AIR0 payload_crc32 校验失败次数。
+dup         AIR0 重复 packet_seq 数量。
+file_crc    AIR0 恢复文件 CRC32 是否匹配。
 ```
 
 判断真实端到端吞吐时：

@@ -10,6 +10,13 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 
+from air_protocol import (
+    AIR_HEADER_BYTES,
+    build_air_packet,
+    crc32 as air_crc32,
+    make_file_id,
+)
+
 
 DATA_MAGIC = 0x4E455430
 ACK_MAGIC = 0x41434B30
@@ -91,6 +98,7 @@ class SenderConfig:
     ofdm_rate_mbps: int = 6
     validate_payload_crc: bool = False
     pl_verify_pattern: bool = False
+    air_protocol: bool = True
 
 
 @dataclass
@@ -174,6 +182,10 @@ def parse_args():
         help="disable PC-generated and PS-validated application payload CRC32 for this transfer")
     parser.add_argument("--pl-verify-pattern", action="store_true",
         help="replace each MPDU/raw chunk with a PL-visible test header and deterministic byte pattern")
+    parser.add_argument("--air-protocol", dest="air_protocol", action="store_true", default=True,
+        help="wrap payload chunks in a PC-only AIR0 header for loss/error accounting")
+    parser.add_argument("--no-air-protocol", dest="air_protocol", action="store_false",
+        help="send raw file/test bytes without the PC-only AIR0 header")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -256,8 +268,21 @@ def build_ofdm_legacy_frame(mpdu_payload: bytes, rate_mbps: int = 6) -> bytes:
 
 def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None,
     session_id: int = 0, total_chunks: int = 0, total_size: int = 0,
-    byte_offset: int = 0) -> bytes:
+    byte_offset: int = 0, file_crc32: int = 0, file_id: int = 0) -> bytes:
     mpdu_payload = payload
+    if config is not None and config.air_protocol:
+        mpdu_payload = build_air_packet(
+            payload,
+            packet_seq=seq,
+            total_packets=total_chunks,
+            file_offset=byte_offset,
+            file_size=total_size,
+            chunk_bytes=config.chunk_size,
+            session_id=session_id,
+            file_crc32=file_crc32,
+            file_id=file_id,
+        )
+
     if config is not None and config.pl_verify_pattern:
         mpdu_payload = build_pl_verify_payload(
             payload,
@@ -417,6 +442,13 @@ class UdpSender:
         self._session_id = 0
         self._active_total_size = 0
         self._active_total_chunks = 0
+        self._active_file_crc32 = 0
+        self._active_file_id = 0
+
+    def _payload_chunk_size(self) -> int:
+        if self.config.air_protocol:
+            return self.config.chunk_size - AIR_HEADER_BYTES
+        return self.config.chunk_size
 
     def stop(self):
         self._stop_requested = True
@@ -434,6 +466,7 @@ class UdpSender:
             ofdm_legacy = self.config.ofdm_legacy
             ofdm_rate_mbps = self.config.ofdm_rate_mbps
             pl_verify_pattern = self.config.pl_verify_pattern
+            air_protocol = self.config.air_protocol
 
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
@@ -447,14 +480,28 @@ class UdpSender:
         if pl_verify_pattern and chunk_size < PL_VERIFY_HEADER_BYTES:
             raise ValueError(
                 f"chunk_size must be at least {PL_VERIFY_HEADER_BYTES} bytes when PL Verify Pattern is enabled")
+        if air_protocol:
+            if chunk_size <= AIR_HEADER_BYTES:
+                raise ValueError(f"chunk_size must be greater than AIR header size {AIR_HEADER_BYTES}")
+            if pl_verify_pattern:
+                raise ValueError("AIR0 protocol and PL Verify Pattern are mutually exclusive")
+            if ofdm_legacy:
+                raise ValueError("AIR0 protocol currently supports raw payload mode only")
 
     def _prepare_transfer(self, payload: bytes):
-        total_chunks = (len(payload) + self.config.chunk_size - 1) // self.config.chunk_size
+        payload_chunk_size = self._payload_chunk_size()
+        total_chunks = (len(payload) + payload_chunk_size - 1) // payload_chunk_size
         self._active_total_size = len(payload)
         self._active_total_chunks = total_chunks
+        self._active_file_crc32 = air_crc32(payload)
+        self._active_file_id = make_file_id(
+            self._active_total_size,
+            self._active_file_crc32,
+            self._session_id,
+        )
 
         if self.config.pl_verify_pattern and total_chunks > 0:
-            last_chunk_len = len(payload) - ((total_chunks - 1) * self.config.chunk_size)
+            last_chunk_len = len(payload) - ((total_chunks - 1) * payload_chunk_size)
             if last_chunk_len < PL_VERIFY_HEADER_BYTES:
                 raise ValueError(
                     "PL Verify Pattern requires the final chunk to fit a 32-byte header; "
@@ -469,6 +516,7 @@ class UdpSender:
             validate_payload_crc = self.config.validate_payload_crc
             session_id = self._session_id
             pl_verify_pattern = self.config.pl_verify_pattern
+            air_protocol = self.config.air_protocol
 
         config = SenderConfig(
             ip=self.config.ip,
@@ -486,6 +534,7 @@ class UdpSender:
             ofdm_rate_mbps=ofdm_rate_mbps,
             validate_payload_crc=validate_payload_crc,
             pl_verify_pattern=pl_verify_pattern,
+            air_protocol=air_protocol,
         )
         return build_packet(
             seq,
@@ -494,7 +543,9 @@ class UdpSender:
             session_id=session_id,
             total_chunks=self._active_total_chunks,
             total_size=self._active_total_size,
-            byte_offset=seq * self.config.chunk_size,
+            byte_offset=seq * self._payload_chunk_size(),
+            file_crc32=self._active_file_crc32,
+            file_id=self._active_file_id,
         )
 
     def _begin_new_session(self):
@@ -607,8 +658,9 @@ class UdpSender:
 
     def _build_cached_packet(self, payload: bytes, packet_cache: list, seq: int):
         packet = packet_cache[seq]
-        start = seq * self.config.chunk_size
-        end = min(start + self.config.chunk_size, len(payload))
+        payload_chunk_size = self._payload_chunk_size()
+        start = seq * payload_chunk_size
+        end = min(start + payload_chunk_size, len(payload))
         if packet is None:
             packet = self._build_packet(seq, payload[start:end])
             packet_cache[seq] = packet
@@ -752,7 +804,8 @@ class UdpSender:
         stats = SenderStats(total_size=len(payload))
         stats.effective_window_size = self.config.window_size
         destination = (self.config.ip, self.config.port)
-        total_chunks = (len(payload) + self.config.chunk_size - 1) // self.config.chunk_size
+        payload_chunk_size = self._payload_chunk_size()
+        total_chunks = (len(payload) + payload_chunk_size - 1) // payload_chunk_size
         packet_cache = [None] * total_chunks
         acked = [False] * total_chunks
         outstanding: Dict[int, dict] = {}
@@ -925,8 +978,8 @@ class UdpSender:
 
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         self._validate_config()
-        self._prepare_transfer(payload)
         self._begin_new_session()
+        self._prepare_transfer(payload)
 
         if self.config.throughput_mode:
             return self._send_throughput(payload, callback=callback)
@@ -934,7 +987,7 @@ class UdpSender:
         stats = SenderStats(total_size=len(payload))
         stats.effective_window_size = self.config.window_size
         destination = (self.config.ip, self.config.port)
-        chunks = list(iter_chunks(payload, self.config.chunk_size))
+        chunks = list(iter_chunks(payload, self._payload_chunk_size()))
         total_chunks = len(chunks)
         acked = [False] * total_chunks
         outstanding: Dict[int, dict] = {}
@@ -1203,6 +1256,7 @@ def run_cli(args) -> int:
         ofdm_rate_mbps=args.ofdm_rate_mbps,
         validate_payload_crc=args.validate_payload_crc,
         pl_verify_pattern=args.pl_verify_pattern,
+        air_protocol=args.air_protocol,
     ))
 
     def callback(event_name: str, payload_dict: dict):
