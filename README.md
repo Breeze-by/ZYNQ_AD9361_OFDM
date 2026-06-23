@@ -1,6 +1,6 @@
 # ZYNQ_AD9361_OFDM
 
-这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前 Vivado 工程是 PL loopback：数据经过 PL 侧 OFDM 调制/解调恢复后，通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回 PC GUI 做丢包、对齐、CRC 和逐字节校验。
+这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前 Vivado 工程是 PL loopback：数据经过 PL 侧 OFDM 调制/解调恢复后，通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。
 
 ```text
 PC UDP sender
@@ -12,7 +12,7 @@ PC UDP sender
 -> PL OFDM loopback/decode
 -> AXI DMA S2MM
 -> PS UDP loopback return
--> PC GUI verify
+-> PC receiver GUI/CLI restore
 ```
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
@@ -22,7 +22,7 @@ PC UDP sender
 ```text
 ZYNQ_AD9361_OFDM/
 |-- README.md                         # 唯一项目说明
-|-- AGENT.md                          # 后续 agent 上手指南
+|-- AGENTS.md                         # 后续 agent 上手指南
 |-- System_wrapper.hdf                # Vivado 硬件导出
 |-- System_wrapper_hw_platform_0/     # SDK 硬件平台，含 bit/hdf/ps7_init
 |-- AD9361_test2/                     # 主要 Xilinx SDK 应用工程
@@ -38,7 +38,7 @@ ZYNQ_AD9361_OFDM/
 |   |   |-- utils/                    # 公共配置和工具
 |   |   |-- lscript.ld
 |   |   `-- Xilinx.spec
-|   `-- tools/pc_sender/              # Python CLI/Tkinter GUI 发送工具
+|   `-- tools/pc_sender/              # Python CLI/Tkinter GUI 发送/接收工具
 `-- AD9361_test2_bsp/                 # Xilinx SDK BSP/lwIP/libxil 生成产物
 ```
 
@@ -79,6 +79,13 @@ AD9361_test2/tools/pc_sender/send_data.py
 
 AD9361_test2/tools/pc_sender/sender_gui.py
     Tkinter GUI 入口。
+AD9361_test2/tools/pc_sender/receiver_core.py
+    PC 接收核心；注册 PL loopback 回传目标、接收分片、CRC 检查、
+    按 stream_offset 恢复输出文件。
+AD9361_test2/tools/pc_sender/recv_data.py
+    接收 CLI 入口。
+AD9361_test2/tools/pc_sender/receiver_gui.py
+    接收 Tkinter GUI 入口。
 ```
 
 ## 板端启动流程
@@ -174,6 +181,7 @@ typedef struct {
 ```text
 DATA magic       0x4E455430
 ACK magic        0x41434B30
+RXCFG magic      0x52435830
 DATA header      16 bytes
 ACK packet       16 bytes
 RESET flag       0x8000
@@ -202,7 +210,11 @@ ACK 状态：
 
 ## UDP Loopback 回传协议
 
-PL->PS S2MM 完成后，PS 会跳过 PL 返回数据前面的 16 字节头，只把恢复出的 payload 分片 UDP 发回本次发送 GUI 的源 IP/端口。回传包使用同一个 UDP socket 和端口，因此 GUI 侧会同时收到 ACK 包和 loopback 包，发送核心会按 magic 自动区分。
+接收工具启动后会先用本机接收 socket 向板端 `192.168.1.50:5001` 发送一个 16 字节 `RXCFG` 控制包。该包与普通 `net_data_header_t` 形状相同，只是 `magic=0x52435830`、`payload_len=0`。板端收到后记录该 UDP 包的源 IP/源端口作为 PL loopback 回传目标，返回 `ACK OK`，并打印 `RXCFG loopback peer port=...`。
+
+注册成功后，即使发送端随后发 `RESET`，板端也会继续把 PL loopback 回传发给已注册的接收端；不会被发送端源端口覆盖。这样支持单电脑场景，也支持一台电脑只跑发送 GUI、另一台电脑只跑接收 GUI 的场景。如果接收工具没有注册，板端仍保留兼容行为：把回传发给最近一次发送/RESET 数据包的源 IP/端口。
+
+PL->PS S2MM 完成后，PS 会跳过 PL 返回数据前面的 16 字节头，只把恢复出的 payload 按 1200 字节分片 UDP 发回已注册接收端。DMA 比较仍按 `align8(payload_len)` 检查补零后的传输内容，但 UDP 回传只发送原始聚合块 `payload_len`，不会把末尾 8 字节对齐补零写进恢复文件。发送程序现在只处理发送 ACK；如果意外收到 loopback 包，会按 magic 识别后忽略。
 
 回传包头：
 
@@ -401,6 +413,38 @@ Test Bytes              64 MiB 或 256 MiB
 
 GUI 运行中切换 OFDM Rate 只影响之后新生成的包。已经发出的包和缓存中的重传包保持首次生成时的 rate、payload 和 CRC。
 
+## PC 接收工具
+
+接收 GUI 入口：
+
+```bash
+python AD9361_test2/tools/pc_sender/receiver_gui.py
+```
+
+命令行入口：
+
+```bash
+python AD9361_test2/tools/pc_sender/recv_data.py --board-ip 192.168.1.50 --bind-port 5002 --output-dir output
+```
+
+常用 GUI 字段：
+
+```text
+Bind IP             本机监听 IP。通常填 0.0.0.0
+Bind Port           本机接收 loopback UDP 端口。默认 5002
+Board IP            板端 IP。默认 192.168.1.50
+Board Port          板端 UDP 端口。默认 5001
+Register RX target  勾选后发送 RXCFG，把本机注册为回传目标
+Output Directory    恢复文件保存目录。默认 output
+File Name           可选输出文件名；不填则按时间自动命名并推断扩展名
+Expected Bytes      期望恢复的连续字节数；知道原文件大小时填文件大小
+Idle Finish(s)      Expected Bytes 为 0 时，收到数据后空闲多久自动保存
+```
+
+单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。双电脑测试时，在接收电脑先启动 `receiver_gui.py` 并注册；发送电脑只运行 `sender_gui.py`，目标 IP 仍填板端 `192.168.1.50`。
+
+要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`OFDM Legacy Wrap` 关闭，`PL Verify Pattern` 关闭，`Payload CRC32` 开启。接收 GUI 的 `Expected Bytes` 最好填原文件大小；不方便确认时可填 `0`，由空闲超时保存。无失真传输下，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
+
 ## Raw 与 OFDM Legacy payload
 
 raw 模式下，PC->PS 应用层包头后直接是原始 payload：
@@ -512,11 +556,20 @@ PC 发送工具现在把速率拆成三个真实口径：
 app_deliv   原始业务 payload 被 ACK 的速率；raw/Legacy 下都按用户输入数据计数。
 wire_acc    PS 已接受的 wire payload 速率；对应板端 `acc`，Legacy 模式会包含 16 字节 OFDM 头和 padding。
 udp_tx      主机实际送入 UDP socket 的应用层字节速率；包含 16 字节 PC->PS 包头和重传。
-lb          GUI 收到并校验通过的 PL->PS->UDP 回传 payload 字节数。
-lb_rate     GUI 收到 loopback payload 的速率。
-lb_crc      loopback UDP 分片 CRC 错误数。
-lb_diff     loopback payload 与原始 raw 测试数据逐字节比较的错误数。
-lb_range    loopback 偏移或长度超出原始 raw payload 范围的错误数。
+```
+
+PC 接收工具负责 PL->PS->UDP 回传指标：
+
+```text
+rx          从 offset 0 开始已经连续恢复的 payload 字节数。
+high        当前收到过的最高结束偏移。
+pkt         收到的 loopback UDP 分片数。
+blk         收到完整 LAST_CHUNK 标记的 PL 回传块数。
+rate        接收端 loopback payload 平均速率。
+crc         loopback UDP 分片 CRC 错误数。
+len         loopback 分片实际长度与包头 chunk_len 不一致的错误数。
+gaps        当前已收到区间中 offset 0 之后的缺口数量。
+saved       已保存的恢复文件路径。
 ```
 
 判断真实端到端吞吐时：
@@ -541,7 +594,7 @@ NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 ```
 
-每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前 `tx_transfer` 长度比较 RX payload 和 TX buffer。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回 PC GUI。
+每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前 `tx_transfer` 长度比较 RX payload 和 TX buffer。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
 
 关键日志：
 
@@ -565,7 +618,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 - 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
 - 所有 `LB UDP sent` 行。
 - 同一轮的 `STAT rate` / `STAT state` 行。
-- GUI 日志中的 `PROGRESS ... lb=... lb_crc=... lb_diff=... lb_range=...` 和 `DONE ...` 行。
+- 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...` 和 `DONE ... saved=...` 行。
 - 如果出现 `cmp=DIFF`，提供紧随其后的 `S2MM rx_head` 和 `S2MM tx_head`。
 
 如果只看到 `S2MM start` 和周期性 `S2MM wait`，说明 S2MM 没有完成，重点看 PL 是否输出 TLAST、S2MM 中断是否接到 GIC、RX stream 是否有数据。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。

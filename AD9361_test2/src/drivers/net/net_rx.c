@@ -58,6 +58,7 @@ static XTime pending_ok_ack_first_time;
 static ip_addr_t loopback_return_addr;
 static u16_t loopback_return_port;
 static int loopback_return_peer_valid;
+static int loopback_return_peer_locked;
 static uint32_t loopback_return_packet_count;
 static uint32_t loopback_return_byte_count;
 static uint16_t current_session_id;
@@ -352,8 +353,10 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc)
     pending_ok_ack_transfer_len = 0U;
     pending_ok_ack_count = 0U;
     pending_ok_ack_first_time = 0U;
-    loopback_return_peer_valid = 0;
-    loopback_return_port = 0U;
+    if (loopback_return_peer_locked == 0) {
+        loopback_return_peer_valid = 0;
+        loopback_return_port = 0U;
+    }
     loopback_return_packet_count = 0U;
     loopback_return_byte_count = 0U;
     current_session_id = session_id & NET_DATA_SESSION_MASK;
@@ -777,6 +780,7 @@ static void net_loopback_poll_s2mm(void)
     uint32_t tx_crc;
     uint32_t mismatch_index;
     uint32_t compare_len;
+    uint32_t return_len;
     uint32_t rx_prefix_len;
     uint32_t timestamp_lo = 0U;
     uint32_t timestamp_hi = 0U;
@@ -920,7 +924,11 @@ static void net_loopback_poll_s2mm(void)
     }
 
     if (dma_block_index >= 0) {
-        net_loopback_return_udp(&agg_blocks[dma_block_index], rx_payload_ptr, compare_len,
+        return_len = compare_len;
+        if (return_len > agg_blocks[dma_block_index].payload_len) {
+            return_len = agg_blocks[dma_block_index].payload_len;
+        }
+        net_loopback_return_udp(&agg_blocks[dma_block_index], rx_payload_ptr, return_len,
             timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
     }
 
@@ -1086,6 +1094,29 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         return;
     }
 
+    if (header.magic == NET_RXCFG_MAGIC) {
+        if (((uint32_t)p->tot_len != (uint32_t)sizeof(header)) ||
+            (header.payload_len != 0U)) {
+            UART_Printf("RXCFG drop seq=%lu reason=bad_length pkt=%lu payload=%u\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)p->tot_len,
+                (unsigned)header.payload_len);
+            NetStats_OnBadLength();
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        loopback_return_addr = *addr;
+        loopback_return_port = port;
+        loopback_return_peer_valid = 1;
+        loopback_return_peer_locked = 1;
+        UART_Printf("RXCFG loopback peer port=%u\r\n", (unsigned)loopback_return_port);
+        net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, 0U);
+        pbuf_free(p);
+        return;
+    }
+
     if (header.magic != NET_DATA_MAGIC) {
         UART_Printf("UDP drop seq=%lu reason=bad_magic magic=0x%08lX\r\n",
             (unsigned long)header.seq,
@@ -1124,9 +1155,11 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
 
         net_reset_stream_state(packet_session_id,
             ((packet_flags & NET_DATA_FLAG_NO_CRC) == 0U) ? 1 : 0);
-        loopback_return_addr = *addr;
-        loopback_return_port = port;
-        loopback_return_peer_valid = 1;
+        if (loopback_return_peer_locked == 0) {
+            loopback_return_addr = *addr;
+            loopback_return_port = port;
+            loopback_return_peer_valid = 1;
+        }
         UART_Printf("UDP RX reset session=%u crc=%s ofdm=%s\r\n",
             (unsigned)current_session_id,
             (current_session_validate_crc != 0) ? "on" : "off",
@@ -1232,9 +1265,11 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
 
     block->payload_len += header.payload_len;
     XTime_GetTime(&block->last_write_time);
-    loopback_return_addr = *addr;
-    loopback_return_port = port;
-    loopback_return_peer_valid = 1;
+    if (loopback_return_peer_locked == 0) {
+        loopback_return_addr = *addr;
+        loopback_return_port = port;
+        loopback_return_peer_valid = 1;
+    }
     total_accepted_bytes += header.payload_len;
     NetStats_OnAcceptedPacket(header.payload_len);
     net_record_accepted_chunk(header.seq, header.payload_len);
@@ -1311,6 +1346,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     pending_ok_ack_count = 0U;
     pending_ok_ack_first_time = 0U;
     loopback_return_peer_valid = 0;
+    loopback_return_peer_locked = 0;
     loopback_return_port = 0U;
     loopback_return_packet_count = 0U;
     loopback_return_byte_count = 0U;

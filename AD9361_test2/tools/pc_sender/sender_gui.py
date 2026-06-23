@@ -128,10 +128,6 @@ class SenderGui:
         self.pending_count_var = tk.StringVar(value="0")
         self.tx_packet_rate_var = tk.StringVar(value="0.0 pkt/s")
         self.ack_packet_rate_var = tk.StringVar(value="0.0 pkt/s")
-        self.loopback_bytes_var = tk.StringVar(value="0 / 0")
-        self.loopback_blocks_var = tk.StringVar(value="0")
-        self.loopback_rate_var = tk.StringVar(value="0.00 KiB/s")
-        self.loopback_errors_var = tk.StringVar(value="0")
         self.window_average_var = tk.StringVar(value="0.0 / 0")
         self.idle_sleep_var = tk.StringVar(value="0.000 s")
         self.empty_poll_var = tk.StringVar(value="0")
@@ -312,10 +308,6 @@ class SenderGui:
             ("Errors", self.error_count_var),
             ("TX Packets", self.tx_packet_rate_var),
             ("ACK Packets", self.ack_packet_rate_var),
-            ("Loopback Bytes", self.loopback_bytes_var),
-            ("Loopback Blocks", self.loopback_blocks_var),
-            ("Loopback Rate", self.loopback_rate_var),
-            ("Loopback Errors", self.loopback_errors_var),
             ("Window Avg/Max", self.window_average_var),
             ("Idle Sleep", self.idle_sleep_var),
             ("Empty Polls", self.empty_poll_var),
@@ -545,10 +537,6 @@ class SenderGui:
         self.error_count_var.set("0")
         self.tx_packet_rate_var.set("0.0 pkt/s")
         self.ack_packet_rate_var.set("0.0 pkt/s")
-        self.loopback_bytes_var.set(f"0 / {total_size}")
-        self.loopback_blocks_var.set("0")
-        self.loopback_rate_var.set("0.00 KiB/s")
-        self.loopback_errors_var.set("0")
         self.window_average_var.set("0.0 / 0")
         self.idle_sleep_var.set("0.000 s")
         self.empty_poll_var.set("0")
@@ -600,14 +588,6 @@ class SenderGui:
             self.busy_count_var.set(str(stats.ack_busy))
             self.tx_packet_rate_var.set(f"{stats.packets_sent_per_second:.1f} pkt/s")
             self.ack_packet_rate_var.set(f"{stats.ack_received_per_second:.1f} pkt/s")
-            self.loopback_bytes_var.set(f"{stats.loopback_bytes} / {stats.total_size}")
-            self.loopback_blocks_var.set(str(stats.loopback_blocks))
-            self.loopback_rate_var.set(f"{stats.loopback_rate_kib_s:.2f} KiB/s")
-            loopback_error_total = (
-                stats.loopback_crc_errors + stats.loopback_mismatch_errors +
-                stats.loopback_range_errors
-            )
-            self.loopback_errors_var.set(str(loopback_error_total))
             self.window_average_var.set(
                 f"{stats.outstanding_window_avg:.1f} / {stats.outstanding_window_max} "
                 f"({stats.effective_window_size})"
@@ -637,37 +617,10 @@ class SenderGui:
                     f"inflight={payload.get('window_used', 0)} app_deliv={stats.delivered_rate_kib_s:.2f}KiB/s "
                     f"wire_acc={stats.wire_delivered_rate_kib_s:.2f}KiB/s udp_tx_rate={stats.udp_app_tx_rate_kib_s:.2f}KiB/s "
                     f"tx_pkt={stats.packets_sent_per_second:.1f}/s ack_rx={stats.ack_received_per_second:.1f}/s "
-                    f"lb={stats.loopback_bytes}/{stats.total_size} lb_blk={stats.loopback_blocks} "
-                    f"lb_pkt={stats.loopback_packets} lb_rate={stats.loopback_rate_kib_s:.2f}KiB/s "
-                    f"lb_crc={stats.loopback_crc_errors} lb_diff={stats.loopback_mismatch_errors} "
-                    f"lb_range={stats.loopback_range_errors} "
                     f"occ={stats.outstanding_window_avg:.1f}/{stats.outstanding_window_max} "
                     f"win={stats.effective_window_size}/{self.sender.config.window_size if self.sender else 0} "
                     f"sleep={stats.send_loop_sleep_time_s:.3f}s empty={stats.socket_timeout_wakeups} "
                     f"busy={stats.ack_busy} pending={stats.ack_pending}"
-                )
-            return
-
-        if event_name == "loopback":
-            stats = payload["stats"]
-            self.loopback_bytes_var.set(f"{stats.loopback_bytes} / {stats.total_size}")
-            self.loopback_blocks_var.set(str(stats.loopback_blocks))
-            self.loopback_rate_var.set(f"{stats.loopback_rate_kib_s:.2f} KiB/s")
-            loopback_error_total = (
-                stats.loopback_crc_errors + stats.loopback_mismatch_errors +
-                stats.loopback_range_errors
-            )
-            self.loopback_errors_var.set(str(loopback_error_total))
-            if self.verbose_var.get() or payload["status"] != "OK":
-                diff_text = ""
-                if payload["first_diff"] >= 0:
-                    diff_text = (
-                        f" first_diff={payload['first_diff']} "
-                        f"expected=0x{payload['expected_byte']:02X} actual=0x{payload['actual_byte']:02X}"
-                    )
-                self._append_log(
-                    f"LOOPBACK block={payload['block_id']} off={payload['stream_offset']}+{payload['chunk_offset']} "
-                    f"len={payload['returned_len']} status={payload['status']}{diff_text}"
                 )
             return
 
@@ -745,10 +698,6 @@ class SenderGui:
                 f"wire_ack={stats.wire_bytes_acked} udp_tx={stats.udp_app_bytes_sent} "
                 f"app_deliv={stats.delivered_rate_kib_s:.2f}KiB/s "
                 f"wire_acc={stats.wire_delivered_rate_kib_s:.2f}KiB/s udp_tx_rate={stats.udp_app_tx_rate_kib_s:.2f}KiB/s "
-                f"lb={stats.loopback_bytes}/{stats.total_size} lb_blk={stats.loopback_blocks} "
-                f"lb_pkt={stats.loopback_packets} lb_rate={stats.loopback_rate_kib_s:.2f}KiB/s "
-                f"lb_crc={stats.loopback_crc_errors} lb_diff={stats.loopback_mismatch_errors} "
-                f"lb_range={stats.loopback_range_errors} "
                 f"ack_ok={stats.ack_ok} timeouts={stats.timeout_count}"
             )
             self._on_done()

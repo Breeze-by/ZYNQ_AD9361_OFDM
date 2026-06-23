@@ -10,6 +10,8 @@ SDK.log
 *.log
 *.jou
 *.str
+output/
+**/output/
 
 # SDK build output directories
 **/Debug/
