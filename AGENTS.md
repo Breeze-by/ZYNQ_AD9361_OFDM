@@ -1,4 +1,4 @@
-# AGENT.md
+# AGENTS.md
 
 本文件给后续 agent 快速接手本仓库使用。项目完整说明只维护根目录 `README.md`，不要在子目录新增 README。
 
