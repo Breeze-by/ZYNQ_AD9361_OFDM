@@ -24,7 +24,7 @@ from sender_core import (
 )
 
 
-DEFAULT_RECEIVER_PORT = 5002
+DEFAULT_RECEIVER_PORT = 15002
 DEFAULT_BOARD_IP = "192.168.1.50"
 DEFAULT_BOARD_PORT = 5001
 DEFAULT_IDLE_FINISH_S = 2.0
@@ -295,6 +295,13 @@ class LoopbackReceiver:
         self._refresh_rates(stats, now)
         self._emit(callback, "progress", {"stats": stats})
 
+    def _raise_socket_bind_error(self, exc: OSError):
+        raise RuntimeError(
+            f"local UDP bind failed for {self.config.bind_ip}:{self.config.bind_port}: {exc}. "
+            "The port is probably already occupied or blocked by Windows. "
+            "Close the process using that port, or change Bind Port to another value such as 15002."
+        ) from exc
+
     def _register_with_board(self, sock: socket.socket, stats: ReceiverStats, callback):
         if not self.config.register_with_board:
             return
@@ -307,7 +314,13 @@ class LoopbackReceiver:
         try:
             for attempt in range(8):
                 stats.register_attempts += 1
-                sock.sendto(packet, destination)
+                try:
+                    sock.sendto(packet, destination)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"failed to send RXCFG to board {self.config.board_ip}:{self.config.board_port}: {exc}. "
+                        "Check Board IP, network adapter, firewall, and whether the board is reachable."
+                    ) from exc
                 self._emit(callback, "register_attempt", {
                     "attempt": attempt + 1,
                     "board_ip": self.config.board_ip,
@@ -413,54 +426,63 @@ class LoopbackReceiver:
         stats = ReceiverStats(started_at=time.time())
         last_payload_time = 0.0
 
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.config.socket_buffer_bytes)
-            sock.bind((self.config.bind_ip, self.config.bind_port))
-            sock.settimeout(0.05)
-
-            self._emit(callback, "start", {
-                "bind_ip": self.config.bind_ip,
-                "bind_port": self.config.bind_port,
-                "output_dir": self.config.output_dir,
-                "expected_bytes": self.config.expected_bytes,
-            })
-            self._register_with_board(sock, stats, callback)
-
-            while not self._stop_requested:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 try:
-                    data, _addr = sock.recvfrom(4096)
-                except socket.timeout:
-                    now = time.time()
-                    if (last_payload_time > 0.0 and self.config.expected_bytes == 0 and
-                        self.config.idle_finish_s > 0.0 and
-                        (now - last_payload_time) >= self.config.idle_finish_s):
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.config.socket_buffer_bytes)
+                    sock.bind((self.config.bind_ip, self.config.bind_port))
+                except OSError as exc:
+                    self._raise_socket_bind_error(exc)
+
+                sock.settimeout(0.05)
+
+                self._emit(callback, "start", {
+                    "bind_ip": self.config.bind_ip,
+                    "bind_port": self.config.bind_port,
+                    "output_dir": self.config.output_dir,
+                    "expected_bytes": self.config.expected_bytes,
+                })
+                self._register_with_board(sock, stats, callback)
+
+                while not self._stop_requested:
+                    try:
+                        data, _addr = sock.recvfrom(4096)
+                    except socket.timeout:
+                        now = time.time()
+                        if (last_payload_time > 0.0 and self.config.expected_bytes == 0 and
+                            self.config.idle_finish_s > 0.0 and
+                            (now - last_payload_time) >= self.config.idle_finish_s):
+                            if self._save_if_ready(stats, callback):
+                                if self.config.stop_after_save:
+                                    break
+                        continue
+
+                    packet_type, packet = parse_udp_packet(data)
+                    if packet_type == "loopback":
+                        self._process_loopback(packet, stats, callback)
+                        last_payload_time = time.time()
+                        self._emit_progress(callback, stats)
                         if self._save_if_ready(stats, callback):
                             if self.config.stop_after_save:
                                 break
-                    continue
+                    elif packet_type == "ack":
+                        self._emit(callback, "ack", {
+                            "seq": packet["seq"],
+                            "status": packet["status"],
+                            "status_name": ACK_STATUS_NAMES.get(packet["status"], f"UNKNOWN_{packet['status']}"),
+                            "transfer_len": packet["transfer_len"],
+                        })
+                    else:
+                        stats.unknown_packets += 1
+                        self._emit(callback, "unknown", packet)
 
-                packet_type, packet = parse_udp_packet(data)
-                if packet_type == "loopback":
-                    self._process_loopback(packet, stats, callback)
-                    last_payload_time = time.time()
-                    self._emit_progress(callback, stats)
-                    if self._save_if_ready(stats, callback):
-                        if self.config.stop_after_save:
-                            break
-                elif packet_type == "ack":
-                    self._emit(callback, "ack", {
-                        "seq": packet["seq"],
-                        "status": packet["status"],
-                        "status_name": ACK_STATUS_NAMES.get(packet["status"], f"UNKNOWN_{packet['status']}"),
-                        "transfer_len": packet["transfer_len"],
-                    })
-                else:
-                    stats.unknown_packets += 1
-                    self._emit(callback, "unknown", packet)
-
+                if not self._saved:
+                    self._save_if_ready(stats, callback, force=True)
+        except Exception:
             if not self._saved:
-                self._save_if_ready(stats, callback, force=True)
+                self._assembler.discard()
+            raise
 
         if not self._saved:
             self._assembler.discard()

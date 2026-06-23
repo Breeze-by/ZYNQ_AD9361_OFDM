@@ -424,14 +424,14 @@ python AD9361_test2/tools/pc_sender/receiver_gui.py
 命令行入口：
 
 ```bash
-python AD9361_test2/tools/pc_sender/recv_data.py --board-ip 192.168.1.50 --bind-port 5002 --output-dir output
+python AD9361_test2/tools/pc_sender/recv_data.py --board-ip 192.168.1.50 --bind-port 15002 --output-dir output
 ```
 
 常用 GUI 字段：
 
 ```text
 Bind IP             本机监听 IP。通常填 0.0.0.0
-Bind Port           本机接收 loopback UDP 端口。默认 5002
+Bind Port           本机接收 loopback UDP 端口。默认 15002
 Board IP            板端 IP。默认 192.168.1.50
 Board Port          板端 UDP 端口。默认 5001
 Register RX target  勾选后发送 RXCFG，把本机注册为回传目标
