@@ -58,6 +58,7 @@ DATA_SESSION_MASK = 0x1FFF
 LOOPBACK_FLAG_LAST_CHUNK = 0x0001
 
 DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
+DEFAULT_WINDOW_SIZE = 4
 OFDM_LEGACY_RATE_BITS = {
     6: 0b1101,
     9: 0b1111,
@@ -78,7 +79,7 @@ class SenderConfig:
     timeout: float = 1.0
     retries: int = 10
     target_rate_kib_s: float = 0.0
-    window_size: int = 64
+    window_size: int = DEFAULT_WINDOW_SIZE
     socket_buffer_bytes: int = 4 * 1024 * 1024
     progress_interval_s: float = 0.1
     verbose_events: bool = False
@@ -143,7 +144,7 @@ def parse_args():
     parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
     parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
         help="optional offered load cap in KiB/s, 0 means unlimited")
-    parser.add_argument("--window-size", type=int, default=64,
+    parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE,
         help="number of in-flight chunks allowed before waiting for ACKs")
     parser.add_argument("--socket-buffer-bytes", type=int, default=4 * 1024 * 1024,
         help="host socket send/recv buffer size")

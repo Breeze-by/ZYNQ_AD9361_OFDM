@@ -81,8 +81,9 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。Legacy 模式下 chunk 最大建议不超过 `2984`，因为 wire payload 还要加 16 字节 OFDM 头。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
+- 发送 GUI 的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。判断文件是否完整，以发送端 `app_ack == total_size` 和接收端 `rx/high == file_size`、`gaps=0`、`crc=0`、`len=0` 为准。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
-- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按 `tx_transfer` 长度比较 RX payload 和 TX buffer，并打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；如果比较结果为 `cmp=DIFF`，现在会强制打印，不受 128 块间隔限制。随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回已注册的接收 GUI/CLI。接收端按 `stream_offset + chunk_offset` 恢复连续 payload，检查分片 CRC、长度和缺口，并把图片/视频等原始文件保存到 `output`；如果存在缺口，接收端应报 `INCOMPLETE` 且不保存带洞文件。
+- 当前已开启 PL->PS S2MM 回环调试和 UDP 回传：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后跳过 RX 前 16 字节前缀，按聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。代码会打印 `S2MM done/wait/error`、CRC、首部 word、`S2MM rx_hdr` 头字段推测和 TX/RX 比较结果；如果比较结果为 `cmp=DIFF`，现在会强制打印，不受 128 块间隔限制。随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回已注册的接收 GUI/CLI。接收端按 `stream_offset + chunk_offset` 恢复连续 payload，检查分片 CRC、长度和缺口，并把图片/视频等原始文件保存到 `output`；如果存在缺口，接收端应报 `INCOMPLETE` 且不保存带洞文件。
 - MM2S 启动前必须先 `OpenWifi_Tx_Rearm(payload_len)`，再调用 `net_configure_tx_frame()` 写最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 re-arm 放在配置之后；否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
 ## 当前推荐 GUI 测试设置

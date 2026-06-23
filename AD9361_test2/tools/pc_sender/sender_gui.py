@@ -8,6 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from sender_core import (
     DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
+    DEFAULT_WINDOW_SIZE,
     OFDM_LEGACY_RATE_BITS,
     SenderConfig,
     UdpSender,
@@ -100,7 +101,7 @@ class SenderGui:
         self.timeout_var = tk.StringVar(value="1.0")
         self.retries_var = tk.StringVar(value="10")
         self.target_rate_var = tk.StringVar(value="0")
-        self.window_var = tk.StringVar(value="64")
+        self.window_var = tk.StringVar(value=str(DEFAULT_WINDOW_SIZE))
         self.test_size_var = tk.StringVar(value=str(64 * 1024 * 1024))
         self.socket_buffer_var = tk.StringVar(value=str(4 * 1024 * 1024))
         self.progress_interval_var = tk.StringVar(value="1000")
@@ -301,11 +302,11 @@ class SenderGui:
             ("UDP TX", self.avg_rate_var),
             ("Wire Accepted", self.ps_rate_var),
             ("ACK OK", self.ack_ok_var),
-            ("Pending", self.pending_count_var),
+            ("Pending Retries", self.pending_count_var),
             ("Timeouts", self.timeout_count_var),
             ("Retries", self.retry_count_var),
-            ("Busy", self.busy_count_var),
-            ("Errors", self.error_count_var),
+            ("Busy Retries", self.busy_count_var),
+            ("Recoverable Errors", self.error_count_var),
             ("TX Packets", self.tx_packet_rate_var),
             ("ACK Packets", self.ack_packet_rate_var),
             ("Window Avg/Max", self.window_average_var),
@@ -316,7 +317,7 @@ class SenderGui:
         for label_text, variable in metrics:
             row = ttk.Frame(status_box)
             row.pack(fill=tk.X, pady=4)
-            ttk.Label(row, text=label_text, width=16).pack(side=tk.LEFT)
+            ttk.Label(row, text=label_text, width=19).pack(side=tk.LEFT)
             ttk.Label(row, textvariable=variable, font=("Consolas", 10)).pack(side=tk.LEFT)
 
     def _build_chart_panel(self, parent):

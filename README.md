@@ -317,8 +317,8 @@ NET_MAX_PAYLOAD_BYTES          3000
 
 1. 校验 `payload_len <= NET_OFDM_MAX_PSDU_BYTES`。
 2. 校验 `transfer_len == align8(payload_len)`。
-3. 根据本次块的真实 `payload_len` 更新 `tx_intf` 帧长、DMA word 数和 auto-start threshold。
-4. 调用 `OpenWifi_Tx_Rearm(payload_len)`。
+3. 调用 `OpenWifi_Tx_Rearm(payload_len)` 重置 TX 状态机。
+4. 根据本次块的真实 `payload_len` 更新 `tx_intf` 帧长、DMA word 数和 auto-start threshold。
 5. 对 DMA buffer 执行 `Xil_DCacheFlushRange()`。
 6. 调用 `XAxiDma_SimpleTransfer(..., XAXIDMA_DMA_TO_DEVICE)`。
 
@@ -362,13 +362,13 @@ Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
 命令行入口：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 64 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 4 --throughput-mode
 ```
 
 发送文件：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1440 --window-size 64 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1440 --window-size 4 --throughput-mode
 ```
 
 GUI：
@@ -385,7 +385,7 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --test-size             生成测试数据字节数
 --file                  从文件读取 payload
 --chunk-size            每个 MPDU/raw chunk 的原始 payload 字节数，默认 1440
---window-size           滑动窗口，默认 64
+--window-size           滑动窗口，默认 4
 --throughput-mode       轻量吞吐输出
 --target-rate-kib-s     主机侧限速，0 表示不限速
 --ofdm-legacy           启用 Legacy OFDM 输入帧封装
@@ -406,12 +406,14 @@ OFDM Rate               6 Mbps 起步
 Payload CRC32           开启
 Verbose Packet Events   关闭
 Chunk Bytes             1440
-Window Size             64
+Window Size             4
 Progress ms             1000
 Test Bytes              64 MiB 或 256 MiB
 ```
 
 GUI 运行中切换 OFDM Rate 只影响之后新生成的包。已经发出的包和缓存中的重传包保持首次生成时的 rate、payload 和 CRC。
+
+发送 GUI 里的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。只要发送端最终 `app_ack` 等于总字节数，接收端最终 `rx/high` 等于原文件大小且 `gaps=0 crc=0 len=0`，说明当前这次恢复文件是连续完整的。`Recoverable Errors` 中常见的是板端 payload CRC 拒收后重传成功；如果该计数持续升高，可以降低 `Window Size` 或设置 `Rate Limit KiB/s` 继续压低主机发包压力。
 
 ## PC 接收工具
 
@@ -597,7 +599,7 @@ NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 ```
 
-每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前 `tx_transfer` 长度比较 RX payload 和 TX buffer。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
+每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
 
 MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_configure_tx_frame()` 写入最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 `OpenWifi_Tx_Rearm()` 放在 `net_configure_tx_frame()` 后面，否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
@@ -610,7 +612,7 @@ S2MM wait id=1 capture=8192 tx_transfer=2880 waited_ms=1000 txdone=... rxdone=..
 S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=OK done=1
 S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=DIFF first_diff=...
 S2MM rx_head ...
-S2MM rx_hdr ts=... meta0=... meta1=... len_field=... payload_guess=... rate_guess=... tx_transfer=... match=...
+S2MM rx_hdr ts=... meta0=... meta1=... len_field=... payload_guess=... rate_guess=... tx_payload=... tx_transfer=... match=...
 S2MM rx_payload_head ...
 S2MM tx_head ...
 LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...

@@ -527,7 +527,7 @@ static uint32_t net_load_le32(const uint8_t *ptr)
 }
 
 static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
-    uint32_t tx_transfer_len)
+    uint32_t tx_transfer_len, uint32_t tx_payload_len)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
     uint32_t timestamp_lo;
@@ -555,7 +555,8 @@ static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
 
     UART_Printf(
         "S2MM rx_hdr ts=%08lX_%08lX meta0=0x%08lX meta1=0x%08lX "
-        "len_field=%lu payload_guess=%lu rate_guess=0x%02lX tx_transfer=%lu match=%s\r\n",
+        "len_field=%lu payload_guess=%lu rate_guess=0x%02lX "
+        "tx_payload=%lu tx_transfer=%lu match=%s\r\n",
         (unsigned long)timestamp_hi,
         (unsigned long)timestamp_lo,
         (unsigned long)meta0,
@@ -563,12 +564,14 @@ static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
         (unsigned long)length_field,
         (unsigned long)payload_len_guess,
         (unsigned long)rate_guess,
+        (unsigned long)tx_payload_len,
         (unsigned long)tx_transfer_len,
-        (payload_len_guess == tx_transfer_len) ? "yes" : "no");
+        (payload_len_guess == tx_payload_len) ? "yes" : "no");
 #else
     (void)buffer;
     (void)length;
     (void)tx_transfer_len;
+    (void)tx_payload_len;
 #endif
 }
 
@@ -871,15 +874,14 @@ static void net_loopback_poll_s2mm(void)
     if (compare_len > (loopback_rx_expected_len - rx_prefix_len)) {
         compare_len = loopback_rx_expected_len - rx_prefix_len;
     }
-    rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
     tx_crc = 0U;
     mismatch_index = 0U;
     mismatch_found = 0;
 
     if (dma_block_index >= 0) {
         block = &agg_blocks[dma_block_index];
-        if (compare_len > block->transfer_len) {
-            compare_len = block->transfer_len;
+        if (compare_len > block->payload_len) {
+            compare_len = block->payload_len;
         }
         tx_crc = Net_Protocol_Crc32(block->buffer_ptr, compare_len);
         for (mismatch_index = 0U; mismatch_index < compare_len; ++mismatch_index) {
@@ -889,6 +891,7 @@ static void net_loopback_poll_s2mm(void)
             }
         }
     }
+    rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
 
     if (mismatch_found != 0) {
         should_log = 1;
@@ -915,7 +918,8 @@ static void net_loopback_poll_s2mm(void)
         UART_Printf(" done=%lu\r\n", (unsigned long)loopback_rx_done_count);
         net_loopback_print_words("S2MM rx_head", loopback_rx_buffer, loopback_rx_expected_len);
         net_loopback_print_rx_header(loopback_rx_buffer, loopback_rx_expected_len,
-            loopback_tx_expected_len);
+            loopback_tx_expected_len,
+            (dma_block_index >= 0) ? agg_blocks[dma_block_index].payload_len : compare_len);
         net_loopback_print_words("S2MM rx_payload_head", rx_payload_ptr, compare_len);
         if (dma_block_index >= 0) {
             net_loopback_print_words("S2MM tx_head", agg_blocks[dma_block_index].buffer_ptr,
