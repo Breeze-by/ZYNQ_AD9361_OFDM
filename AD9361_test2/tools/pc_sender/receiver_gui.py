@@ -16,19 +16,24 @@ from receiver_core import (
     ReceiverConfig,
 )
 from sender_gui import Sparkline
+from video_playback import VideoPreviewDecoder
 
 
 class ReceiverGui:
     def __init__(self, root):
         self.root = root
         self.root.title("AD9361_test2 UDP Receiver")
-        self.root.geometry("1040x720")
-        self.root.minsize(960, 640)
+        self.root.geometry("1120x840")
+        self.root.minsize(1000, 720)
 
         self.event_queue = queue.Queue()
         self.receiver_thread = None
         self.receiver = None
         self.last_summary_log_time = 0.0
+        self.last_preview_log_time = 0.0
+        self.video_decoder = VideoPreviewDecoder()
+        self.preview_photo = None
+        self.preview_unavailable_logged = False
 
         self.bind_ip_var = tk.StringVar(value="0.0.0.0")
         self.bind_port_var = tk.StringVar(value=str(DEFAULT_RECEIVER_PORT))
@@ -59,6 +64,11 @@ class ReceiverGui:
         self.airv_frag_var = tk.StringVar(value="0 / 0")
         self.airv_error_var = tk.StringVar(value="0 / 0 / 0 / 0")
         self.airv_rate_var = tk.StringVar(value="0.0 fps / 0.0 ms")
+        self.preview_status_var = tk.StringVar(value="Idle")
+        self.preview_decoded_var = tk.StringVar(value="0")
+        self.preview_displayed_var = tk.StringVar(value="0")
+        self.preview_errors_var = tk.StringVar(value="0")
+        self.preview_waiting_var = tk.StringVar(value="1")
         self.file_crc_var = tk.StringVar(value="N/A")
         self.output_path_var = tk.StringVar(value="-")
 
@@ -90,6 +100,7 @@ class ReceiverGui:
 
         self._build_config(left)
         self._build_metrics(right)
+        self._build_preview(root_frame)
         self._build_charts(root_frame)
         self._build_log(root_frame)
 
@@ -171,6 +182,11 @@ class ReceiverGui:
             ("AIRV Fragments", self.airv_frag_var),
             ("AIRV Errors", self.airv_error_var),
             ("AIRV FPS/Latency", self.airv_rate_var),
+            ("Preview", self.preview_status_var),
+            ("Decoded", self.preview_decoded_var),
+            ("Displayed", self.preview_displayed_var),
+            ("Decoder Errors", self.preview_errors_var),
+            ("Waiting Key", self.preview_waiting_var),
             ("File CRC", self.file_crc_var),
             ("Saved", self.output_path_var),
         ]
@@ -180,6 +196,19 @@ class ReceiverGui:
             ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
             ttk.Label(row, textvariable=variable, font=("Consolas", 10),
                 wraplength=300).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    def _build_preview(self, parent):
+        preview_box = ttk.LabelFrame(parent, text="AIRV Preview", padding=8)
+        preview_box.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+
+        self.preview_canvas = tk.Canvas(
+            preview_box,
+            height=230,
+            bg="#111111",
+            highlightthickness=1,
+            highlightbackground="#D0D7DE",
+        )
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True)
 
     def _build_charts(self, parent):
         chart_box = ttk.LabelFrame(parent, text="Charts", padding=12)
@@ -293,11 +322,21 @@ class ReceiverGui:
         self.airv_frag_var.set("0 / 0")
         self.airv_error_var.set("0 / 0 / 0 / 0")
         self.airv_rate_var.set("0.0 fps / 0.0 ms")
+        self.preview_status_var.set("Idle")
+        self.preview_decoded_var.set("0")
+        self.preview_displayed_var.set("0")
+        self.preview_errors_var.set("0")
+        self.preview_waiting_var.set("1")
         self.file_crc_var.set("N/A")
         self.output_path_var.set("-")
+        self.video_decoder = VideoPreviewDecoder()
+        self.preview_photo = None
+        self.preview_unavailable_logged = False
+        self.preview_canvas.delete("all")
         self.rate_chart.reset()
         self.packet_chart.reset()
         self.last_summary_log_time = 0.0
+        self.last_preview_log_time = 0.0
 
     def _on_done(self):
         self.start_button.configure(state=tk.NORMAL)
@@ -342,10 +381,78 @@ class ReceiverGui:
             f"{stats.airv_bad_header} / {stats.airv_bad_meta} / "
             f"{stats.airv_bad_frag_crc} / {stats.airv_bad_frame_crc}"
         )
-        self.airv_rate_var.set(f"{stats.airv_fps:.1f} fps / {stats.airv_latency_ms:.1f} ms")
+        self.airv_rate_var.set(
+            f"{stats.airv_fps:.1f} fps / {stats.airv_latency_ms:.1f} ms "
+            f"(avg {stats.airv_latency_avg_ms:.1f} max {stats.airv_latency_max_ms:.1f})"
+        )
         self.file_crc_var.set("OK" if stats.air_file_crc_ok else ("pending" if stats.air_mode else "N/A"))
         self.rate_chart.add_point(stats.rate_kib_s)
         self.packet_chart.add_point(stats.packet_rate_s)
+
+    def _display_preview_image(self, image):
+        try:
+            from PIL import ImageTk
+        except ImportError as exc:
+            raise RuntimeError("Pillow ImageTk is not available") from exc
+
+        width = max(self.preview_canvas.winfo_width(), 320)
+        height = max(self.preview_canvas.winfo_height(), 180)
+        frame = image.copy()
+        frame.thumbnail((width - 8, height - 8))
+        self.preview_photo = ImageTk.PhotoImage(frame)
+        self.preview_canvas.delete("all")
+        self.preview_canvas.create_image(
+            width // 2,
+            height // 2,
+            image=self.preview_photo,
+            anchor=tk.CENTER,
+        )
+
+    def _handle_video_preview(self, payload: dict):
+        stats = payload["stats"]
+        encoded = payload.get("payload", b"")
+        if not encoded:
+            return
+
+        result = self.video_decoder.decode(
+            encoded,
+            frame_type=payload["frame_type"],
+            bad_fragment_crc=payload["bad_fragment_crc"],
+            bad_frame_crc=payload["bad_frame_crc"],
+        )
+
+        waiting_keyframe = bool(result.waiting_keyframe or stats.airv_waiting_keyframe)
+        self.preview_decoded_var.set(str(result.decoded_count))
+        self.preview_displayed_var.set(str(result.displayed_count))
+        self.preview_errors_var.set(str(result.decoder_errors))
+        self.preview_waiting_var.set(str(int(waiting_keyframe)))
+
+        if result.error:
+            self.preview_status_var.set("Unavailable" if not self.video_decoder.available else "Decode error")
+            now = time.time()
+            if (not self.preview_unavailable_logged) or (now - self.last_preview_log_time) >= 2.0:
+                self.preview_unavailable_logged = True
+                self.last_preview_log_time = now
+                self._append_log(f"VIDEO_PREVIEW {result.error}")
+            return
+
+        if result.skipped_waiting_keyframe:
+            self.preview_status_var.set("Waiting keyframe")
+            return
+
+        if result.images:
+            try:
+                self._display_preview_image(result.images[-1])
+                self.preview_status_var.set("Playing")
+            except Exception as exc:
+                self.preview_status_var.set("Display error")
+                now = time.time()
+                if now - self.last_preview_log_time >= 2.0:
+                    self.last_preview_log_time = now
+                    self._append_log(f"VIDEO_PREVIEW {exc}")
+            return
+
+        self.preview_status_var.set("Decoding")
 
     def _handle_event(self, event_name: str, payload: dict):
         if event_name == "start":
@@ -378,7 +485,9 @@ class ReceiverGui:
                         f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
                         f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
                         f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
-                        f"latency_ms={stats.airv_latency_ms:.1f}"
+                        f"latency_ms={stats.airv_latency_ms:.1f} "
+                        f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
+                        f"latency_max_ms={stats.airv_latency_max_ms:.1f}"
                     )
                 else:
                     self._append_log(
@@ -395,6 +504,7 @@ class ReceiverGui:
         if event_name == "video_frame":
             stats = payload["stats"]
             self._update_stats(stats)
+            self._handle_video_preview(payload)
             if payload["bad_fragment_crc"] or payload["bad_frame_crc"]:
                 self._append_log(
                     f"VIDEO_FRAME frame={payload['frame_seq']} bytes={payload['bytes']} "
@@ -413,7 +523,10 @@ class ReceiverGui:
                 f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
                 f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
                 f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
-                f"bad_frame_crc={stats.airv_bad_frame_crc}"
+                f"bad_frame_crc={stats.airv_bad_frame_crc} "
+                f"latency_ms={stats.airv_latency_ms:.1f} "
+                f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
+                f"latency_max_ms={stats.airv_latency_max_ms:.1f}"
             )
             return
 
@@ -476,7 +589,10 @@ class ReceiverGui:
                     f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
                     f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
                     f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
-                    f"latency_ms={stats.airv_latency_ms:.1f} reason={stats.incomplete_reason}"
+                    f"latency_ms={stats.airv_latency_ms:.1f} "
+                    f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
+                    f"latency_max_ms={stats.airv_latency_max_ms:.1f} "
+                    f"reason={stats.incomplete_reason}"
                 )
                 self._on_done()
                 return

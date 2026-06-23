@@ -52,6 +52,9 @@ class VideoStreamAssembler:
         self.keyframe_rx = 0
         self.waiting_keyframe = False
         self.last_latency_ms = 0.0
+        self.latency_sum_ms = 0.0
+        self.latency_count = 0
+        self.latency_max_ms = 0.0
         self.started_at = time.time()
         self.last_pts_us = None
         self.fps = 0.0
@@ -86,6 +89,7 @@ class VideoStreamAssembler:
             missing = max(state.frag_count - len(state.fragments), 0)
             self.frag_missing += missing
             self.frame_drop += 1
+            self.waiting_keyframe = True
 
     def _complete_frame(self, state: VideoFrameState) -> Optional[VideoFrame]:
         if len(state.fragments) != state.frag_count:
@@ -116,6 +120,9 @@ class VideoStreamAssembler:
         now = time.time()
         latency_ms = (now - state.first_seen_at) * 1000.0
         self.last_latency_ms = latency_ms
+        self.latency_sum_ms += latency_ms
+        self.latency_count += 1
+        self.latency_max_ms = max(self.latency_max_ms, latency_ms)
         if self.last_pts_us is not None and state.pts_us > self.last_pts_us:
             interval = max((state.pts_us - self.last_pts_us) / 1000000.0, 1e-6)
             instant_fps = 1.0 / interval
@@ -194,6 +201,7 @@ class VideoStreamAssembler:
             missing = max(state.frag_count - len(state.fragments), 0)
             self.frag_missing += missing
             self.frame_drop += 1
+            self.waiting_keyframe = True
         self.frames.clear()
 
     def metrics(self) -> dict:
@@ -209,5 +217,10 @@ class VideoStreamAssembler:
             "keyframe_rx": self.keyframe_rx,
             "waiting_keyframe": int(self.waiting_keyframe),
             "latency_ms": self.last_latency_ms,
+            "latency_avg_ms": (
+                self.latency_sum_ms / self.latency_count
+                if self.latency_count > 0 else 0.0
+            ),
+            "latency_max_ms": self.latency_max_ms,
             "fps": self.fps,
         }

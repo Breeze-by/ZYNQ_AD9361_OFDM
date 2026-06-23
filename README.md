@@ -426,21 +426,30 @@ AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸
 - 如果选择的是 `.mp4` 等容器文件，先在同目录查找同名 `.h264` / `.264`，例如 `clip.mp4` 对应 `clip.h264`。
 - 如果同名裸流不存在，则调用 `ffmpeg` 在同目录生成 `clip.h264` 并保存下来；后续再选同一个 MP4 会直接复用这个 `.h264`。
 - 如果 MP4 内部已经是 H.264，优先无损提取并插入 AUD 分隔符；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30、带 AUD 的裸流。
+- 发送端会优先用 `ffprobe` 读取源视频帧率，并把真实帧间隔写入 AIRV `pts_us`；如果 `ffprobe` 不可用或无法识别帧率，回退到 `30fps`，GUI 日志会显示 `AIRV source file=... fps=... fps_source=...`。
 
 因此第一阶段可以直接在发送 GUI 里选择 MP4，但本机必须能在 `PATH` 中找到 `ffmpeg`。
 
-AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，用于后续展示可见损伤。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop。AIRV 第一阶段不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
+AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计和可选实时预览路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，同时把 encoded H.264 access unit 交给预览解码器。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop，并使预览等待后续 keyframe 恢复。AIRV 不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
+
+接收 GUI 现在包含 `AIRV Preview` 画面区域和 `Preview/Decoded/Displayed/Decoder Errors/Waiting Key` 状态。预览依赖可选 Python 包 `av` 和 `Pillow`：
+
+```bash
+python -m pip install av pillow
+```
+
+如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；如果连续解码失败或参考帧状态不可用，会等待下一帧 keyframe 后重建 H.264 解码器并继续显示。
 
 AIRV 接收日志示例：
 
 ```text
 VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1
 VIDEO_FRAME frame=42 bytes=3900 bad_frag_crc=1 bad_frame_crc=1 latency_ms=4.8
-VIDEO_DONE frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 fps=24.8 latency_ms=5.1
-DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1
+VIDEO_DONE frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 fps=24.8 latency_ms=5.1 latency_avg_ms=4.2 latency_max_ms=8.7
+DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1 latency_avg_ms=4.2 latency_max_ms=8.7
 ```
 
-AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再按 Python 瞬时组帧速度统计；第一阶段默认发送端按约 30fps 写入 PTS。`latency_ms` 当前是接收端从本帧首个分片到帧组齐的时间，不是严格端到端空口时延。
+AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再按 Python 瞬时组帧速度统计；发送端优先使用 `ffprobe` 探测源 FPS，失败时回退 30fps。`latency_ms` 是接收端从本帧首个分片到帧组齐的最近一次耗时，`latency_avg_ms` / `latency_max_ms` 是本次 AIRV 流的组帧平均/最大耗时；这些都不是严格端到端空口时延。
 
 推荐第一阶段 AIRV GUI 测试：
 

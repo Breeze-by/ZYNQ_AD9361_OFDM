@@ -119,6 +119,8 @@ class ReceiverStats:
     airv_keyframe_rx: int = 0
     airv_waiting_keyframe: int = 0
     airv_latency_ms: float = 0.0
+    airv_latency_avg_ms: float = 0.0
+    airv_latency_max_ms: float = 0.0
     airv_fps: float = 0.0
     airv_last_frame_seq: int = -1
 
@@ -627,6 +629,8 @@ class LoopbackReceiver:
         stats.airv_keyframe_rx = metrics["keyframe_rx"]
         stats.airv_waiting_keyframe = metrics["waiting_keyframe"]
         stats.airv_latency_ms = metrics["latency_ms"]
+        stats.airv_latency_avg_ms = metrics["latency_avg_ms"]
+        stats.airv_latency_max_ms = metrics["latency_max_ms"]
         stats.airv_fps = metrics["fps"]
         stats.airv_last_frame_seq = self._video.latest_frame_seq
 
@@ -743,6 +747,7 @@ class LoopbackReceiver:
                     "frame_seq": frame.frame_seq,
                     "frame_type": frame.frame_type,
                     "bytes": len(frame.payload),
+                    "payload": frame.payload,
                     "bad_fragment_crc": frame.bad_fragment_crc,
                     "bad_frame_crc": frame.bad_frame_crc,
                     "latency_ms": frame.latency_ms,
@@ -1029,7 +1034,9 @@ def run_cli(args) -> int:
                     f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
                     f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
                     f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
-                    f"latency_ms={stats.airv_latency_ms:.1f} pkt={stats.packets} "
+                    f"latency_ms={stats.airv_latency_ms:.1f} "
+                    f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
+                    f"latency_max_ms={stats.airv_latency_max_ms:.1f} pkt={stats.packets} "
                     f"rate={stats.rate_kib_s:.2f}KiB/s"
                 )
             else:
@@ -1065,7 +1072,9 @@ def run_cli(args) -> int:
                 f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
                 f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
                 f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
-                f"fps={stats.airv_fps:.1f} latency_ms={stats.airv_latency_ms:.1f}"
+                f"fps={stats.airv_fps:.1f} latency_ms={stats.airv_latency_ms:.1f} "
+                f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
+                f"latency_max_ms={stats.airv_latency_max_ms:.1f}"
             )
         elif event_name == "incomplete":
             stats = payload["stats"]
@@ -1098,7 +1107,10 @@ def run_cli(args) -> int:
                     f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
                     f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
                     f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
-                    f"latency_ms={stats.airv_latency_ms:.1f} reason={stats.incomplete_reason}"
+                    f"latency_ms={stats.airv_latency_ms:.1f} "
+                    f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
+                    f"latency_max_ms={stats.airv_latency_max_ms:.1f} "
+                    f"reason={stats.incomplete_reason}"
                 )
                 return
             missing_ranges = f" missing_seq={stats.air_missing_ranges}" if stats.air_missing_ranges else ""

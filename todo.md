@@ -116,12 +116,21 @@ Conclusion: AIRV transport integrity is good at 400 KiB/s, window 1. No missing 
   - drop incomplete stale frames;
   - emit `VIDEO`, `VIDEO_FRAME`, `VIDEO_DONE`, `DONE VIDEO`.
 - Unit tests currently cover AIRV header roundtrip, fragmentation, CRC behavior, bad header rejection, MP4 sidecar reuse, ffmpeg runner edge case, H.264 AUD/slice parsing, and PTS-based FPS.
+- Receiver GUI realtime preview path:
+  - new optional `video_playback.py` component uses PyAV + Pillow when available;
+  - `receiver_core.py` emits assembled encoded H.264 frame payloads through `video_frame`;
+  - `receiver_gui.py` displays decoded frames immediately in `AIRV Preview`;
+  - decoder attempts corrupt frames, counts errors, and waits for the next keyframe when decoder state needs recovery;
+  - if PyAV/Pillow is missing, AIRV transport/statistics still run and GUI logs a clear `VIDEO_PREVIEW ...` message.
+- Sender AIRV timing now probes source FPS with `ffprobe` and falls back to 30fps if unavailable; GUI/CLI log `AIRV source file=... fps=... fps_source=...`.
+- AIRV final metrics now keep last/average/max assembler latency instead of reporting a misleading idle-finish `0.0`.
+- Unit tests now also cover frame-rate parsing, configured AIRV PTS interval, and latency avg/max metrics.
 
 ## Immediate Next Goal
 
-Implement actual realtime video preview on the receiver side.
+Board-validate actual realtime video preview on the receiver side.
 
-The user originally wanted realtime video behavior, not just transport statistics:
+The code now implements the requested realtime preview behavior:
 
 - Display video while AIRV frames are being received.
 - Do not wait for the full file.
@@ -131,89 +140,17 @@ The user originally wanted realtime video behavior, not just transport statistic
 - No audio.
 - No receiver ACK/retransmission/FEC for this milestone.
 
-## Recommended Next Implementation Plan
-
-### Step 1: Add Decode/Preview Path Locally
-
-Prefer PyAV if available because it can decode H.264 packets in-process and return frames suitable for Tkinter display.
-
-Add a separate receiver-side component, for example:
-
-```text
-AD9361_test2/tools/pc_sender/video_playback.py
-```
-
-Responsibilities:
-
-- Accept assembled AIRV encoded frames from `VideoStreamAssembler`.
-- Feed each frame as an H.264 packet into a decoder.
-- Convert decoded frames to RGB/PIL/Tk image.
-- Keep decoder alive across recoverable decode errors.
-- If decode errors persist after missing/corrupt delta frames, set `waiting_keyframe=1` and resume on next keyframe.
-
-If PyAV is not installed, either:
-
-- show a clear GUI error with install guidance, or
-- fall back to OpenCV if available, but PyAV is better for packet-level H.264.
-
-Do not make PS/PL parse AIRV. This is PC receiver-only.
-
-### Step 2: Integrate With Receiver GUI
-
-Extend `receiver_gui.py`:
-
-- Add a video preview area or a separate preview window.
-- Subscribe to `video_frame` events from `receiver_core.py`.
-- Feed frames into the decoder/playback component.
-- Display decoded frames as they arrive.
-- Add visible status fields:
-  - decoded frames
-  - displayed frames
-  - decoder errors
-  - waiting keyframe
-  - dropped missing frames
-
-Keep existing AIR0 metrics visible and unchanged.
-
-### Step 3: Improve AIRV Timing Metadata
-
-Current sender uses default `frame_interval_us=33333`. This is fine for initial validation but not robust for arbitrary MP4.
-
-Implement source FPS detection:
-
-- Use `ffprobe` if available, or parse `ffmpeg` metadata output.
-- Determine source frame rate from MP4.
-- Pass real `frame_interval_us` into `build_airv_stream()`.
-- If FPS cannot be detected, fall back to 30fps and log that fallback.
-
-Potential API change:
-
-```python
-ensure_airv_h264_source(...) -> AirvSource(path: Path, fps: float)
-build_airv_stream(..., frame_interval_us=round(1_000_000 / fps))
-```
-
-Update GUI log so the user sees:
-
-```text
-AIRV source file=... fps=...
-```
-
-### Step 4: Make Final Metrics Less Misleading
-
-Fix final `DONE VIDEO ... latency_ms=0.0` behavior:
-
-- Track `last_nonzero_latency_ms`.
-- Add average/max assemble latency:
-  - `latency_avg_ms`
-  - `latency_max_ms`
-- On final idle finish, report last/avg/max rather than resetting to 0.
-
-This is a metrics fix, not a transport fix.
-
-### Step 5: Board Test After Preview Is Added
+## Board Test After Preview Is Added
 
 Ask user to test in GUI only.
+
+Before the test, install optional preview dependencies on the PC that runs receiver GUI:
+
+```bash
+python -m pip install av pillow
+```
+
+If dependency installation is not possible, the board transport test can still run; only the preview pane will show unavailable and the GUI log will contain `VIDEO_PREVIEW ...`.
 
 Recommended first AIRV preview test:
 

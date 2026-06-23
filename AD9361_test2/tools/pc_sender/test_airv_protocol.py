@@ -6,7 +6,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from air_protocol import AIR_MAGIC
-from sender_core import _run_ffmpeg, ensure_airv_h264_source, find_existing_airv_h264
+from sender_core import (
+    SenderConfig,
+    UdpSender,
+    _parse_frame_rate,
+    _run_ffmpeg,
+    ensure_airv_h264_source,
+    find_existing_airv_h264,
+)
 from video_protocol import (
     AIRV_FRAME_KEY,
     AIRV_HEADER_BYTES,
@@ -177,6 +184,28 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertEqual(return_code, 1)
         self.assertEqual(message, "")
 
+    def test_frame_rate_parser_accepts_rational_values(self):
+        self.assertAlmostEqual(_parse_frame_rate("30000/1001"), 29.970, delta=0.001)
+        self.assertEqual(_parse_frame_rate("30/0"), None)
+        self.assertEqual(_parse_frame_rate("0/0"), None)
+
+    def test_airv_prepare_transfer_uses_configured_frame_interval(self):
+        h264_frames = (
+            b"\x00\x00\x00\x01\x09\xf0\x00\x00\x00\x01\x65\x80" +
+            b"\x00\x00\x00\x01\x09\xf0\x00\x00\x00\x01\x41\x80"
+        )
+        sender = UdpSender(SenderConfig(
+            ip="127.0.0.1",
+            transfer_protocol="airv_video",
+            airv_frame_interval_us=40000,
+        ))
+        sender._session_id = 1
+        prepared = sender._prepare_transfer(h264_frames)
+        first = parse_airv_header(prepared[:AIRV_HEADER_BYTES])
+        second = parse_airv_header(prepared[1440:1440 + AIRV_HEADER_BYTES])
+        self.assertEqual(first.pts_us, 0)
+        self.assertEqual(second.pts_us, 40000)
+
     def test_video_fps_uses_pts_not_processing_burst(self):
         frame0 = b"abc"
         frame1 = b"def"
@@ -202,6 +231,42 @@ class AirvProtocolTests(unittest.TestCase):
             completed.extend(assembler.process_fragment(header, payload, True))
         self.assertEqual(len(completed), 2)
         self.assertAlmostEqual(assembler.metrics()["fps"], 30.0, delta=0.1)
+
+    def test_video_latency_tracks_average_and_max(self):
+        assembler = VideoStreamAssembler()
+        packets = []
+        for seq, frame in enumerate((b"abc", b"def")):
+            packets.append(build_airv_packet(
+                frame,
+                session_id=1,
+                stream_id=2,
+                frame_seq=seq,
+                frag_index=0,
+                frag_count=1,
+                frame_type=AIRV_FRAME_KEY,
+                frame_size=len(frame),
+                fragment_offset=0,
+                chunk_bytes=1440,
+                frame_crc32=crc32(frame),
+                pts_us=seq * 33333,
+            ))
+        times = iter([10.0, 10.010, 20.0, 20.030])
+
+        def fake_time():
+            try:
+                return next(times)
+            except StopIteration:
+                return 20.030
+
+        with mock.patch("video_receiver_core.time.time", side_effect=fake_time):
+            for packet in packets:
+                header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+                payload = packet[AIRV_HEADER_BYTES:AIRV_HEADER_BYTES + header.fragment_len]
+                assembler.process_fragment(header, payload, True)
+        metrics = assembler.metrics()
+        self.assertAlmostEqual(metrics["latency_ms"], 30.0, delta=0.1)
+        self.assertAlmostEqual(metrics["latency_avg_ms"], 20.0, delta=0.1)
+        self.assertAlmostEqual(metrics["latency_max_ms"], 30.0, delta=0.1)
 
 
 if __name__ == "__main__":

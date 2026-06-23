@@ -76,6 +76,7 @@ TRANSFER_PROTOCOL_CHOICES = (
     TRANSFER_PROTOCOL_RAW,
 )
 AIRV_SOURCE_SUFFIXES = (".h264", ".264")
+DEFAULT_AIRV_FPS = 30.0
 
 
 @dataclass
@@ -94,6 +95,19 @@ class SenderConfig:
     validate_payload_crc: bool = False
     air_protocol: bool = True
     transfer_protocol: str = TRANSFER_PROTOCOL_AIR0
+    airv_frame_interval_us: int = 33333
+
+
+@dataclass
+class AirvSource:
+    path: Path
+    fps: float = DEFAULT_AIRV_FPS
+    fps_source: str = "fallback"
+
+    @property
+    def frame_interval_us(self) -> int:
+        fps = self.fps if self.fps > 0.0 else DEFAULT_AIRV_FPS
+        return max(1, int(round(1000000.0 / fps)))
 
 
 @dataclass
@@ -227,14 +241,76 @@ def _run_ffmpeg(command):
     return completed.returncode, message
 
 
+def _parse_frame_rate(value: str) -> Optional[float]:
+    text = (value or "").strip()
+    if not text or text == "0/0":
+        return None
+    try:
+        if "/" in text:
+            numerator_text, denominator_text = text.split("/", 1)
+            numerator = float(numerator_text)
+            denominator = float(denominator_text)
+            if denominator == 0.0:
+                return None
+            rate = numerator / denominator
+        else:
+            rate = float(text)
+    except ValueError:
+        return None
+    if rate <= 0.0 or rate > 1000.0:
+        return None
+    return rate
+
+
+def probe_video_fps(file_path: str) -> Optional[float]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=avg_frame_rate,r_frame_rate",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(file_path),
+    ]
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    for line in completed.stdout.splitlines():
+        fps = _parse_frame_rate(line)
+        if fps is not None:
+            return fps
+    return None
+
+
 def ensure_airv_h264_source(file_path: str) -> Path:
+    return prepare_airv_source(file_path).path
+
+
+def prepare_airv_source(file_path: str) -> AirvSource:
     source_path = Path(file_path)
     if not source_path.exists():
         raise ValueError(f"source file does not exist: {source_path}")
 
+    fps = probe_video_fps(str(source_path))
+    fps_source = "ffprobe" if fps is not None else "fallback"
+    if fps is None:
+        fps = DEFAULT_AIRV_FPS
+
     existing = find_existing_airv_h264(source_path)
     if existing is not None:
-        return existing
+        return AirvSource(existing, fps=fps, fps_source=fps_source)
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -306,7 +382,7 @@ def ensure_airv_h264_source(file_path: str) -> Path:
     if not temp_path.exists() or temp_path.stat().st_size <= 0:
         raise RuntimeError("ffmpeg completed but did not create a non-empty H.264 file")
     temp_path.replace(output_path)
-    return output_path
+    return AirvSource(output_path, fps=fps, fps_source=fps_source)
 
 
 def align8(length: int) -> int:
@@ -533,6 +609,7 @@ class UdpSender:
                 chunk_bytes=self.config.chunk_size,
                 session_id=self._session_id,
                 stream_id=self._active_stream_id,
+                frame_interval_us=self.config.airv_frame_interval_us,
             )
             total_chunks = (
                 (len(prepared_payload) + self.config.chunk_size - 1) //
@@ -578,6 +655,7 @@ class UdpSender:
             validate_payload_crc=validate_payload_crc,
             air_protocol=(protocol == TRANSFER_PROTOCOL_AIR0),
             transfer_protocol=protocol,
+            airv_frame_interval_us=self.config.airv_frame_interval_us,
         )
         return build_packet(
             seq,
@@ -1287,10 +1365,21 @@ def run_cli(args) -> int:
             raise ValueError("AIRV realtime video requires --file, not --test-size")
         if not file_path:
             raise ValueError("AIRV realtime video requires --file")
-        airv_path = ensure_airv_h264_source(file_path)
-        if Path(file_path) != airv_path:
-            print(f"AIRV source prepared {airv_path}")
-        file_path = str(airv_path)
+        airv_source = prepare_airv_source(file_path)
+        if Path(file_path) != airv_source.path:
+            print(
+                f"AIRV source file={airv_source.path} fps={airv_source.fps:.3f} "
+                f"fps_source={airv_source.fps_source}"
+            )
+        else:
+            print(
+                f"AIRV source file={airv_source.path} fps={airv_source.fps:.3f} "
+                f"fps_source={airv_source.fps_source}"
+            )
+        file_path = str(airv_source.path)
+        airv_frame_interval_us = airv_source.frame_interval_us
+    else:
+        airv_frame_interval_us = 33333
     payload = load_payload(test_size=args.test_size, file_path=file_path)
     sender = UdpSender(SenderConfig(
         ip=args.ip,
@@ -1310,6 +1399,7 @@ def run_cli(args) -> int:
         validate_payload_crc=args.validate_payload_crc,
         air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
         transfer_protocol=transfer_protocol,
+        airv_frame_interval_us=airv_frame_interval_us,
     ))
 
     def callback(event_name: str, payload_dict: dict):
