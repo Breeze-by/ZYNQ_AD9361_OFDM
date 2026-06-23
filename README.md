@@ -392,7 +392,7 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 
 ## PC-only AIR0 payload header
 
-当前第一阶段强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1440` 的 wire payload 封装成：
+AIR0 强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1440` 的 wire payload 封装成：
 
 ```text
 64-byte AIR0 header + up to 1376-byte original file/test payload
@@ -404,7 +404,7 @@ PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payl
 
 ## PC-only AIRV realtime video payload header
 
-当前已加入 AIRV 第一阶段实时视频传输模式，仍然只在 PC 工具侧生效。PS/PL 不解析 AIRV；它们继续把 `net_data_header_t` 后面的 wire payload 当普通字节转发。发送 GUI 新增 `Transfer Mode`：
+AIRV 是当前 PC 工具侧的实时视频传输/预览模式。PS/PL 不解析 AIRV；它们继续把 `net_data_header_t` 后面的 wire payload 当普通字节转发。发送 GUI 提供 `Transfer Mode`：
 
 ```text
 air0_file   当前默认 File/Test 精确恢复模式
@@ -429,7 +429,7 @@ AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸
 - 如果 MP4 内部已经是 H.264，优先无损提取并插入 AUD 分隔符；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30、带 AUD 的裸流。
 - 只有在没有 sidecar、需要从容器准备 AIRV 源时，发送端才会用 `ffprobe` 读取源视频帧率，并把真实帧间隔写入 AIRV `pts_us`；`ffprobe` 最多等待 2 秒，失败则回退到 `30fps`，GUI 日志会显示 `AIRV source file=... fps=... fps_source=...`。
 
-因此第一阶段可以直接在发送 GUI 里选择 MP4，但本机必须能在 `PATH` 中找到 `ffmpeg`。
+因此可以直接在发送 GUI 里选择 MP4；只有首次为没有 sidecar 的容器视频准备 AIRV 源时，本机必须能在 `PATH` 中找到 `ffmpeg`。
 
 AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计和可选实时预览路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，同时把 encoded H.264 access unit 交给预览解码器。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop，并使预览等待后续 keyframe 恢复。AIRV 不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
 
@@ -452,7 +452,7 @@ DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 b
 
 AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再按 Python 瞬时组帧速度统计；发送端优先使用 `ffprobe` 探测源 FPS，失败时回退 30fps。`latency_ms` 是接收端从本帧首个分片到帧组齐的最近一次可报告耗时；如果最后一帧在同一轮解析中近似 0ms 完成，最终 `VIDEO_DONE` / `DONE VIDEO` 会保留上一条非零 latency，避免 idle finish 后显示 `0.0` 误导。`latency_avg_ms` / `latency_max_ms` 是本次 AIRV 流的组帧平均/最大耗时；这些都不是严格端到端空口时延。
 
-推荐第一阶段 AIRV GUI 测试：
+推荐 AIRV GUI 测试：
 
 ```text
 Sender Transfer Mode    airv_video
@@ -470,7 +470,7 @@ Receiver Raw Expected   0
 Receiver Idle Finish(s) 10
 ```
 
-第一阶段重点看 AIRV 是否能经 PC->PS->PL->PS->PC 回传后连续组帧：`bad_hdr=0`、`bad_meta=0`、`frame_drop=0`、`frag_missing=0`。如果出现 `bad_frag_crc` 或 `bad_frame_crc`，接收端仍会尝试组帧并输出 `VIDEO_FRAME ... bad_frag_crc=1 bad_frame_crc=1`，这符合 AIRV 的实时演示策略。
+重点看 AIRV 是否能经 PC->PS->PL->PS->PC 回传后连续组帧并实时预览：`bad_hdr=0`、`bad_meta=0`、`frame_drop=0`、`frag_missing=0`，接收 GUI 的 `Preview Input`、`Decoded`、`Displayed` 应持续增长。如果出现 `bad_frag_crc` 或 `bad_frame_crc`，接收端仍会尝试组帧并输出 `VIDEO_FRAME ... bad_frag_crc=1 bad_frame_crc=1`，这符合 AIRV 的实时演示策略。
 
 推荐 GUI/CLI 吞吐配置：
 

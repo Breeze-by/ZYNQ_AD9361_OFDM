@@ -8,7 +8,7 @@
 - 修改前先看 `rtk git status --short`，不要覆盖用户未提交改动。
 - 阅读文件优先用 `rtk read`，搜索优先用 `rtk grep` 或 `rtk rg --files`，避免普通命令输出过大。
 - 只保留根目录 `README.md` 作为项目说明。协议、构建、调参、PC 工具说明都写进根 README。
-- 根目录 `TODO.md` 只用于记录未实现任务路线图，不替代 README；任务完成后要把正式说明同步回根 README。
+- 当前根目录没有 `TODO.md`；如后续重新创建，只用于记录未实现任务路线图，不替代 README，任务完成后要把正式说明同步回根 README。
 - `AD9361_test2_bsp/` 和 `System_wrapper_hw_platform_0/` 是 Xilinx 生成产物；除非任务明确要求，不要手动改 BSP、lwIP 源码或硬件平台文件。
 - 之后用户提出了额外协作要求或项目注意事项，需要同步写入根目录 agent 文件，让后续 agent 知道。
 - 如果仓库根目录有 `AGENT.md`、`Agent.md` 或 `AGENTS.md`，必须优先使用根目录文件作为本项目说明，不要改用 `C:\Users\29143\.codex\` 下的用户级说明。若多个同时存在，优先按用户最近明确指定的根目录文件执行。
@@ -18,7 +18,7 @@
 - 每次完成代码或文档修改后，必须 `git commit` 并 `git push` 到远程；不要让用户自己 push。提交前后都要用 `rtk git status --short` 确认工作区状态。
 - 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`Payload CRC32`、`AIR0 Packet Header` 等。
 - 旧版额外封装和测试 pattern 选项已从 PC/PS/文档移除，以后不要再建议用户使用相关 GUI 字段或 CLI 参数。PC->PS 应用层包头后始终是普通 wire payload；PS/PL 不根据 payload 内容做额外交互。
-- 当前新增 AIRV 第一阶段实时视频模式。AIR0 仍是精确文件/测试数据恢复模式；AIRV 是实时组帧/统计模式，不保存精确文件，不做接收端 ACK、重传、FEC 或音频。PS/PL 仍不解析 AIR0/AIRV。
+- 当前 AIRV 实时视频模式已支持接收 GUI 独立 `AIRV Preview` 窗口、后台 PyAV 解码和预览队列。AIR0 仍是精确文件/测试数据恢复模式；AIRV 是实时视频组帧/预览/统计模式，不保存精确文件，不做接收端 ACK、重传、FEC 或音频。PS/PL 仍不解析 AIR0/AIRV。
 - 调试 PL 回环要分阶段做。由于本地无法板级验证，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
 - 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、AIR0 的 `PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...`、`DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=... bad_meta_seq=...`，以及 AIRV 的 `VIDEO frame_rx=... frame_show=... frame_drop=... frag_rx=... frag_missing=... bad_hdr=... bad_meta=... bad_frag_crc=... bad_frame_crc=... keyframe_rx=... waiting_keyframe=... fps=... latency_ms=...`、`VIDEO_FRAME ...`、`VIDEO_DONE ...`、`DONE VIDEO ...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
@@ -69,13 +69,16 @@ AD9361_test2/tools/pc_sender/recv_data.py
     接收 CLI 入口。
 
 AD9361_test2/tools/pc_sender/receiver_gui.py
-    接收 Tkinter GUI。
+    接收 Tkinter GUI；AIRV 预览窗口默认 1280x720，主窗口保留日志和预览指标。
 
 AD9361_test2/tools/pc_sender/video_protocol.py
     PC-only AIRV 64 字节头、H.264 Annex-B 粗分帧和实时视频分片封装。
 
 AD9361_test2/tools/pc_sender/video_receiver_core.py
-    AIRV 实时组帧、坏 CRC 计数、缺片 drop 和 VIDEO 指标。
+    AIRV 实时组帧、坏 CRC 计数、缺片 drop、VIDEO 指标和 assembled frame 事件。
+
+AD9361_test2/tools/pc_sender/video_playback.py
+    AIRV 预览解码器；PyAV/Pillow 可选依赖、H.264 解码、Tk 可显示图像转换。
 ```
 
 ## Project agent instruction source
@@ -86,8 +89,9 @@ AD9361_test2/tools/pc_sender/video_receiver_core.py
 
 - 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。DDR 中每个聚合 slot 的有效 payload 是 3000 字节，但 `NET_AGG_BLOCK_STRIDE_BYTES = 3008`，队列深度为 697；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
 - 默认 `Chunk Bytes = 1440` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1440`，其中 `64` 字节是 PC-only AIR0 头，最多 `1376` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后每包 wire payload 为原始文件/测试 payload。
-- AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV 头、最多 `1376` 字节 encoded video fragment 和零填充。发送端选择 MP4 时会自动在同目录查找同名 `.h264/.264`；找不到就调用 `ffmpeg` 生成并保存同名 `.h264`，以后复用该裸流。自动生成的 `.h264` 会插入 AUD 分隔符；接收端分帧也会用 slice header 避免多 slice 帧被过度计数。不要再要求用户手工准备 H.264 裸流。
-- AIRV 接收日志里的 `fps` 是按 AIRV `pts_us` 估算的源帧率，不是 Python 处理瞬时速度；`latency_ms` 是接收端本帧首片到组齐的时间，不是严格端到端空口时延。
+- AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV 头、最多 `1376` 字节 encoded video fragment 和零填充。发送端选择 MP4 时会自动在同目录查找同名 `.h264/.264`；已有 sidecar 时直接复用，不再对 MP4 做耗时 `ffprobe`，日志显示 `fps_source=sidecar_fallback` 并按 30fps 写入 PTS；找不到 sidecar 时才用最多 2 秒的 `ffprobe` 探测帧率并调用 `ffmpeg` 生成同名 `.h264`。自动生成的 `.h264` 会插入 AUD 分隔符；接收端分帧也会用 slice header 避免多 slice 帧被过度计数。不要再要求用户手工准备 H.264 裸流。
+- AIRV 接收日志里的 `fps` 是按 AIRV `pts_us` 估算的源帧率，不是 Python 处理瞬时速度；`latency_ms` 是接收端本帧首片到组齐的最近一次可报告耗时，最终日志会保留上一条非零值以避免 idle finish 后显示 `0.0` 误导，`latency_avg_ms` / `latency_max_ms` 是组帧平均/最大耗时，不是严格端到端空口时延。
+- AIRV 预览依赖可选 `av` 和 `Pillow`。接收 GUI 会打开独立 `AIRV Preview` 窗口，默认 `1280x720`；后台线程解码，Tk 主线程约 30fps 刷新。预览输入队列最多缓存 240 个 assembled encoded frame，按 H.264 顺序送入解码器；队列满时才丢弃预览队列并等待下一帧 keyframe。`Preview Input`、`Preview Backlog`、`Preview Drops`、`Decoded`、`Displayed`、`Decoder Errors`、`Waiting Key` 是预览指标，其中 `Displayed` 表示实际渲染到 Tk 预览窗口的帧数；预览丢帧不代表 AIRV 传输丢包。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 3000。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
@@ -136,7 +140,7 @@ Receiver Raw Expected   0
 Receiver Idle Finish(s) 10
 ```
 
-AIRV 第一阶段只验证实时组帧/统计，不保存精确恢复文件。预期接收 GUI 出现 `VIDEO ... frame_drop=0 frag_missing=0 bad_hdr=0 bad_meta=0`，结束时出现 `DONE VIDEO ...`。
+AIRV 用于验证实时组帧、实时预览和统计，不保存精确恢复文件。预期接收 GUI 出现独立 `AIRV Preview` 窗口，`Preview Input`、`Decoded`、`Displayed` 持续增长；日志中 `VIDEO ... frame_drop=0 frag_missing=0 bad_hdr=0 bad_meta=0`，结束时出现 `DONE VIDEO ...`。
 
 ## 常用验证命令
 
