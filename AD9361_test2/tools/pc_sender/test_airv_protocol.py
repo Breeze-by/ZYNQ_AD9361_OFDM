@@ -14,6 +14,7 @@ from video_protocol import (
     build_airv_packet,
     build_airv_stream,
     crc32,
+    iter_h264_annexb_frames,
     parse_airv_header,
 )
 from video_receiver_core import VideoStreamAssembler
@@ -135,6 +136,24 @@ class AirvProtocolTests(unittest.TestCase):
         header = parse_airv_header(stream[:AIRV_HEADER_BYTES])
         self.assertEqual(header.frame_seq, 0)
 
+    def test_h264_multislice_frame_is_not_overcounted(self):
+        start = b"\x00\x00\x00\x01"
+        frame0_slice0 = start + b"\x41\x80"
+        frame0_slice1 = start + b"\x41\x40"
+        frame1_slice0 = start + b"\x41\x80"
+        frames = list(iter_h264_annexb_frames(frame0_slice0 + frame0_slice1 + frame1_slice0))
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(frames[0], frame0_slice0 + frame0_slice1)
+
+    def test_h264_aud_boundaries_are_used(self):
+        start = b"\x00\x00\x00\x01"
+        aud = start + b"\x09\xf0"
+        frame0 = aud + start + b"\x41\x80"
+        frame1 = aud + start + b"\x41\x80"
+        frames = list(iter_h264_annexb_frames(frame0 + frame1))
+        self.assertEqual(len(frames), 2)
+        self.assertTrue(frames[0].startswith(aud))
+
     def test_airv_h264_sidecar_is_reused_for_mp4(self):
         with TemporaryDirectory() as temp_dir:
             directory = Path(temp_dir)
@@ -157,6 +176,32 @@ class AirvProtocolTests(unittest.TestCase):
             return_code, message = _run_ffmpeg(["ffmpeg"])
         self.assertEqual(return_code, 1)
         self.assertEqual(message, "")
+
+    def test_video_fps_uses_pts_not_processing_burst(self):
+        frame0 = b"abc"
+        frame1 = b"def"
+        assembler = VideoStreamAssembler()
+        completed = []
+        for seq, frame in enumerate((frame0, frame1)):
+            packet = build_airv_packet(
+                frame,
+                session_id=1,
+                stream_id=2,
+                frame_seq=seq,
+                frag_index=0,
+                frag_count=1,
+                frame_type=AIRV_FRAME_KEY,
+                frame_size=len(frame),
+                fragment_offset=0,
+                chunk_bytes=1440,
+                frame_crc32=crc32(frame),
+                pts_us=seq * 33333,
+            )
+            header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+            payload = packet[AIRV_HEADER_BYTES:AIRV_HEADER_BYTES + header.fragment_len]
+            completed.extend(assembler.process_fragment(header, payload, True))
+        self.assertEqual(len(completed), 2)
+        self.assertAlmostEqual(assembler.metrics()["fps"], 30.0, delta=0.1)
 
 
 if __name__ == "__main__":

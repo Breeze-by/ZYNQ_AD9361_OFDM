@@ -52,7 +52,8 @@ class VideoStreamAssembler:
         self.keyframe_rx = 0
         self.waiting_keyframe = False
         self.last_latency_ms = 0.0
-        self.last_frame_at = 0.0
+        self.started_at = time.time()
+        self.last_pts_us = None
         self.fps = 0.0
         self.latest_frame_seq = -1
 
@@ -115,11 +116,11 @@ class VideoStreamAssembler:
         now = time.time()
         latency_ms = (now - state.first_seen_at) * 1000.0
         self.last_latency_ms = latency_ms
-        if self.last_frame_at > 0.0:
-            interval = max(now - self.last_frame_at, 1e-6)
+        if self.last_pts_us is not None and state.pts_us > self.last_pts_us:
+            interval = max((state.pts_us - self.last_pts_us) / 1000000.0, 1e-6)
             instant_fps = 1.0 / interval
             self.fps = instant_fps if self.fps <= 0.0 else (self.fps * 0.8 + instant_fps * 0.2)
-        self.last_frame_at = now
+        self.last_pts_us = state.pts_us
         self.frame_rx += 1
         self.frame_show += 1
         if state.frame_type == AIRV_FRAME_KEY:

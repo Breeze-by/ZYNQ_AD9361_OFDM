@@ -425,7 +425,7 @@ AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸
 - 如果选择的就是 `.h264` / `.264`，直接发送该文件。
 - 如果选择的是 `.mp4` 等容器文件，先在同目录查找同名 `.h264` / `.264`，例如 `clip.mp4` 对应 `clip.h264`。
 - 如果同名裸流不存在，则调用 `ffmpeg` 在同目录生成 `clip.h264` 并保存下来；后续再选同一个 MP4 会直接复用这个 `.h264`。
-- 如果 MP4 内部已经是 H.264，优先无损提取；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30 的裸流。
+- 如果 MP4 内部已经是 H.264，优先无损提取并插入 AUD 分隔符；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30、带 AUD 的裸流。
 
 因此第一阶段可以直接在发送 GUI 里选择 MP4，但本机必须能在 `PATH` 中找到 `ffmpeg`。
 
@@ -439,6 +439,8 @@ VIDEO_FRAME frame=42 bytes=3900 bad_frag_crc=1 bad_frame_crc=1 latency_ms=4.8
 VIDEO_DONE frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 fps=24.8 latency_ms=5.1
 DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1
 ```
+
+AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再按 Python 瞬时组帧速度统计；第一阶段默认发送端按约 30fps 写入 PTS。`latency_ms` 当前是接收端从本帧首个分片到帧组齐的时间，不是严格端到端空口时延。
 
 推荐第一阶段 AIRV GUI 测试：
 

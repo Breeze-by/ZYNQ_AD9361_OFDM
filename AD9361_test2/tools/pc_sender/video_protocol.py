@@ -223,6 +223,96 @@ def _nal_type(nal: bytes) -> int:
     return nal[offset] & 0x1F
 
 
+def _nal_payload(nal: bytes) -> bytes:
+    offset = 4 if nal.startswith(b"\x00\x00\x00\x01") else 3
+    if len(nal) <= offset + 1:
+        return b""
+    return nal[offset + 1:]
+
+
+def _ebsp_to_rbsp(data: bytes) -> bytes:
+    out = bytearray()
+    zero_count = 0
+    for byte in data:
+        if zero_count >= 2 and byte == 0x03:
+            zero_count = 0
+            continue
+        out.append(byte)
+        if byte == 0:
+            zero_count += 1
+        else:
+            zero_count = 0
+    return bytes(out)
+
+
+class _BitReader:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.bit_offset = 0
+
+    def read_bit(self) -> int:
+        if self.bit_offset >= len(self.data) * 8:
+            raise ValueError("end of bitstream")
+        byte = self.data[self.bit_offset // 8]
+        bit = (byte >> (7 - (self.bit_offset % 8))) & 1
+        self.bit_offset += 1
+        return bit
+
+    def read_ue(self) -> int:
+        leading_zero_bits = 0
+        while self.read_bit() == 0:
+            leading_zero_bits += 1
+            if leading_zero_bits > 31:
+                raise ValueError("ue(v) too large")
+        value = (1 << leading_zero_bits) - 1
+        for bit_index in range(leading_zero_bits):
+            value += self.read_bit() << (leading_zero_bits - 1 - bit_index)
+        return value
+
+
+def _first_mb_in_slice(nal: bytes):
+    nal_type = _nal_type(nal)
+    if not (1 <= nal_type <= 5):
+        return None
+    rbsp = _ebsp_to_rbsp(_nal_payload(nal))
+    if not rbsp:
+        return None
+    try:
+        return _BitReader(rbsp).read_ue()
+    except ValueError:
+        return None
+
+
+def _iter_frames_by_aud(nals: List[bytes]) -> Iterable[bytes]:
+    prefix = []
+    current = []
+    has_vcl = False
+
+    for nal in nals:
+        nal_type = _nal_type(nal)
+        if nal_type == 9:
+            if current and has_vcl:
+                yield b"".join(current)
+                current = []
+                has_vcl = False
+            current.extend(prefix)
+            prefix = []
+            current.append(nal)
+            continue
+
+        is_vcl = 1 <= nal_type <= 5
+        if not current and not is_vcl:
+            prefix.append(nal)
+            continue
+
+        current.append(nal)
+        if is_vcl:
+            has_vcl = True
+
+    if current:
+        yield b"".join(current)
+
+
 def iter_h264_annexb_frames(data: bytes) -> Iterable[bytes]:
     starts = _find_start_codes(data)
     if not starts:
@@ -235,12 +325,17 @@ def iter_h264_annexb_frames(data: bytes) -> Iterable[bytes]:
         end = starts[index + 1] if index + 1 < len(starts) else len(data)
         nals.append(data[start:end])
 
+    if any(_nal_type(nal) == 9 for nal in nals):
+        yield from _iter_frames_by_aud(nals)
+        return
+
     frame_parts = []
     has_vcl = False
     for nal in nals:
         nal_type = _nal_type(nal)
         is_vcl = 1 <= nal_type <= 5
-        if is_vcl and has_vcl:
+        first_mb = _first_mb_in_slice(nal) if is_vcl else None
+        if is_vcl and has_vcl and (first_mb == 0 or first_mb is None):
             yield b"".join(frame_parts)
             frame_parts = []
             has_vcl = False
