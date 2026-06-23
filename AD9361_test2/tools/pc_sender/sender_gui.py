@@ -13,6 +13,9 @@ from sender_core import (
     DEFAULT_TARGET_RATE_KIB_S,
     DEFAULT_WINDOW_SIZE,
     SenderConfig,
+    TRANSFER_PROTOCOL_AIR0,
+    TRANSFER_PROTOCOL_AIRV,
+    TRANSFER_PROTOCOL_RAW,
     UdpSender,
     load_payload,
 )
@@ -95,6 +98,7 @@ class SenderGui:
         self.last_summary_log_time = 0.0
 
         self.mode_var = tk.StringVar(value="file")
+        self.transfer_protocol_var = tk.StringVar(value=TRANSFER_PROTOCOL_AIR0)
         self.file_path_var = tk.StringVar()
         self.file_info_var = tk.StringVar(value="No file selected")
         self.ip_var = tk.StringVar(value="192.168.1.50")
@@ -185,6 +189,19 @@ class SenderGui:
         source_box = ttk.LabelFrame(parent, text="Source", padding=12)
         source_box.pack(fill=tk.X)
 
+        protocol_row = ttk.Frame(source_box)
+        protocol_row.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(protocol_row, text="Transfer Mode", width=12).pack(side=tk.LEFT)
+        self.protocol_combo = ttk.Combobox(
+            protocol_row,
+            textvariable=self.transfer_protocol_var,
+            values=(TRANSFER_PROTOCOL_AIR0, TRANSFER_PROTOCOL_AIRV, TRANSFER_PROTOCOL_RAW),
+            state="readonly",
+            width=20,
+        )
+        self.protocol_combo.pack(side=tk.LEFT)
+        self.protocol_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_mode_widgets())
+
         mode_frame = ttk.Frame(source_box)
         mode_frame.pack(fill=tk.X)
         ttk.Radiobutton(mode_frame, text="File", value="file", variable=self.mode_var,
@@ -241,6 +258,7 @@ class SenderGui:
             net_box,
             text="AIR0 Packet Header",
             variable=self.air_protocol_var,
+            command=self._update_air0_compat,
         ).pack(anchor=tk.W, pady=(8, 0))
         ttk.Label(
             net_box,
@@ -335,8 +353,25 @@ class SenderGui:
 
     def _update_mode_widgets(self):
         mode = self.mode_var.get()
+        protocol = self.transfer_protocol_var.get()
+        if protocol == TRANSFER_PROTOCOL_AIRV:
+            self.mode_var.set("file")
+            mode = "file"
+            self.air_protocol_var.set(False)
+        elif protocol == TRANSFER_PROTOCOL_AIR0:
+            self.air_protocol_var.set(True)
+        elif protocol == TRANSFER_PROTOCOL_RAW:
+            self.air_protocol_var.set(False)
         self.file_entry.configure(state=tk.NORMAL if mode == "file" else tk.DISABLED)
         self.test_entry.configure(state=tk.NORMAL if mode == "test" else tk.DISABLED)
+        self.test_entry.configure(state=tk.DISABLED if protocol == TRANSFER_PROTOCOL_AIRV else self.test_entry.cget("state"))
+
+    def _update_air0_compat(self):
+        if self.air_protocol_var.get():
+            self.transfer_protocol_var.set(TRANSFER_PROTOCOL_AIR0)
+        elif self.transfer_protocol_var.get() == TRANSFER_PROTOCOL_AIR0:
+            self.transfer_protocol_var.set(TRANSFER_PROTOCOL_RAW)
+        self._update_mode_widgets()
 
     def _browse_file(self):
         file_path = filedialog.askopenfilename(title="Select file to send", filetypes=[("All files", "*.*")])
@@ -378,7 +413,7 @@ class SenderGui:
                 self.progress_interval_var.set("1000")
 
     def _format_start_mode(self, config: SenderConfig) -> str:
-        return f"payload_mode=raw nominal_wire_chunk={config.chunk_size}"
+        return f"payload_mode={config.transfer_protocol} nominal_wire_chunk={config.chunk_size}"
 
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
@@ -408,6 +443,9 @@ class SenderGui:
                 self.verbose_var.set(False)
 
             payload = self._build_payload()
+            transfer_protocol = self.transfer_protocol_var.get()
+            if transfer_protocol == TRANSFER_PROTOCOL_AIRV and self.mode_var.get() != "file":
+                raise ValueError("AIRV Realtime Video requires File source")
             config = SenderConfig(
                 ip=self.ip_var.get().strip(),
                 port=int(self.port_var.get().strip()),
@@ -421,7 +459,8 @@ class SenderGui:
                 verbose_events=verbose_events,
                 throughput_mode=throughput_mode,
                 validate_payload_crc=bool(self.payload_crc_var.get()),
-                air_protocol=bool(self.air_protocol_var.get()),
+                air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
+                transfer_protocol=transfer_protocol,
             )
         except Exception as exc:
             messagebox.showerror("Parameter Error", str(exc))

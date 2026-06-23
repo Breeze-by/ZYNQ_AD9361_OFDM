@@ -55,6 +55,10 @@ class ReceiverGui:
         self.air_var = tk.StringVar(value="0")
         self.air_missing_var = tk.StringVar(value="0")
         self.air_error_var = tk.StringVar(value="0 / 0 / 0")
+        self.airv_frame_var = tk.StringVar(value="0 / 0 / 0")
+        self.airv_frag_var = tk.StringVar(value="0 / 0")
+        self.airv_error_var = tk.StringVar(value="0 / 0 / 0 / 0")
+        self.airv_rate_var = tk.StringVar(value="0.0 fps / 0.0 ms")
         self.file_crc_var = tk.StringVar(value="N/A")
         self.output_path_var = tk.StringVar(value="-")
 
@@ -163,6 +167,10 @@ class ReceiverGui:
             ("AIR0 Packets", self.air_var),
             ("AIR0 Pending", self.air_missing_var),
             ("AIR0 Errors", self.air_error_var),
+            ("AIRV Frames", self.airv_frame_var),
+            ("AIRV Fragments", self.airv_frag_var),
+            ("AIRV Errors", self.airv_error_var),
+            ("AIRV FPS/Latency", self.airv_rate_var),
             ("File CRC", self.file_crc_var),
             ("Saved", self.output_path_var),
         ]
@@ -281,6 +289,10 @@ class ReceiverGui:
         self.air_var.set("0")
         self.air_missing_var.set("0")
         self.air_error_var.set("0 / 0 / 0")
+        self.airv_frame_var.set("0 / 0 / 0")
+        self.airv_frag_var.set("0 / 0")
+        self.airv_error_var.set("0 / 0 / 0 / 0")
+        self.airv_rate_var.set("0.0 fps / 0.0 ms")
         self.file_crc_var.set("N/A")
         self.output_path_var.set("-")
         self.rate_chart.reset()
@@ -322,6 +334,15 @@ class ReceiverGui:
             f"{stats.air_bad_header} / {stats.air_bad_payload_crc} / "
             f"{stats.air_bad_meta} / {stats.air_duplicates}"
         )
+        self.airv_frame_var.set(
+            f"{stats.airv_frames_rx} / {stats.airv_frames_show} / {stats.airv_frames_drop}"
+        )
+        self.airv_frag_var.set(f"{stats.airv_frag_rx} / {stats.airv_frag_missing}")
+        self.airv_error_var.set(
+            f"{stats.airv_bad_header} / {stats.airv_bad_meta} / "
+            f"{stats.airv_bad_frag_crc} / {stats.airv_bad_frame_crc}"
+        )
+        self.airv_rate_var.set(f"{stats.airv_fps:.1f} fps / {stats.airv_latency_ms:.1f} ms")
         self.file_crc_var.set("OK" if stats.air_file_crc_ok else ("pending" if stats.air_mode else "N/A"))
         self.rate_chart.add_point(stats.rate_kib_s)
         self.packet_chart.add_point(stats.packet_rate_s)
@@ -349,15 +370,51 @@ class ReceiverGui:
             now = time.time()
             if now - self.last_summary_log_time >= 0.5:
                 self.last_summary_log_time = now
+                if stats.airv_mode:
+                    self._append_log(
+                        f"VIDEO frame_rx={stats.airv_frames_rx} frame_show={stats.airv_frames_show} "
+                        f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
+                        f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
+                        f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
+                        f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
+                        f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
+                        f"latency_ms={stats.airv_latency_ms:.1f}"
+                    )
+                else:
+                    self._append_log(
+                        f"PROGRESS rx={stats.contiguous_bytes} high={stats.highest_end} "
+                        f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
+                        f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
+                        f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
+                        f"pending_air={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                        f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
+                        f"dup={stats.air_duplicates} got_last={int(stats.air_got_last)}"
+                    )
+            return
+
+        if event_name == "video_frame":
+            stats = payload["stats"]
+            self._update_stats(stats)
+            if payload["bad_fragment_crc"] or payload["bad_frame_crc"]:
                 self._append_log(
-                    f"PROGRESS rx={stats.contiguous_bytes} high={stats.highest_end} "
-                    f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
-                    f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
-                    f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
-                    f"pending_air={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
-                    f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
-                    f"dup={stats.air_duplicates} got_last={int(stats.air_got_last)}"
+                    f"VIDEO_FRAME frame={payload['frame_seq']} bytes={payload['bytes']} "
+                    f"bad_frag_crc={int(payload['bad_fragment_crc'])} "
+                    f"bad_frame_crc={int(payload['bad_frame_crc'])} "
+                    f"latency_ms={payload['latency_ms']:.1f}"
                 )
+            return
+
+        if event_name == "video_done":
+            stats = payload["stats"]
+            self._update_stats(stats)
+            self.status_var.set("Video Done")
+            self._append_log(
+                f"VIDEO_DONE frame_rx={stats.airv_frames_rx} frame_show={stats.airv_frames_show} "
+                f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
+                f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
+                f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
+                f"bad_frame_crc={stats.airv_bad_frame_crc}"
+            )
             return
 
         if event_name == "packet":
@@ -410,6 +467,19 @@ class ReceiverGui:
         if event_name == "done":
             stats = payload["stats"]
             self._update_stats(stats)
+            if stats.airv_mode:
+                self.status_var.set("Video Done")
+                self._append_log(
+                    f"DONE VIDEO frame_rx={stats.airv_frames_rx} frame_show={stats.airv_frames_show} "
+                    f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
+                    f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
+                    f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
+                    f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
+                    f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
+                    f"latency_ms={stats.airv_latency_ms:.1f} reason={stats.incomplete_reason}"
+                )
+                self._on_done()
+                return
             self.status_var.set("Done" if stats.saved_path else "Incomplete")
             missing_ranges = (
                 f" missing_seq={stats.air_missing_ranges}"

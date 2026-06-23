@@ -2,6 +2,18 @@
 
 This file captures the next protocol milestone for a future agent. It is a task plan, not the main project documentation. Keep the complete project documentation in `README.md` after implementation.
 
+## Status
+
+Stage 1 is implemented in the PC tools:
+
+- Added `video_protocol.py` with AIRV v1 64-byte fixed header and H.264 Annex-B frame fragmentation.
+- Added `video_receiver_core.py` with realtime frame assembly metrics.
+- Added sender `transfer_protocol` support and sender GUI `Transfer Mode`.
+- Added receiver auto-detection for AIR0 vs AIRV and `VIDEO` / `DONE VIDEO` logs.
+- Added Python unit tests for AIRV header, fragmentation, bad CRC behavior, bad header CRC rejection, and AIR0/AIRV magic separation.
+
+Stage 1 does not yet include actual decoded video preview. It validates the AIRV transport and realtime frame assembly through the existing PS/PL loopback path. Keep PS/PL payload-agnostic.
+
 ## Goal
 
 Add a separate realtime video transport mode in addition to the existing file/test-data AIR0 mode.

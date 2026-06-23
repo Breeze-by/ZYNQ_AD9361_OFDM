@@ -18,8 +18,9 @@
 - 每次完成代码或文档修改后，必须 `git commit` 并 `git push` 到远程；不要让用户自己 push。提交前后都要用 `rtk git status --short` 确认工作区状态。
 - 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`Payload CRC32`、`AIR0 Packet Header` 等。
 - 旧版额外封装和测试 pattern 选项已从 PC/PS/文档移除，以后不要再建议用户使用相关 GUI 字段或 CLI 参数。PC->PS 应用层包头后始终是普通 wire payload；PS/PL 不根据 payload 内容做额外交互。
+- 当前新增 AIRV 第一阶段实时视频模式。AIR0 仍是精确文件/测试数据恢复模式；AIRV 是实时组帧/统计模式，不保存精确文件，不做接收端 ACK、重传、FEC 或音频。PS/PL 仍不解析 AIR0/AIRV。
 - 调试 PL 回环要分阶段做。由于本地无法板级验证，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
-- 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...` 和 `DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=... bad_meta_seq=...` 行。
+- 需要用户反馈时，明确列出要复制的串口日志行，例如 `RXCFG loopback peer`、`S2MM start/wait/done/error`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`LB UDP sent`、`STAT rate/state`、`MM2S error`；如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、AIR0 的 `PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...`、`DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=... bad_meta_seq=...`，以及 AIRV 的 `VIDEO frame_rx=... frame_show=... frame_drop=... frag_rx=... frag_missing=... bad_hdr=... bad_meta=... bad_frag_crc=... bad_frame_crc=... keyframe_rx=... waiting_keyframe=... fps=... latency_ms=...`、`VIDEO_FRAME ...`、`VIDEO_DONE ...`、`DONE VIDEO ...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
 ## 当前工程定位
@@ -69,6 +70,12 @@ AD9361_test2/tools/pc_sender/recv_data.py
 
 AD9361_test2/tools/pc_sender/receiver_gui.py
     接收 Tkinter GUI。
+
+AD9361_test2/tools/pc_sender/video_protocol.py
+    PC-only AIRV 64 字节头、H.264 Annex-B 粗分帧和实时视频分片封装。
+
+AD9361_test2/tools/pc_sender/video_receiver_core.py
+    AIRV 实时组帧、坏 CRC 计数、缺片 drop 和 VIDEO 指标。
 ```
 
 ## Project agent instruction source
@@ -79,6 +86,7 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 
 - 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。DDR 中每个聚合 slot 的有效 payload 是 3000 字节，但 `NET_AGG_BLOCK_STRIDE_BYTES = 3008`，队列深度为 697；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
 - 默认 `Chunk Bytes = 1440` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1440`，其中 `64` 字节是 PC-only AIR0 头，最多 `1376` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后每包 wire payload 为原始文件/测试 payload。
+- AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV 头、最多 `1376` 字节 encoded video fragment 和零填充。第一阶段推荐 `.h264/.264` Annex-B 裸流作为输入，不建议直接用 MP4 容器测试实时模式。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 3000。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
@@ -108,6 +116,26 @@ Receiver Idle Finish(s) 10
 ```
 
 这一组用于小数据量回环确认。AIR0 模式下接收端会从 AIR0 头读取 `file_size`、`total_packets` 和 `file_crc32`，`Raw Expected` 保持 `0`，不要再要求用户预填文件大小。先启动接收 GUI 并等待 `RX target registered ...`，再启动发送 GUI。预期板端串口出现 `RXCFG loopback peer`、`Loopback UDP return ready`、`S2MM done ... cmp=OK`、`LB UDP sent ...`，接收 GUI `DONE` 行中 `rx=16384` 且 `crc=0 len=0 gaps=0`。
+
+## 当前推荐 AIRV GUI 测试设置
+
+```text
+Sender Transfer Mode    airv_video
+Sender Mode             File
+Sender file             H.264 Annex-B elementary stream
+Chunk Bytes             1440
+Window Size             1
+ACK Timeout(s)          2.0
+Max Retries             200
+Rate Limit KiB/s        400
+Throughput Mode         checked
+Payload CRC32           checked
+
+Receiver Raw Expected   0
+Receiver Idle Finish(s) 10
+```
+
+AIRV 第一阶段只验证实时组帧/统计，不保存精确恢复文件。预期接收 GUI 出现 `VIDEO ... frame_drop=0 frag_missing=0 bad_hdr=0 bad_meta=0`，结束时出现 `DONE VIDEO ...`。
 
 ## 常用验证命令
 

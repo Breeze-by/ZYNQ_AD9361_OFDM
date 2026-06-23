@@ -19,6 +19,13 @@ from air_protocol import (
     crc32 as air_crc32,
     parse_air_header,
 )
+from video_protocol import (
+    AIRV_HEADER_BYTES,
+    AIRV_MAGIC,
+    crc32 as airv_crc32,
+    parse_airv_header,
+)
+from video_receiver_core import VideoStreamAssembler
 from sender_core import (
     ACK_FORMAT,
     ACK_MAGIC,
@@ -99,6 +106,21 @@ class ReceiverStats:
     air_missing_ranges: str = ""
     air_bad_payload_ranges: str = ""
     air_bad_meta_ranges: str = ""
+    airv_mode: bool = False
+    airv_frames_rx: int = 0
+    airv_frames_show: int = 0
+    airv_frames_drop: int = 0
+    airv_frag_rx: int = 0
+    airv_frag_missing: int = 0
+    airv_bad_header: int = 0
+    airv_bad_meta: int = 0
+    airv_bad_frag_crc: int = 0
+    airv_bad_frame_crc: int = 0
+    airv_keyframe_rx: int = 0
+    airv_waiting_keyframe: int = 0
+    airv_latency_ms: float = 0.0
+    airv_fps: float = 0.0
+    airv_last_frame_seq: int = -1
 
 
 def parse_args():
@@ -331,11 +353,14 @@ class LoopbackReceiver:
         self._file_assembler = SparseFileAssembler(output_dir)
         self._air_checked = False
         self._air_mode = False
+        self._airv_mode = False
         self._air_parse_offset = 0
+        self._airv_parse_offset = 0
         self._air_received_seqs = set()
         self._air_bad_payload_seqs = set()
         self._air_bad_meta_seqs = set()
         self._air_meta = None
+        self._video = VideoStreamAssembler()
 
     def stop(self):
         self._stop_requested = True
@@ -369,6 +394,8 @@ class LoopbackReceiver:
         stats.contiguous_bytes = contiguous
         stats.highest_end = active.highest_end
         stats.gap_count = gaps
+        if self._airv_mode:
+            self._refresh_airv_stats(stats)
         self._refresh_rates(stats, now)
         self._emit(callback, "progress", {"stats": stats})
 
@@ -582,6 +609,26 @@ class LoopbackReceiver:
             self._air_mode = True
             stats.air_mode = True
             self._air_parse_offset = 0
+        elif first_word == AIRV_MAGIC:
+            self._airv_mode = True
+            stats.airv_mode = True
+            self._airv_parse_offset = 0
+
+    def _refresh_airv_stats(self, stats: ReceiverStats):
+        metrics = self._video.metrics()
+        stats.airv_frames_rx = metrics["frame_rx"]
+        stats.airv_frames_show = metrics["frame_show"]
+        stats.airv_frames_drop = metrics["frame_drop"]
+        stats.airv_frag_rx = metrics["frag_rx"]
+        stats.airv_frag_missing = metrics["frag_missing"]
+        stats.airv_bad_meta = metrics["bad_meta"]
+        stats.airv_bad_frag_crc = metrics["bad_frag_crc"]
+        stats.airv_bad_frame_crc = metrics["bad_frame_crc"]
+        stats.airv_keyframe_rx = metrics["keyframe_rx"]
+        stats.airv_waiting_keyframe = metrics["waiting_keyframe"]
+        stats.airv_latency_ms = metrics["latency_ms"]
+        stats.airv_fps = metrics["fps"]
+        stats.airv_last_frame_seq = self._video.latest_frame_seq
 
     def _parse_air_stream(self, stats: ReceiverStats):
         contiguous, _gaps = self._raw_assembler.coverage()
@@ -645,6 +692,65 @@ class LoopbackReceiver:
             self._air_parse_offset += packet_len
             self._update_air_missing(stats)
 
+    def _parse_airv_stream(self, stats: ReceiverStats, callback):
+        contiguous, _gaps = self._raw_assembler.coverage()
+
+        self._try_enable_air_mode(stats)
+        if not self._airv_mode:
+            return
+
+        while self._airv_parse_offset + AIRV_HEADER_BYTES <= contiguous:
+            header_bytes = self._raw_assembler.read_at(
+                self._airv_parse_offset,
+                AIRV_HEADER_BYTES,
+            )
+            if len(header_bytes) < AIRV_HEADER_BYTES:
+                return
+
+            if struct.unpack("<I", header_bytes[:4])[0] != AIRV_MAGIC:
+                scan_len = min(contiguous - self._airv_parse_offset, 4096)
+                scan_data = self._raw_assembler.read_at(self._airv_parse_offset, scan_len)
+                next_magic = scan_data.find(struct.pack("<I", AIRV_MAGIC), 1)
+                if next_magic < 0:
+                    self._airv_parse_offset = max(contiguous - 3, self._airv_parse_offset)
+                    return
+                stats.airv_bad_header += 1
+                self._airv_parse_offset += next_magic
+                continue
+
+            try:
+                header = parse_airv_header(header_bytes)
+            except ValueError:
+                stats.airv_bad_header += 1
+                self._airv_parse_offset += 1
+                continue
+
+            if self._airv_parse_offset + header.chunk_bytes > contiguous:
+                return
+
+            payload = self._raw_assembler.read_at(
+                self._airv_parse_offset + header.header_len,
+                header.fragment_len,
+            )
+            if len(payload) != header.fragment_len:
+                return
+
+            fragment_crc_ok = airv_crc32(payload) == header.fragment_crc32
+            frames = self._video.process_fragment(header, payload, fragment_crc_ok)
+            self._refresh_airv_stats(stats)
+            for frame in frames:
+                self._emit(callback, "video_frame", {
+                    "frame_seq": frame.frame_seq,
+                    "frame_type": frame.frame_type,
+                    "bytes": len(frame.payload),
+                    "bad_fragment_crc": frame.bad_fragment_crc,
+                    "bad_frame_crc": frame.bad_frame_crc,
+                    "latency_ms": frame.latency_ms,
+                    "stats": stats,
+                })
+
+            self._airv_parse_offset += header.chunk_bytes
+
     def _process_loopback(self, packet: dict, stats: ReceiverStats, callback):
         payload = packet["payload"]
         payload_len = len(payload)
@@ -676,6 +782,7 @@ class LoopbackReceiver:
             if absolute_offset + payload_len > stats.highest_end:
                 stats.highest_end = absolute_offset + payload_len
             self._parse_air_stream(stats)
+            self._parse_airv_stream(stats, callback)
 
         self._refresh_rates(stats)
         if status != "OK":
@@ -699,6 +806,14 @@ class LoopbackReceiver:
     def _save_if_ready(self, stats: ReceiverStats, callback, force: bool = False) -> bool:
         if self._saved:
             return True
+
+        if self._airv_mode:
+            if force and not stats.incomplete_reason:
+                self._video.flush_missing()
+                self._refresh_airv_stats(stats)
+                stats.incomplete_reason = "AIRV stream idle finish; realtime mode does not save an exact file"
+                self._emit(callback, "video_done", {"stats": stats})
+            return False
 
         active = self._active_assembler()
         contiguous, gaps = active.coverage()
@@ -870,6 +985,8 @@ class LoopbackReceiver:
 
         if stats.air_mode:
             self._refresh_air_missing_ranges(stats)
+        if stats.airv_mode:
+            self._refresh_airv_stats(stats)
         self._discard_unsaved()
         self._emit_progress(callback, stats, force=True)
         self._emit(callback, "done", {"stats": stats})
@@ -904,15 +1021,27 @@ def run_cli(args) -> int:
             )
         elif event_name == "progress":
             stats = payload["stats"]
-            print(
-                f"PROGRESS rx={stats.contiguous_bytes} high={stats.highest_end} "
-                f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
-                f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
-                f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
-                f"pending_air={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
-                f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
-                f"dup={stats.air_duplicates} got_last={int(stats.air_got_last)}"
-            )
+            if stats.airv_mode:
+                print(
+                    f"VIDEO frame_rx={stats.airv_frames_rx} frame_show={stats.airv_frames_show} "
+                    f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
+                    f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
+                    f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
+                    f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
+                    f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
+                    f"latency_ms={stats.airv_latency_ms:.1f} pkt={stats.packets} "
+                    f"rate={stats.rate_kib_s:.2f}KiB/s"
+                )
+            else:
+                print(
+                    f"PROGRESS rx={stats.contiguous_bytes} high={stats.highest_end} "
+                    f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
+                    f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
+                    f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
+                    f"pending_air={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                    f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
+                    f"dup={stats.air_duplicates} got_last={int(stats.air_got_last)}"
+                )
         elif event_name == "packet" and payload["status"] != "OK":
             print(
                 f"PACKET {payload['status']} block={payload['block_id']} "
@@ -920,6 +1049,24 @@ def run_cli(args) -> int:
             )
         elif event_name == "saved":
             print(f"SAVED {payload['path']}")
+        elif event_name == "video_frame":
+            if payload["bad_fragment_crc"] or payload["bad_frame_crc"]:
+                print(
+                    f"VIDEO_FRAME frame={payload['frame_seq']} bytes={payload['bytes']} "
+                    f"bad_frag_crc={int(payload['bad_fragment_crc'])} "
+                    f"bad_frame_crc={int(payload['bad_frame_crc'])} "
+                    f"latency_ms={payload['latency_ms']:.1f}"
+                )
+        elif event_name == "video_done":
+            stats = payload["stats"]
+            print(
+                f"VIDEO_DONE frame_rx={stats.airv_frames_rx} frame_show={stats.airv_frames_show} "
+                f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
+                f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
+                f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
+                f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
+                f"fps={stats.airv_fps:.1f} latency_ms={stats.airv_latency_ms:.1f}"
+            )
         elif event_name == "incomplete":
             stats = payload["stats"]
             missing_ranges = f" missing_seq={stats.air_missing_ranges}" if stats.air_missing_ranges else ""
@@ -943,6 +1090,17 @@ def run_cli(args) -> int:
             )
         elif event_name == "done":
             stats = payload["stats"]
+            if stats.airv_mode:
+                print(
+                    f"DONE VIDEO frame_rx={stats.airv_frames_rx} frame_show={stats.airv_frames_show} "
+                    f"frame_drop={stats.airv_frames_drop} frag_rx={stats.airv_frag_rx} "
+                    f"frag_missing={stats.airv_frag_missing} bad_hdr={stats.airv_bad_header} "
+                    f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
+                    f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
+                    f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
+                    f"latency_ms={stats.airv_latency_ms:.1f} reason={stats.incomplete_reason}"
+                )
+                return
             missing_ranges = f" missing_seq={stats.air_missing_ranges}" if stats.air_missing_ranges else ""
             bad_payload_ranges = (
                 f" bad_payload_seq={stats.air_bad_payload_ranges}"

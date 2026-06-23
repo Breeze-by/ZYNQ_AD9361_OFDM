@@ -16,6 +16,12 @@ from air_protocol import (
     crc32 as air_crc32,
     make_file_id,
 )
+from video_protocol import (
+    AIRV_HEADER_BYTES,
+    build_airv_stream,
+    crc32 as airv_crc32,
+    make_stream_id as make_airv_stream_id,
+)
 
 
 DATA_MAGIC = 0x4E455430
@@ -58,6 +64,14 @@ DEFAULT_WINDOW_SIZE = 1
 DEFAULT_ACK_TIMEOUT_S = 2.0
 DEFAULT_RETRIES = 200
 DEFAULT_TARGET_RATE_KIB_S = 400.0
+TRANSFER_PROTOCOL_AIR0 = "air0_file"
+TRANSFER_PROTOCOL_AIRV = "airv_video"
+TRANSFER_PROTOCOL_RAW = "raw"
+TRANSFER_PROTOCOL_CHOICES = (
+    TRANSFER_PROTOCOL_AIR0,
+    TRANSFER_PROTOCOL_AIRV,
+    TRANSFER_PROTOCOL_RAW,
+)
 
 
 @dataclass
@@ -75,6 +89,7 @@ class SenderConfig:
     throughput_mode: bool = False
     validate_payload_crc: bool = False
     air_protocol: bool = True
+    transfer_protocol: str = TRANSFER_PROTOCOL_AIR0
 
 
 @dataclass
@@ -153,6 +168,8 @@ def parse_args():
         help="wrap payload chunks in a PC-only AIR0 header for loss/error accounting")
     parser.add_argument("--no-air-protocol", dest="air_protocol", action="store_false",
         help="send raw file/test bytes without the PC-only AIR0 header")
+    parser.add_argument("--transfer-protocol", choices=TRANSFER_PROTOCOL_CHOICES, default=None,
+        help="PC-only wire payload protocol: air0_file, airv_video, or raw")
     parser.add_argument("--test-size", type=int, default=0, help="send generated test payload of this size")
     parser.add_argument("--file", help="send payload read from file")
     return parser.parse_args()
@@ -177,7 +194,11 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
     session_id: int = 0, total_chunks: int = 0, total_size: int = 0,
     byte_offset: int = 0, file_crc32: int = 0, file_id: int = 0) -> bytes:
     wire_payload = payload
-    if config is not None and config.air_protocol:
+    use_air0 = False
+    if config is not None:
+        protocol = getattr(config, "transfer_protocol", TRANSFER_PROTOCOL_AIR0)
+        use_air0 = config.air_protocol and protocol == TRANSFER_PROTOCOL_AIR0
+    if use_air0:
         wire_payload = build_air_packet(
             payload,
             packet_seq=seq,
@@ -330,10 +351,27 @@ class UdpSender:
         self._active_total_chunks = 0
         self._active_file_crc32 = 0
         self._active_file_id = 0
+        self._active_source_size = 0
+        self._active_stream_id = 0
+
+    def _transfer_protocol(self) -> str:
+        protocol = getattr(self.config, "transfer_protocol", TRANSFER_PROTOCOL_AIR0)
+        if protocol not in TRANSFER_PROTOCOL_CHOICES:
+            raise ValueError(f"unsupported transfer_protocol {protocol}")
+        if protocol == TRANSFER_PROTOCOL_RAW:
+            return TRANSFER_PROTOCOL_RAW
+        if protocol == TRANSFER_PROTOCOL_AIRV:
+            return TRANSFER_PROTOCOL_AIRV
+        if not self.config.air_protocol:
+            return TRANSFER_PROTOCOL_RAW
+        return TRANSFER_PROTOCOL_AIR0
 
     def _payload_chunk_size(self) -> int:
-        if self.config.air_protocol:
+        protocol = self._transfer_protocol()
+        if protocol == TRANSFER_PROTOCOL_AIR0:
             return self.config.chunk_size - AIR_HEADER_BYTES
+        if protocol == TRANSFER_PROTOCOL_AIRV:
+            return self.config.chunk_size
         return self.config.chunk_size
 
     def stop(self):
@@ -343,17 +381,46 @@ class UdpSender:
         with self._config_lock:
             chunk_size = self.config.chunk_size
             window_size = self.config.window_size
-            air_protocol = self.config.air_protocol
+            protocol = self._transfer_protocol()
 
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
         if window_size <= 0:
             raise ValueError("window_size must be positive")
-        if air_protocol:
+        if protocol == TRANSFER_PROTOCOL_AIR0:
             if chunk_size <= AIR_HEADER_BYTES:
                 raise ValueError(f"chunk_size must be greater than AIR header size {AIR_HEADER_BYTES}")
+        if protocol == TRANSFER_PROTOCOL_AIRV:
+            if chunk_size <= AIRV_HEADER_BYTES:
+                raise ValueError(f"chunk_size must be greater than AIRV header size {AIRV_HEADER_BYTES}")
 
     def _prepare_transfer(self, payload: bytes):
+        protocol = self._transfer_protocol()
+        self._active_source_size = len(payload)
+
+        if protocol == TRANSFER_PROTOCOL_AIRV:
+            video_crc = airv_crc32(payload)
+            self._active_stream_id = make_airv_stream_id(
+                len(payload),
+                video_crc,
+                self._session_id,
+            )
+            prepared_payload = build_airv_stream(
+                payload,
+                chunk_bytes=self.config.chunk_size,
+                session_id=self._session_id,
+                stream_id=self._active_stream_id,
+            )
+            total_chunks = (
+                (len(prepared_payload) + self.config.chunk_size - 1) //
+                self.config.chunk_size
+            )
+            self._active_total_size = len(prepared_payload)
+            self._active_total_chunks = total_chunks
+            self._active_file_crc32 = video_crc
+            self._active_file_id = self._active_stream_id
+            return prepared_payload
+
         payload_chunk_size = self._payload_chunk_size()
         total_chunks = (len(payload) + payload_chunk_size - 1) // payload_chunk_size
         self._active_total_size = len(payload)
@@ -365,13 +432,13 @@ class UdpSender:
             self._session_id,
         )
 
-        return total_chunks
+        return payload
 
     def _build_packet(self, seq: int, payload: bytes) -> bytes:
         with self._config_lock:
             validate_payload_crc = self.config.validate_payload_crc
             session_id = self._session_id
-            air_protocol = self.config.air_protocol
+            protocol = self._transfer_protocol()
 
         config = SenderConfig(
             ip=self.config.ip,
@@ -386,7 +453,8 @@ class UdpSender:
             verbose_events=self.config.verbose_events,
             throughput_mode=self.config.throughput_mode,
             validate_payload_crc=validate_payload_crc,
-            air_protocol=air_protocol,
+            air_protocol=(protocol == TRANSFER_PROTOCOL_AIR0),
+            transfer_protocol=protocol,
         )
         return build_packet(
             seq,
@@ -830,12 +898,12 @@ class UdpSender:
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         self._validate_config()
         self._begin_new_session()
-        self._prepare_transfer(payload)
+        payload = self._prepare_transfer(payload)
 
         if self.config.throughput_mode:
             return self._send_throughput(payload, callback=callback)
 
-        stats = SenderStats(total_size=len(payload))
+        stats = SenderStats(total_size=self._active_total_size)
         stats.effective_window_size = self.config.window_size
         destination = (self.config.ip, self.config.port)
         chunks = list(iter_chunks(payload, self._payload_chunk_size()))
@@ -1088,6 +1156,9 @@ class UdpSender:
 
 def run_cli(args) -> int:
     payload = load_payload(test_size=args.test_size, file_path=args.file)
+    transfer_protocol = args.transfer_protocol
+    if transfer_protocol is None:
+        transfer_protocol = TRANSFER_PROTOCOL_AIR0 if args.air_protocol else TRANSFER_PROTOCOL_RAW
     sender = UdpSender(SenderConfig(
         ip=args.ip,
         port=args.port,
@@ -1104,7 +1175,8 @@ def run_cli(args) -> int:
         verbose_events=False if args.throughput_mode else args.verbose_events,
         throughput_mode=args.throughput_mode,
         validate_payload_crc=args.validate_payload_crc,
-        air_protocol=args.air_protocol,
+        air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
+        transfer_protocol=transfer_protocol,
     ))
 
     def callback(event_name: str, payload_dict: dict):

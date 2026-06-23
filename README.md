@@ -402,6 +402,55 @@ PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payl
 
 如需回到旧版纯字节流，对发送 GUI 取消勾选 `AIR0 Packet Header`，或 CLI 使用 `--no-air-protocol`。
 
+## PC-only AIRV realtime video payload header
+
+当前已加入 AIRV 第一阶段实时视频传输模式，仍然只在 PC 工具侧生效。PS/PL 不解析 AIRV；它们继续把 `net_data_header_t` 后面的 wire payload 当普通字节转发。发送 GUI 新增 `Transfer Mode`：
+
+```text
+air0_file   当前默认 File/Test 精确恢复模式
+airv_video  实时视频组帧/统计模式
+raw         旧版原始字节流
+```
+
+AIRV 使用 64 字节固定头，`Chunk Bytes=1440` 时每个 PC->PS wire payload 是：
+
+```text
+64-byte AIRV header + up to 1376-byte encoded video frame fragment + optional zero padding
+```
+
+AIRV v1 头包含 `session_id/stream_id/frame_seq/frag_index/frag_count/frame_type/frame_size/fragment_offset/fragment_len/chunk_bytes/frame_crc32/fragment_crc32/pts_us` 等字段。为保持 64 字节头，`tx_timestamp_us` 当前只携带低 32 bit，主要用于诊断。发送端会把 H.264 Annex-B elementary stream 按 access unit 粗分帧；如果输入文件没有 Annex-B start code，则先作为单个 encoded frame 分片发送。因此第一阶段推荐输入 `.h264` / `.264` 裸 H.264 码流，不建议直接把普通 MP4 容器当实时视频源。
+
+AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，用于后续展示可见损伤。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop。AIRV 第一阶段不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
+
+AIRV 接收日志示例：
+
+```text
+VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1
+VIDEO_FRAME frame=42 bytes=3900 bad_frag_crc=1 bad_frame_crc=1 latency_ms=4.8
+VIDEO_DONE frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 fps=24.8 latency_ms=5.1
+DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1
+```
+
+推荐第一阶段 AIRV GUI 测试：
+
+```text
+Sender Transfer Mode    airv_video
+Sender Mode             File
+Sender file             H.264 Annex-B elementary stream, no audio
+Chunk Bytes             1440
+Window Size             1
+ACK Timeout(s)          2.0
+Max Retries             200
+Rate Limit KiB/s        400
+Throughput Mode         checked
+Payload CRC32           checked
+
+Receiver Raw Expected   0
+Receiver Idle Finish(s) 10
+```
+
+第一阶段重点看 AIRV 是否能经 PC->PS->PL->PS->PC 回传后连续组帧：`bad_hdr=0`、`bad_meta=0`、`frame_drop=0`、`frag_missing=0`。如果出现 `bad_frag_crc` 或 `bad_frame_crc`，接收端仍会尝试组帧并输出 `VIDEO_FRAME ... bad_frag_crc=1 bad_frame_crc=1`，这符合 AIRV 的实时演示策略。
+
 推荐 GUI/CLI 吞吐配置：
 
 ```text
