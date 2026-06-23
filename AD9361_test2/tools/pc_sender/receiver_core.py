@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from air_protocol import (
+    AIR_FLAG_DATA,
+    AIR_FLAG_LAST,
     AIR_HEADER_BYTES,
     AIR_MAGIC,
     crc32 as air_crc32,
@@ -85,10 +87,18 @@ class ReceiverStats:
     air_bad_header: int = 0
     air_bad_payload_crc: int = 0
     air_duplicates: int = 0
+    air_bad_meta: int = 0
     air_file_size: int = 0
     air_file_crc32: int = 0
+    air_file_id: int = 0
+    air_session_id: int = 0
+    air_chunk_bytes: int = 0
+    air_got_last: bool = False
+    air_last_seq: int = -1
     air_file_crc_ok: bool = False
     air_missing_ranges: str = ""
+    air_bad_payload_ranges: str = ""
+    air_bad_meta_ranges: str = ""
 
 
 def parse_args():
@@ -323,6 +333,9 @@ class LoopbackReceiver:
         self._air_mode = False
         self._air_parse_offset = 0
         self._air_received_seqs = set()
+        self._air_bad_payload_seqs = set()
+        self._air_bad_meta_seqs = set()
+        self._air_meta = None
 
     def stop(self):
         self._stop_requested = True
@@ -426,14 +439,53 @@ class LoopbackReceiver:
     def _format_air_missing_ranges(self, stats: ReceiverStats, max_ranges: int = 16) -> str:
         if stats.air_total_packets <= 0 or stats.air_missing_packets <= 0:
             return ""
+        return self._format_missing_seq_ranges(stats.air_total_packets, max_ranges=max_ranges)
 
+    def _format_seq_ranges(self, seqs, max_ranges: int = 16) -> str:
+        if not seqs:
+            return ""
         ranges = []
         omitted_ranges = 0
         range_start = None
         previous_missing = None
 
-        for seq in range(stats.air_total_packets + 1):
-            is_missing = seq < stats.air_total_packets and seq not in self._air_received_seqs
+        sorted_seqs = sorted(seqs)
+        sentinel = None
+        for seq in sorted_seqs + [sentinel]:
+            if seq is not sentinel and (
+                range_start is None or seq == previous_missing + 1
+            ):
+                if range_start is None:
+                    range_start = seq
+                previous_missing = seq
+                continue
+
+            if range_start is None:
+                continue
+
+            if len(ranges) < max_ranges:
+                if range_start == previous_missing:
+                    ranges.append(str(range_start))
+                else:
+                    ranges.append(f"{range_start}-{previous_missing}")
+            else:
+                omitted_ranges += 1
+
+            range_start = None
+            previous_missing = None
+
+        if omitted_ranges != 0:
+            ranges.append(f"...(+{omitted_ranges} ranges)")
+        return ",".join(ranges)
+
+    def _format_missing_seq_ranges(self, total_packets: int, max_ranges: int = 16) -> str:
+        ranges = []
+        omitted_ranges = 0
+        range_start = None
+        previous_missing = None
+
+        for seq in range(total_packets + 1):
+            is_missing = seq < total_packets and seq not in self._air_received_seqs
             if is_missing:
                 if range_start is None:
                     range_start = seq
@@ -461,6 +513,60 @@ class LoopbackReceiver:
     def _refresh_air_missing_ranges(self, stats: ReceiverStats):
         self._update_air_missing(stats)
         stats.air_missing_ranges = self._format_air_missing_ranges(stats)
+        stats.air_bad_payload_ranges = self._format_seq_ranges(self._air_bad_payload_seqs)
+        stats.air_bad_meta_ranges = self._format_seq_ranges(self._air_bad_meta_seqs)
+
+    def _set_air_meta(self, header, stats: ReceiverStats):
+        self._air_meta = (
+            header.session_id,
+            header.file_id,
+            header.total_packets,
+            header.file_size,
+            header.file_crc32,
+            header.chunk_bytes,
+        )
+        stats.air_session_id = header.session_id
+        stats.air_file_id = header.file_id
+        stats.air_total_packets = header.total_packets
+        stats.air_file_size = header.file_size
+        stats.air_file_crc32 = header.file_crc32
+        stats.air_chunk_bytes = header.chunk_bytes
+
+    def _header_meta_matches(self, header) -> bool:
+        return self._air_meta == (
+            header.session_id,
+            header.file_id,
+            header.total_packets,
+            header.file_size,
+            header.file_crc32,
+            header.chunk_bytes,
+        )
+
+    def _reject_air_meta(self, header, stats: ReceiverStats):
+        stats.air_bad_meta += 1
+        self._air_bad_meta_seqs.add(header.packet_seq)
+        self._update_air_missing(stats)
+
+    def _validate_air_meta(self, header, stats: ReceiverStats) -> bool:
+        if self._air_meta is None:
+            self._set_air_meta(header, stats)
+        elif not self._header_meta_matches(header):
+            self._reject_air_meta(header, stats)
+            return False
+
+        is_last_seq = header.packet_seq == (header.total_packets - 1)
+        has_last_flag = (header.flags & AIR_FLAG_LAST) != 0
+        if (header.flags & AIR_FLAG_DATA) == 0:
+            self._reject_air_meta(header, stats)
+            return False
+        if has_last_flag != is_last_seq:
+            self._reject_air_meta(header, stats)
+            return False
+
+        if has_last_flag:
+            stats.air_got_last = True
+            stats.air_last_seq = header.packet_seq
+        return True
 
     def _try_enable_air_mode(self, stats: ReceiverStats):
         if self._air_checked:
@@ -518,12 +624,13 @@ class LoopbackReceiver:
             if len(payload) != header.payload_len:
                 return
 
-            stats.air_total_packets = max(stats.air_total_packets, header.total_packets)
-            stats.air_file_size = header.file_size
-            stats.air_file_crc32 = header.file_crc32
+            if not self._validate_air_meta(header, stats):
+                self._air_parse_offset += packet_len
+                continue
 
             if air_crc32(payload) != header.payload_crc32:
                 stats.air_bad_payload_crc += 1
+                self._air_bad_payload_seqs.add(header.packet_seq)
                 self._air_parse_offset += packet_len
                 self._update_air_missing(stats)
                 continue
@@ -626,6 +733,26 @@ class LoopbackReceiver:
                         stats,
                         callback,
                         f"AIR0 missing {stats.air_missing_packets} packets of {stats.air_total_packets}",
+                    )
+                return False
+            if not stats.air_got_last:
+                if force:
+                    self._mark_incomplete(stats, callback, "AIR0 LAST packet was not received")
+                return False
+            if stats.air_bad_meta != 0:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"AIR0 metadata mismatch on {stats.air_bad_meta} packets",
+                    )
+                return False
+            if stats.air_bad_payload_crc != 0:
+                if force:
+                    self._mark_incomplete(
+                        stats,
+                        callback,
+                        f"AIR0 payload CRC failed on {stats.air_bad_payload_crc} packets",
                     )
                 return False
             actual_crc = active.crc32_prefix(expected_bytes)
@@ -782,8 +909,9 @@ def run_cli(args) -> int:
                 f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
                 f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
                 f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
-                f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
-                f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates}"
+                f"pending_air={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
+                f"dup={stats.air_duplicates} got_last={int(stats.air_got_last)}"
             )
         elif event_name == "packet" and payload["status"] != "OK":
             print(
@@ -794,30 +922,49 @@ def run_cli(args) -> int:
             print(f"SAVED {payload['path']}")
         elif event_name == "incomplete":
             stats = payload["stats"]
-            missing_ranges = (
-                f" missing_seq={stats.air_missing_ranges}"
-                if stats.air_missing_ranges else ""
+            missing_ranges = f" missing_seq={stats.air_missing_ranges}" if stats.air_missing_ranges else ""
+            bad_payload_ranges = (
+                f" bad_payload_seq={stats.air_bad_payload_ranges}"
+                if stats.air_bad_payload_ranges else ""
+            )
+            bad_meta_ranges = (
+                f" bad_meta_seq={stats.air_bad_meta_ranges}"
+                if stats.air_bad_meta_ranges else ""
             )
             print(
                 f"INCOMPLETE {payload['reason']} rx={stats.contiguous_bytes} "
                 f"high={stats.highest_end} gaps={stats.gap_count} "
-                f"air={int(stats.air_mode)} miss={stats.air_missing_packets}"
-                f"{missing_ranges}"
+                f"air={int(stats.air_mode)} miss={stats.air_missing_packets} "
+                f"file_size={stats.air_file_size} total_packets={stats.air_total_packets} "
+                f"file_id=0x{stats.air_file_id:08X} file_crc=0x{stats.air_file_crc32:08X} "
+                f"got_last={int(stats.air_got_last)} bad_meta={stats.air_bad_meta} "
+                f"bad_payload={stats.air_bad_payload_crc}{missing_ranges}"
+                f"{bad_payload_ranges}{bad_meta_ranges}"
             )
         elif event_name == "done":
             stats = payload["stats"]
-            missing_ranges = (
-                f" missing_seq={stats.air_missing_ranges}"
-                if stats.air_missing_ranges else ""
+            missing_ranges = f" missing_seq={stats.air_missing_ranges}" if stats.air_missing_ranges else ""
+            bad_payload_ranges = (
+                f" bad_payload_seq={stats.air_bad_payload_ranges}"
+                if stats.air_bad_payload_ranges else ""
+            )
+            bad_meta_ranges = (
+                f" bad_meta_seq={stats.air_bad_meta_ranges}"
+                if stats.air_bad_meta_ranges else ""
             )
             print(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
                 f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
                 f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
-                f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates} "
-                f"file_crc={int(stats.air_file_crc_ok)} saved={stats.saved_path} "
-                f"reason={stats.incomplete_reason}{missing_ranges}"
+                f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
+                f"dup={stats.air_duplicates} file_crc={int(stats.air_file_crc_ok)} "
+                f"file_size={stats.air_file_size} total_packets={stats.air_total_packets} "
+                f"file_id=0x{stats.air_file_id:08X} file_crc32=0x{stats.air_file_crc32:08X} "
+                f"session={stats.air_session_id} chunk={stats.air_chunk_bytes} "
+                f"got_last={int(stats.air_got_last)} last_seq={stats.air_last_seq} "
+                f"saved={stats.saved_path} reason={stats.incomplete_reason}"
+                f"{missing_ranges}{bad_payload_ranges}{bad_meta_ranges}"
             )
 
     receiver.run(callback=callback)

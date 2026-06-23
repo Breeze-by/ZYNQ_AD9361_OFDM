@@ -454,7 +454,7 @@ Idle Finish(s)      数据不完整时，收到最后一个回传分片后空闲
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
-当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Raw Expected` 只在关闭 AIR0 的 raw 模式下作为保存长度兜底。接收 GUI/CLI 的 `PROGRESS` 和 `DONE` 会额外输出 `air=... air_rx=... miss=... bad_hdr=... bad_payload=... dup=... file_crc=...`。如果最终存在缺失 AIR0 包，`INCOMPLETE` / `DONE` 还会输出 `missing_seq=...`，用逗号分隔缺失 `packet_seq` 范围，例如 `missing_seq=120-124,301,488`；范围很多时会截断为 `...(+N ranges)`。`Idle Finish(s)` 仍保留，用于缺包或尾包未到达时触发最终 `INCOMPLETE` 判断。
+当前默认开启 `AIR0 Packet Header`。开启 AIR0 后，接收端会优先使用 AIR0 头里的 `file_size` 和 `file_crc32` 判断完整性；`Raw Expected` 只在关闭 AIR0 的 raw 模式下作为保存长度兜底。接收 GUI/CLI 的 `PROGRESS` 会输出 `pending_air=...`，表示当前尚未收到的 AIR0 包数；传输未结束时它会随接收推进逐步下降，不是最终丢包数。最终 `DONE` / `INCOMPLETE` 输出 `miss=... bad_hdr=... bad_payload=... bad_meta=... dup=... file_crc=... got_last=... file_id=... file_size=... total_packets=...`。如果最终存在缺失 AIR0 包，`INCOMPLETE` / `DONE` 还会输出 `missing_seq=...`，用逗号分隔缺失 `packet_seq` 范围，例如 `missing_seq=120-124,301,488`；范围很多时会截断为 `...(+N ranges)`。如果出现 payload CRC 或 AIR0 元数据一致性错误，还会输出 `bad_payload_seq=...` 或 `bad_meta_seq=...`。`Idle Finish(s)` 仍保留，用于缺包或尾包未到达时触发最终 `INCOMPLETE` 判断。
 
 如果接收 GUI 出现 `INCOMPLETE`，或者 `DONE` 中 `gaps` 不为 0、`saved` 为空，说明 PC 接收端没有拿到完整连续 payload；此时工具不会保存带洞文件。大文件测试时优先确认 `rx` 最终等于原文件大小、`high` 等于原文件大小、`gaps=0`、`crc=0`、`len=0`。
 
@@ -528,12 +528,20 @@ gaps        当前已收到区间中 offset 0 之后的缺口数量。
 saved       已保存的恢复文件路径。
 air         是否自动识别到 AIR0 payload header。
 air_rx      已通过 AIR0 header/payload CRC 校验的数据包数 / AIR0 总包数。
-miss        AIR0 packet_seq 统计出的缺失包数量。
+pending_air PROGRESS 中当前尚未收到的 AIR0 包数量；传输中不代表最终丢包。
+miss        DONE/INCOMPLETE 中 AIR0 packet_seq 统计出的最终缺失包数量。
 missing_seq 最终缺失 AIR0 packet_seq 范围；仅在 INCOMPLETE/DONE 且 miss>0 时输出。
 bad_hdr     AIR0 header magic/version/length/header_crc 校验失败次数。
 bad_payload AIR0 payload_crc32 校验失败次数。
+bad_payload_seq 最终 AIR0 payload CRC 错误 packet_seq 范围。
+bad_meta    AIR0 `session_id/file_id/total_packets/file_size/file_crc32/chunk_bytes` 不一致，或 DATA/LAST flag 不合法的包数量。
+bad_meta_seq 最终 AIR0 元数据错误 packet_seq 范围。
 dup         AIR0 重复 packet_seq 数量。
 file_crc    AIR0 恢复文件 CRC32 是否匹配。
+file_size   AIR0 header 声明的原始文件/测试数据总字节数。
+total_packets AIR0 header 声明的总包数。
+file_id     AIR0 header 中由文件大小、文件 CRC 和 session 生成的文件标识。
+got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == total_packets - 1`。
 ```
 
 判断真实端到端吞吐时：

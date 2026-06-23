@@ -161,7 +161,7 @@ class ReceiverGui:
             ("Length Errors", self.len_var),
             ("Gaps", self.gap_var),
             ("AIR0 Packets", self.air_var),
-            ("AIR0 Missing", self.air_missing_var),
+            ("AIR0 Pending", self.air_missing_var),
             ("AIR0 Errors", self.air_error_var),
             ("File CRC", self.file_crc_var),
             ("Saved", self.output_path_var),
@@ -319,7 +319,8 @@ class ReceiverGui:
         else:
             self.air_missing_var.set(str(stats.air_missing_packets))
         self.air_error_var.set(
-            f"{stats.air_bad_header} / {stats.air_bad_payload_crc} / {stats.air_duplicates}"
+            f"{stats.air_bad_header} / {stats.air_bad_payload_crc} / "
+            f"{stats.air_bad_meta} / {stats.air_duplicates}"
         )
         self.file_crc_var.set("OK" if stats.air_file_crc_ok else ("pending" if stats.air_mode else "N/A"))
         self.rate_chart.add_point(stats.rate_kib_s)
@@ -353,8 +354,9 @@ class ReceiverGui:
                     f"pkt={stats.packets} blk={stats.blocks} rate={stats.rate_kib_s:.2f}KiB/s "
                     f"crc={stats.crc_errors} len={stats.length_errors} gaps={stats.gap_count} "
                     f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
-                    f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
-                    f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates}"
+                    f"pending_air={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
+                    f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
+                    f"dup={stats.air_duplicates} got_last={int(stats.air_got_last)}"
                 )
             return
 
@@ -388,7 +390,21 @@ class ReceiverGui:
                 f" missing_seq={stats.air_missing_ranges}"
                 if stats.air_missing_ranges else ""
             )
-            self._append_log(f"INCOMPLETE {payload['reason']}{missing_ranges}")
+            bad_payload_ranges = (
+                f" bad_payload_seq={stats.air_bad_payload_ranges}"
+                if stats.air_bad_payload_ranges else ""
+            )
+            bad_meta_ranges = (
+                f" bad_meta_seq={stats.air_bad_meta_ranges}"
+                if stats.air_bad_meta_ranges else ""
+            )
+            self._append_log(
+                f"INCOMPLETE {payload['reason']} file_size={stats.air_file_size} "
+                f"total_packets={stats.air_total_packets} file_id=0x{stats.air_file_id:08X} "
+                f"file_crc=0x{stats.air_file_crc32:08X} got_last={int(stats.air_got_last)} "
+                f"bad_meta={stats.air_bad_meta} bad_payload={stats.air_bad_payload_crc}"
+                f"{missing_ranges}{bad_payload_ranges}{bad_meta_ranges}"
+            )
             return
 
         if event_name == "done":
@@ -399,14 +415,27 @@ class ReceiverGui:
                 f" missing_seq={stats.air_missing_ranges}"
                 if stats.air_missing_ranges else ""
             )
+            bad_payload_ranges = (
+                f" bad_payload_seq={stats.air_bad_payload_ranges}"
+                if stats.air_bad_payload_ranges else ""
+            )
+            bad_meta_ranges = (
+                f" bad_meta_seq={stats.air_bad_meta_ranges}"
+                if stats.air_bad_meta_ranges else ""
+            )
             self._append_log(
                 f"DONE rx={stats.contiguous_bytes} high={stats.highest_end} "
                 f"pkt={stats.packets} blk={stats.blocks} gaps={stats.gap_count} "
                 f"air={int(stats.air_mode)} air_rx={stats.air_packets}/{stats.air_total_packets} "
                 f"miss={stats.air_missing_packets} bad_hdr={stats.air_bad_header} "
-                f"bad_payload={stats.air_bad_payload_crc} dup={stats.air_duplicates} "
-                f"file_crc={int(stats.air_file_crc_ok)} saved={stats.saved_path} "
-                f"reason={stats.incomplete_reason}{missing_ranges}"
+                f"bad_payload={stats.air_bad_payload_crc} bad_meta={stats.air_bad_meta} "
+                f"dup={stats.air_duplicates} file_crc={int(stats.air_file_crc_ok)} "
+                f"file_size={stats.air_file_size} total_packets={stats.air_total_packets} "
+                f"file_id=0x{stats.air_file_id:08X} file_crc32=0x{stats.air_file_crc32:08X} "
+                f"session={stats.air_session_id} chunk={stats.air_chunk_bytes} "
+                f"got_last={int(stats.air_got_last)} last_seq={stats.air_last_seq} "
+                f"saved={stats.saved_path} reason={stats.incomplete_reason}"
+                f"{missing_ranges}{bad_payload_ranges}{bad_meta_ranges}"
             )
             self._on_done()
             return
