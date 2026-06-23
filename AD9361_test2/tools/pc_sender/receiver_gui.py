@@ -23,8 +23,9 @@ class ReceiverGui:
     def __init__(self, root):
         self.root = root
         self.root.title("AD9361_test2 UDP Receiver")
-        self.root.geometry("1120x840")
-        self.root.minsize(1000, 720)
+        self.root.geometry("1120x760")
+        self.root.minsize(1000, 700)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_root_close)
 
         self.event_queue = queue.Queue()
         self.receiver_thread = None
@@ -34,6 +35,9 @@ class ReceiverGui:
         self.video_decoder = VideoPreviewDecoder()
         self.preview_photo = None
         self.preview_unavailable_logged = False
+        self.preview_window = None
+        self.preview_canvas = None
+        self.preview_message = self.video_decoder.status_text()
 
         self.bind_ip_var = tk.StringVar(value="0.0.0.0")
         self.bind_port_var = tk.StringVar(value=str(DEFAULT_RECEIVER_PORT))
@@ -64,7 +68,8 @@ class ReceiverGui:
         self.airv_frag_var = tk.StringVar(value="0 / 0")
         self.airv_error_var = tk.StringVar(value="0 / 0 / 0 / 0")
         self.airv_rate_var = tk.StringVar(value="0.0 fps / 0.0 ms")
-        self.preview_status_var = tk.StringVar(value="Idle")
+        self.preview_status_var = tk.StringVar(value=self.video_decoder.status_text())
+        self.preview_input_var = tk.StringVar(value="0")
         self.preview_decoded_var = tk.StringVar(value="0")
         self.preview_displayed_var = tk.StringVar(value="0")
         self.preview_errors_var = tk.StringVar(value="0")
@@ -100,7 +105,6 @@ class ReceiverGui:
 
         self._build_config(left)
         self._build_metrics(right)
-        self._build_preview(root_frame)
         self._build_charts(root_frame)
         self._build_log(root_frame)
 
@@ -158,6 +162,7 @@ class ReceiverGui:
         self.start_button.pack(side=tk.LEFT)
         self.stop_button = ttk.Button(action_box, text="Stop", command=self._stop_receiver, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(action_box, text="Open Preview", command=self._ensure_preview_window).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(action_box, text="Clear Log", command=self._clear_log).pack(side=tk.LEFT, padx=(8, 0))
 
     def _build_metrics(self, parent):
@@ -178,11 +183,12 @@ class ReceiverGui:
             ("AIR0 Packets", self.air_var),
             ("AIR0 Pending", self.air_missing_var),
             ("AIR0 Errors", self.air_error_var),
-            ("AIRV Frames", self.airv_frame_var),
+            ("AIRV rx/show/drop", self.airv_frame_var),
             ("AIRV Fragments", self.airv_frag_var),
             ("AIRV Errors", self.airv_error_var),
             ("AIRV FPS/Latency", self.airv_rate_var),
             ("Preview", self.preview_status_var),
+            ("Preview Input", self.preview_input_var),
             ("Decoded", self.preview_decoded_var),
             ("Displayed", self.preview_displayed_var),
             ("Decoder Errors", self.preview_errors_var),
@@ -196,19 +202,6 @@ class ReceiverGui:
             ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
             ttk.Label(row, textvariable=variable, font=("Consolas", 10),
                 wraplength=300).pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    def _build_preview(self, parent):
-        preview_box = ttk.LabelFrame(parent, text="AIRV Preview", padding=8)
-        preview_box.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
-
-        self.preview_canvas = tk.Canvas(
-            preview_box,
-            height=230,
-            bg="#111111",
-            highlightthickness=1,
-            highlightbackground="#D0D7DE",
-        )
-        self.preview_canvas.pack(fill=tk.BOTH, expand=True)
 
     def _build_charts(self, parent):
         chart_box = ttk.LabelFrame(parent, text="Charts", padding=12)
@@ -241,6 +234,65 @@ class ReceiverGui:
         scroll_y = ttk.Scrollbar(log_box, orient=tk.VERTICAL, command=self.log_text.yview)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.configure(yscrollcommand=scroll_y.set)
+
+    def _ensure_preview_window(self):
+        if self.preview_window is not None and self.preview_window.winfo_exists():
+            self.preview_window.lift()
+            return
+
+        self.preview_window = tk.Toplevel(self.root)
+        self.preview_window.title("AIRV Preview")
+        self.preview_window.geometry("1080x720")
+        self.preview_window.minsize(640, 360)
+        self.preview_window.protocol("WM_DELETE_WINDOW", self._close_preview_window)
+
+        self.preview_canvas = tk.Canvas(
+            self.preview_window,
+            bg="#111111",
+            highlightthickness=0,
+        )
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True)
+        self.preview_canvas.bind("<Configure>", lambda _event: self._redraw_preview_message())
+        self._redraw_preview_message()
+
+    def _close_preview_window(self):
+        if self.preview_window is not None and self.preview_window.winfo_exists():
+            self.preview_window.destroy()
+        self.preview_window = None
+        self.preview_canvas = None
+        self.preview_photo = None
+
+    def _on_root_close(self):
+        if self.receiver is not None:
+            self.receiver.stop()
+        self._close_preview_window()
+        self.root.destroy()
+
+    def _set_preview_message(self, message: str, clear_image: bool = False):
+        self.preview_message = message
+        if clear_image:
+            self.preview_photo = None
+        self._redraw_preview_message()
+
+    def _redraw_preview_message(self):
+        if self.preview_canvas is None:
+            return
+        if self.preview_photo is not None:
+            return
+        width = max(self.preview_canvas.winfo_width(), 320)
+        height = max(self.preview_canvas.winfo_height(), 180)
+        message = getattr(self, "preview_message", "")
+        self.preview_canvas.delete("all")
+        if message:
+            self.preview_canvas.create_text(
+                width // 2,
+                height // 2,
+                text=message,
+                fill="#D1D5DB",
+                font=("Consolas", 16),
+                width=max(width - 48, 240),
+                justify=tk.CENTER,
+            )
 
     def _browse_output_dir(self):
         directory = filedialog.askdirectory(title="Select output directory")
@@ -283,6 +335,14 @@ class ReceiverGui:
         self.start_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
         self.status_var.set("Listening")
+        self._ensure_preview_window()
+        if not self.video_decoder.available:
+            self.preview_status_var.set("Unavailable")
+            self._set_preview_message(self.video_decoder.status_text(), clear_image=True)
+            self._append_log(f"VIDEO_PREVIEW {self.video_decoder.status_text()}")
+        else:
+            self.preview_status_var.set("Ready")
+            self._set_preview_message("Waiting for AIRV frames", clear_image=True)
         self._append_log(
             f"Start bind={config.bind_ip}:{config.bind_port} board={config.board_ip}:{config.board_port} "
             f"register={config.register_with_board} raw_expected={config.expected_bytes} output={config.output_dir}"
@@ -322,17 +382,20 @@ class ReceiverGui:
         self.airv_frag_var.set("0 / 0")
         self.airv_error_var.set("0 / 0 / 0 / 0")
         self.airv_rate_var.set("0.0 fps / 0.0 ms")
-        self.preview_status_var.set("Idle")
         self.preview_decoded_var.set("0")
+        self.preview_input_var.set("0")
         self.preview_displayed_var.set("0")
         self.preview_errors_var.set("0")
         self.preview_waiting_var.set("1")
         self.file_crc_var.set("N/A")
         self.output_path_var.set("-")
         self.video_decoder = VideoPreviewDecoder()
+        self.preview_status_var.set(self.video_decoder.status_text())
         self.preview_photo = None
         self.preview_unavailable_logged = False
-        self.preview_canvas.delete("all")
+        if self.preview_canvas is not None:
+            self.preview_canvas.delete("all")
+        self._set_preview_message(self.video_decoder.status_text(), clear_image=True)
         self.rate_chart.reset()
         self.packet_chart.reset()
         self.last_summary_log_time = 0.0
@@ -395,6 +458,9 @@ class ReceiverGui:
         except ImportError as exc:
             raise RuntimeError("Pillow ImageTk is not available") from exc
 
+        self._ensure_preview_window()
+        if self.preview_canvas is None:
+            return
         width = max(self.preview_canvas.winfo_width(), 320)
         height = max(self.preview_canvas.winfo_height(), 180)
         frame = image.copy()
@@ -421,6 +487,7 @@ class ReceiverGui:
             bad_frame_crc=payload["bad_frame_crc"],
         )
 
+        self.preview_input_var.set(str(stats.airv_frames_show))
         waiting_keyframe = bool(result.waiting_keyframe or stats.airv_waiting_keyframe)
         self.preview_decoded_var.set(str(result.decoded_count))
         self.preview_displayed_var.set(str(result.displayed_count))
@@ -429,6 +496,7 @@ class ReceiverGui:
 
         if result.error:
             self.preview_status_var.set("Unavailable" if not self.video_decoder.available else "Decode error")
+            self._set_preview_message(result.error, clear_image=True)
             now = time.time()
             if (not self.preview_unavailable_logged) or (now - self.last_preview_log_time) >= 2.0:
                 self.preview_unavailable_logged = True
@@ -438,6 +506,7 @@ class ReceiverGui:
 
         if result.skipped_waiting_keyframe:
             self.preview_status_var.set("Waiting keyframe")
+            self._set_preview_message("Waiting for next AIRV keyframe")
             return
 
         if result.images:
@@ -453,6 +522,7 @@ class ReceiverGui:
             return
 
         self.preview_status_var.set("Decoding")
+        self._set_preview_message("Decoding AIRV frames")
 
     def _handle_event(self, event_name: str, payload: dict):
         if event_name == "start":

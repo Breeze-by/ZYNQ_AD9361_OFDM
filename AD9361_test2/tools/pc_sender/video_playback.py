@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -32,8 +33,8 @@ class VideoPreviewDecoder:
             import av
         except ImportError:
             self.unavailable_reason = (
-                "PyAV is not installed; install with `python -m pip install av pillow` "
-                "to enable AIRV preview"
+                "PyAV is not installed for this Python; run "
+                f"`{sys.executable} -m pip install av pillow` to enable AIRV preview"
             )
             return
 
@@ -41,14 +42,19 @@ class VideoPreviewDecoder:
             from PIL import Image  # noqa: F401
         except ImportError:
             self.unavailable_reason = (
-                "Pillow is not installed; install with `python -m pip install pillow` "
-                "to display decoded AIRV frames"
+                "Pillow is not installed for this Python; run "
+                f"`{sys.executable} -m pip install pillow` to display decoded AIRV frames"
             )
             return
 
         self._av = av
         self.available = True
         self._reset_decoder()
+
+    def status_text(self) -> str:
+        if self.available:
+            return "Ready"
+        return self.unavailable_reason or "AIRV preview decoder is unavailable"
 
     def _reset_decoder(self):
         if self._av is None:
@@ -80,8 +86,12 @@ class VideoPreviewDecoder:
             return result
 
         try:
-            packet = self._av.Packet(encoded_frame)
-            decoded = self._codec.decode(packet)
+            packets = list(self._codec.parse(encoded_frame))
+            if not packets:
+                packets = [self._av.Packet(encoded_frame)]
+            decoded = []
+            for packet in packets:
+                decoded.extend(self._codec.decode(packet))
         except Exception as exc:
             self.decoder_errors += 1
             self.consecutive_errors += 1
