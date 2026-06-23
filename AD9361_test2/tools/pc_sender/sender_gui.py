@@ -7,7 +7,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from sender_core import (
+    DEFAULT_ACK_TIMEOUT_S,
     DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
+    DEFAULT_RETRIES,
+    DEFAULT_TARGET_RATE_KIB_S,
     DEFAULT_WINDOW_SIZE,
     OFDM_LEGACY_RATE_BITS,
     SenderConfig,
@@ -98,9 +101,9 @@ class SenderGui:
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
         self.chunk_var = tk.StringVar(value=str(DEFAULT_OFDM_LEGACY_CHUNK_SIZE))
-        self.timeout_var = tk.StringVar(value="1.0")
-        self.retries_var = tk.StringVar(value="10")
-        self.target_rate_var = tk.StringVar(value="0")
+        self.timeout_var = tk.StringVar(value=str(DEFAULT_ACK_TIMEOUT_S))
+        self.retries_var = tk.StringVar(value=str(DEFAULT_RETRIES))
+        self.target_rate_var = tk.StringVar(value=str(int(DEFAULT_TARGET_RATE_KIB_S)))
         self.window_var = tk.StringVar(value=str(DEFAULT_WINDOW_SIZE))
         self.test_size_var = tk.StringVar(value=str(64 * 1024 * 1024))
         self.socket_buffer_var = tk.StringVar(value=str(4 * 1024 * 1024))

@@ -362,13 +362,13 @@ Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
 命令行入口：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 4 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 1 --target-rate-kib-s 400 --throughput-mode
 ```
 
 发送文件：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1440 --window-size 4 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1440 --window-size 1 --target-rate-kib-s 400 --throughput-mode
 ```
 
 GUI：
@@ -385,9 +385,9 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --test-size             生成测试数据字节数
 --file                  从文件读取 payload
 --chunk-size            每个 MPDU/raw chunk 的原始 payload 字节数，默认 1440
---window-size           滑动窗口，默认 4
+--window-size           滑动窗口，默认 1
 --throughput-mode       轻量吞吐输出
---target-rate-kib-s     主机侧限速，0 表示不限速
+--target-rate-kib-s     主机侧限速，默认 400 KiB/s，0 表示不限速
 --ofdm-legacy           启用 Legacy OFDM 输入帧封装
 --raw-payload           发送原始 payload，不添加 OFDM addr0/addr1
 --ofdm-rate-mbps        Legacy RATE 字段，可选 6/9/12/18/24/36/48/54
@@ -406,7 +406,10 @@ OFDM Rate               6 Mbps 起步
 Payload CRC32           开启
 Verbose Packet Events   关闭
 Chunk Bytes             1440
-Window Size             4
+Window Size             1
+ACK Timeout(s)          2.0
+Max Retries             200
+Rate Limit KiB/s        400
 Progress ms             1000
 Test Bytes              64 MiB 或 256 MiB
 ```

@@ -92,7 +92,10 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 Mode                    Test Data
 Test Bytes              16384
 Chunk Bytes             1440
-Window Size             4
+Window Size             1
+ACK Timeout(s)          2.0
+Max Retries             200
+Rate Limit KiB/s        400
 Throughput Mode         checked
 OFDM Legacy Wrap        unchecked
 Payload CRC32           checked

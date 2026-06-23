@@ -58,7 +58,10 @@ DATA_SESSION_MASK = 0x1FFF
 LOOPBACK_FLAG_LAST_CHUNK = 0x0001
 
 DEFAULT_OFDM_LEGACY_CHUNK_SIZE = 1440
-DEFAULT_WINDOW_SIZE = 4
+DEFAULT_WINDOW_SIZE = 1
+DEFAULT_ACK_TIMEOUT_S = 2.0
+DEFAULT_RETRIES = 200
+DEFAULT_TARGET_RATE_KIB_S = 400.0
 OFDM_LEGACY_RATE_BITS = {
     6: 0b1101,
     9: 0b1111,
@@ -76,9 +79,9 @@ class SenderConfig:
     ip: str
     port: int = 5001
     chunk_size: int = DEFAULT_OFDM_LEGACY_CHUNK_SIZE
-    timeout: float = 1.0
-    retries: int = 10
-    target_rate_kib_s: float = 0.0
+    timeout: float = DEFAULT_ACK_TIMEOUT_S
+    retries: int = DEFAULT_RETRIES
+    target_rate_kib_s: float = DEFAULT_TARGET_RATE_KIB_S
     window_size: int = DEFAULT_WINDOW_SIZE
     socket_buffer_bytes: int = 4 * 1024 * 1024
     progress_interval_s: float = 0.1
@@ -140,9 +143,11 @@ def parse_args():
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_OFDM_LEGACY_CHUNK_SIZE,
         help="payload bytes per UDP chunk; 1440 fits a 1500 byte MTU in raw and OFDM legacy modes")
-    parser.add_argument("--timeout", type=float, default=1.0, help="ACK timeout in seconds")
-    parser.add_argument("--retries", type=int, default=10, help="max retries per chunk")
-    parser.add_argument("--target-rate-kib-s", type=float, default=0.0,
+    parser.add_argument("--timeout", type=float, default=DEFAULT_ACK_TIMEOUT_S,
+        help="ACK timeout in seconds")
+    parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES,
+        help="max retries per chunk")
+    parser.add_argument("--target-rate-kib-s", type=float, default=DEFAULT_TARGET_RATE_KIB_S,
         help="optional offered load cap in KiB/s, 0 means unlimited")
     parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE,
         help="number of in-flight chunks allowed before waiting for ACKs")
