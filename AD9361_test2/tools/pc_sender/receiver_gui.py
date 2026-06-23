@@ -21,7 +21,8 @@ from video_playback import VideoPreviewDecoder
 
 
 PREVIEW_QUEUE_FRAMES = 240
-PREVIEW_RESULT_QUEUE_FRAMES = 2
+PREVIEW_RESULT_QUEUE_FRAMES = 30
+PREVIEW_RENDER_INTERVAL_MS = 33
 
 
 class ReceiverGui:
@@ -49,6 +50,7 @@ class ReceiverGui:
         self.preview_thread = None
         self.preview_waiting_input_keyframe = False
         self.preview_input_drops = 0
+        self.preview_rendered_frames = 0
 
         self.bind_ip_var = tk.StringVar(value="0.0.0.0")
         self.bind_port_var = tk.StringVar(value=str(DEFAULT_RECEIVER_PORT))
@@ -95,6 +97,7 @@ class ReceiverGui:
 
         self._build_ui()
         self.root.after(100, self._drain_event_queue)
+        self.root.after(PREVIEW_RENDER_INTERVAL_MS, self._drain_preview_result_queue)
 
     def _build_ui(self):
         style = ttk.Style()
@@ -415,6 +418,7 @@ class ReceiverGui:
         self.preview_stop_event = threading.Event()
         self.preview_waiting_input_keyframe = False
         self.preview_input_drops = 0
+        self.preview_rendered_frames = 0
         self.preview_status_var.set(self.video_decoder.status_text())
         self.preview_photo = None
         self.preview_unavailable_logged = False
@@ -434,7 +438,6 @@ class ReceiverGui:
         self.receiver_thread = None
 
     def _drain_event_queue(self):
-        self._drain_preview_result_queue()
         try:
             handled = 0
             while handled < 100:
@@ -512,6 +515,7 @@ class ReceiverGui:
             pass
         if latest is not None:
             self._handle_preview_result(latest)
+        self.root.after(PREVIEW_RENDER_INTERVAL_MS, self._drain_preview_result_queue)
 
     def _update_stats(self, stats):
         self.rx_bytes_var.set(str(stats.contiguous_bytes))
@@ -570,6 +574,8 @@ class ReceiverGui:
             image=self.preview_photo,
             anchor=tk.CENTER,
         )
+        self.preview_rendered_frames += 1
+        self.preview_displayed_var.set(str(self.preview_rendered_frames))
 
     def _handle_video_preview(self, payload: dict):
         stats = payload["stats"]
@@ -627,7 +633,6 @@ class ReceiverGui:
         self.preview_backlog_var.set(str(payload.get("queue_size", 0)))
         waiting_keyframe = bool(result.waiting_keyframe or stats.airv_waiting_keyframe)
         self.preview_decoded_var.set(str(result.decoded_count))
-        self.preview_displayed_var.set(str(result.displayed_count))
         self.preview_errors_var.set(str(result.decoder_errors))
         self.preview_waiting_var.set(str(int(waiting_keyframe)))
 
