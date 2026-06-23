@@ -119,7 +119,7 @@ Conclusion: AIRV transport integrity is good at 400 KiB/s, window 1. No missing 
 - Receiver GUI realtime preview path:
   - new optional `video_playback.py` component uses PyAV + Pillow when available;
   - `receiver_core.py` emits assembled encoded H.264 frame payloads through `video_frame`;
-  - `receiver_gui.py` displays decoded frames immediately in a separate `AIRV Preview` window, default `1080x720`, so the main event log remains usable;
+  - `receiver_gui.py` displays decoded frames immediately in a separate `AIRV Preview` window, default `1280x720`, so the main event log remains usable;
   - main metrics include `Preview Input`, which counts assembled AIRV frames handed to the preview decoder;
   - PyAV decode runs through a bounded background queue, not in the Tk GUI thread, so slow decode or corrupt frames should not freeze the receiver GUI;
   - preview input now buffers up to 240 assembled encoded frames and decodes them in H.264 order; only if that queue overflows does preview drop queued frames and wait for the next keyframe;

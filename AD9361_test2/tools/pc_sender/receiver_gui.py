@@ -260,7 +260,7 @@ class ReceiverGui:
 
         self.preview_window = tk.Toplevel(self.root)
         self.preview_window.title("AIRV Preview")
-        self.preview_window.geometry("1080x720")
+        self.preview_window.geometry("1280x720")
         self.preview_window.minsize(640, 360)
         self.preview_window.protocol("WM_DELETE_WINDOW", self._close_preview_window)
 
