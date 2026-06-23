@@ -407,7 +407,7 @@ class LoopbackReceiver:
             if self.config.expected_bytes > 0:
                 if contiguous < self.config.expected_bytes:
                     return False
-            elif contiguous == 0:
+            else:
                 return False
 
         byte_count = self.config.expected_bytes if self.config.expected_bytes > 0 else contiguous
@@ -453,7 +453,7 @@ class LoopbackReceiver:
                         if (last_payload_time > 0.0 and self.config.expected_bytes == 0 and
                             self.config.idle_finish_s > 0.0 and
                             (now - last_payload_time) >= self.config.idle_finish_s):
-                            if self._save_if_ready(stats, callback):
+                            if self._save_if_ready(stats, callback, force=True):
                                 if self.config.stop_after_save:
                                     break
                         continue
