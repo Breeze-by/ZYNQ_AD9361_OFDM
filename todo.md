@@ -121,9 +121,11 @@ Conclusion: AIRV transport integrity is good at 400 KiB/s, window 1. No missing 
   - `receiver_core.py` emits assembled encoded H.264 frame payloads through `video_frame`;
   - `receiver_gui.py` displays decoded frames immediately in a separate `AIRV Preview` window, default `1080x720`, so the main event log remains usable;
   - main metrics include `Preview Input`, which counts assembled AIRV frames handed to the preview decoder;
+  - PyAV decode runs through a bounded background queue, not in the Tk GUI thread, so slow decode or corrupt frames should not freeze the receiver GUI;
   - decoder attempts corrupt frames, counts errors, and waits for the next keyframe when decoder state needs recovery;
   - if PyAV/Pillow is missing, AIRV transport/statistics still run and GUI logs/displays a clear `VIDEO_PREVIEW ...` message with the active Python path.
 - Sender AIRV timing now probes source FPS with `ffprobe` and falls back to 30fps if unavailable; GUI/CLI log `AIRV source file=... fps=... fps_source=...`.
+- Sender AIRV source preparation now reuses an existing same-name `.h264/.264` immediately and reports `fps_source=sidecar_fallback`; `ffprobe` is only used when no sidecar exists and is capped at 2 seconds.
 - AIRV final metrics now keep last/average/max assembler latency instead of reporting a misleading idle-finish `0.0`.
 - Unit tests now also cover frame-rate parsing, configured AIRV PTS interval, and latency avg/max metrics.
 

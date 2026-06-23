@@ -457,51 +457,36 @@ class SenderGui:
             transfer_protocol = self.transfer_protocol_var.get()
             if transfer_protocol == TRANSFER_PROTOCOL_AIRV and self.mode_var.get() != "file":
                 raise ValueError("AIRV Realtime Video requires File source")
-            payload, actual_source_path, airv_source = self._build_payload(transfer_protocol)
-            config = SenderConfig(
-                ip=self.ip_var.get().strip(),
-                port=int(self.port_var.get().strip()),
-                chunk_size=int(self.chunk_var.get().strip()),
-                timeout=float(self.timeout_var.get().strip()),
-                retries=int(self.retries_var.get().strip()),
-                target_rate_kib_s=float(self.target_rate_var.get().strip()),
-                window_size=int(self.window_var.get().strip()),
-                socket_buffer_bytes=int(self.socket_buffer_var.get().strip()),
-                progress_interval_s=max(progress_interval_ms, 10) / 1000.0,
-                verbose_events=verbose_events,
-                throughput_mode=throughput_mode,
-                validate_payload_crc=bool(self.payload_crc_var.get()),
-                air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
-                transfer_protocol=transfer_protocol,
-                airv_frame_interval_us=(
-                    airv_source.frame_interval_us if airv_source is not None else 33333
-                ),
-            )
+            params = {
+                "transfer_protocol": transfer_protocol,
+                "mode": self.mode_var.get(),
+                "file_path": self.file_path_var.get().strip(),
+                "test_size": int(self.test_size_var.get().strip()),
+                "ip": self.ip_var.get().strip(),
+                "port": int(self.port_var.get().strip()),
+                "chunk_size": int(self.chunk_var.get().strip()),
+                "timeout": float(self.timeout_var.get().strip()),
+                "retries": int(self.retries_var.get().strip()),
+                "target_rate_kib_s": float(self.target_rate_var.get().strip()),
+                "window_size": int(self.window_var.get().strip()),
+                "socket_buffer_bytes": int(self.socket_buffer_var.get().strip()),
+                "progress_interval_s": max(progress_interval_ms, 10) / 1000.0,
+                "verbose_events": verbose_events,
+                "throughput_mode": throughput_mode,
+                "validate_payload_crc": bool(self.payload_crc_var.get()),
+            }
+            if params["mode"] == "file" and not params["file_path"]:
+                raise ValueError("Select a file first")
         except Exception as exc:
             messagebox.showerror("Parameter Error", str(exc))
             return
 
-        self._reset_runtime_state(len(payload))
-        self.sender = UdpSender(config)
+        self._reset_runtime_state(0)
         self.send_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
-        self.status_text_var.set("Sending")
-        if actual_source_path is not None and transfer_protocol == TRANSFER_PROTOCOL_AIRV:
-            if airv_source is not None:
-                self._append_log(
-                    f"AIRV source file={actual_source_path} fps={airv_source.fps:.3f} "
-                    f"fps_source={airv_source.fps_source}"
-                )
-            else:
-                self._append_log(f"AIRV source file={actual_source_path}")
-        self._append_log(
-            f"Start send target={config.ip}:{config.port} bytes={len(payload)} "
-            f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
-            f"{self._format_start_mode(config)} "
-            f"payload_crc={config.validate_payload_crc} air0={config.air_protocol} "
-        )
-
-        self.sender_thread = threading.Thread(target=self._worker_send, args=(payload,), daemon=True)
+        self.status_text_var.set("Preparing")
+        self._append_log("Preparing payload in background")
+        self.sender_thread = threading.Thread(target=self._worker_prepare_and_send, args=(params,), daemon=True)
         self.sender_thread.start()
 
     def _stop_send(self):
@@ -510,8 +495,47 @@ class SenderGui:
             self.status_text_var.set("Stopping")
             self._append_log("Stop requested")
 
-    def _worker_send(self, payload: bytes):
+    def _worker_prepare_and_send(self, params: dict):
         try:
+            transfer_protocol = params["transfer_protocol"]
+            airv_source = None
+            actual_source_path = None
+            if params["mode"] == "file":
+                actual_path = Path(params["file_path"])
+                if transfer_protocol == TRANSFER_PROTOCOL_AIRV:
+                    airv_source = prepare_airv_source(params["file_path"])
+                    actual_path = airv_source.path
+                payload = load_payload(file_path=str(actual_path))
+                actual_source_path = actual_path
+            else:
+                payload = load_payload(test_size=params["test_size"])
+
+            config = SenderConfig(
+                ip=params["ip"],
+                port=params["port"],
+                chunk_size=params["chunk_size"],
+                timeout=params["timeout"],
+                retries=params["retries"],
+                target_rate_kib_s=params["target_rate_kib_s"],
+                window_size=params["window_size"],
+                socket_buffer_bytes=params["socket_buffer_bytes"],
+                progress_interval_s=params["progress_interval_s"],
+                verbose_events=params["verbose_events"],
+                throughput_mode=params["throughput_mode"],
+                validate_payload_crc=params["validate_payload_crc"],
+                air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
+                transfer_protocol=transfer_protocol,
+                airv_frame_interval_us=(
+                    airv_source.frame_interval_us if airv_source is not None else 33333
+                ),
+            )
+            self.sender = UdpSender(config)
+            self.event_queue.put(("prepared", {
+                "config": config,
+                "payload_len": len(payload),
+                "actual_source_path": actual_source_path,
+                "airv_source": airv_source,
+            }))
             self.sender.send(payload, callback=self._sender_callback)
         except Exception as exc:
             self.event_queue.put(("error", {"message": str(exc)}))
@@ -562,6 +586,34 @@ class SenderGui:
         self.root.after(100, self._drain_event_queue)
 
     def _handle_event(self, event_name: str, payload: dict):
+        if event_name == "prepared":
+            config = payload["config"]
+            payload_len = payload["payload_len"]
+            actual_source_path = payload["actual_source_path"]
+            airv_source = payload["airv_source"]
+            self.progress_text_var.set(f"0 / {payload_len} | ETA --:--")
+            self.status_text_var.set("Sending")
+            if actual_source_path is not None and config.transfer_protocol == TRANSFER_PROTOCOL_AIRV:
+                if airv_source is not None:
+                    self.file_path_var.set(str(actual_source_path))
+                    self.file_info_var.set(
+                        f"{actual_source_path.name} | {actual_source_path.suffix.lower()} | "
+                        f"{actual_source_path.stat().st_size} bytes"
+                    )
+                    self._append_log(
+                        f"AIRV source file={actual_source_path} fps={airv_source.fps:.3f} "
+                        f"fps_source={airv_source.fps_source}"
+                    )
+                else:
+                    self._append_log(f"AIRV source file={actual_source_path}")
+            self._append_log(
+                f"Start send target={config.ip}:{config.port} bytes={payload_len} "
+                f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
+                f"{self._format_start_mode(config)} "
+                f"payload_crc={config.validate_payload_crc} air0={config.air_protocol} "
+            )
+            return
+
         if event_name == "start":
             self.progress_text_var.set(f"0 / {payload['total_size']} | ETA --:--")
             return

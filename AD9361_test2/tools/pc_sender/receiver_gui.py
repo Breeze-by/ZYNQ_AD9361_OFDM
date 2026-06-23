@@ -38,6 +38,10 @@ class ReceiverGui:
         self.preview_window = None
         self.preview_canvas = None
         self.preview_message = self.video_decoder.status_text()
+        self.preview_queue = queue.Queue(maxsize=2)
+        self.preview_result_queue = queue.Queue()
+        self.preview_stop_event = threading.Event()
+        self.preview_thread = None
 
         self.bind_ip_var = tk.StringVar(value="0.0.0.0")
         self.bind_port_var = tk.StringVar(value=str(DEFAULT_RECEIVER_PORT))
@@ -265,6 +269,7 @@ class ReceiverGui:
     def _on_root_close(self):
         if self.receiver is not None:
             self.receiver.stop()
+        self._stop_preview_worker()
         self._close_preview_window()
         self.root.destroy()
 
@@ -332,6 +337,7 @@ class ReceiverGui:
 
         self._reset_runtime_state()
         self.receiver = LoopbackReceiver(config)
+        self._start_preview_worker()
         self.start_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
         self.status_var.set("Listening")
@@ -389,7 +395,11 @@ class ReceiverGui:
         self.preview_waiting_var.set("1")
         self.file_crc_var.set("N/A")
         self.output_path_var.set("-")
+        self._stop_preview_worker()
         self.video_decoder = VideoPreviewDecoder()
+        self.preview_queue = queue.Queue(maxsize=2)
+        self.preview_result_queue = queue.Queue()
+        self.preview_stop_event = threading.Event()
         self.preview_status_var.set(self.video_decoder.status_text())
         self.preview_photo = None
         self.preview_unavailable_logged = False
@@ -404,17 +414,71 @@ class ReceiverGui:
     def _on_done(self):
         self.start_button.configure(state=tk.NORMAL)
         self.stop_button.configure(state=tk.DISABLED)
+        self._stop_preview_worker()
         self.receiver = None
         self.receiver_thread = None
 
     def _drain_event_queue(self):
+        self._drain_preview_result_queue()
         try:
-            while True:
+            handled = 0
+            while handled < 100:
                 event_name, payload = self.event_queue.get_nowait()
                 self._handle_event(event_name, payload)
+                handled += 1
         except queue.Empty:
             pass
         self.root.after(100, self._drain_event_queue)
+
+    def _start_preview_worker(self):
+        self._stop_preview_worker()
+        self.preview_queue = queue.Queue(maxsize=2)
+        self.preview_result_queue = queue.Queue()
+        self.preview_stop_event = threading.Event()
+        if not self.video_decoder.available:
+            return
+        self.preview_thread = threading.Thread(target=self._preview_worker, daemon=True)
+        self.preview_thread.start()
+
+    def _stop_preview_worker(self):
+        if self.preview_thread is None:
+            return
+        self.preview_stop_event.set()
+        try:
+            self.preview_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        self.preview_thread.join(timeout=0.2)
+        self.preview_thread = None
+
+    def _preview_worker(self):
+        while not self.preview_stop_event.is_set():
+            try:
+                item = self.preview_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            result = self.video_decoder.decode(
+                item["payload"],
+                frame_type=item["frame_type"],
+                bad_fragment_crc=item["bad_fragment_crc"],
+                bad_frame_crc=item["bad_frame_crc"],
+            )
+            self.preview_result_queue.put({
+                "result": result,
+                "stats": item["stats"],
+            })
+
+    def _drain_preview_result_queue(self):
+        latest = None
+        try:
+            while True:
+                latest = self.preview_result_queue.get_nowait()
+        except queue.Empty:
+            pass
+        if latest is not None:
+            self._handle_preview_result(latest)
 
     def _update_stats(self, stats):
         self.rx_bytes_var.set(str(stats.contiguous_bytes))
@@ -480,14 +544,34 @@ class ReceiverGui:
         if not encoded:
             return
 
-        result = self.video_decoder.decode(
-            encoded,
-            frame_type=payload["frame_type"],
-            bad_fragment_crc=payload["bad_fragment_crc"],
-            bad_frame_crc=payload["bad_frame_crc"],
-        )
-
         self.preview_input_var.set(str(stats.airv_frames_show))
+        if not self.video_decoder.available:
+            self.preview_status_var.set("Unavailable")
+            self._set_preview_message(self.video_decoder.status_text(), clear_image=True)
+            return
+        item = {
+            "payload": encoded,
+            "frame_type": payload["frame_type"],
+            "bad_fragment_crc": payload["bad_fragment_crc"],
+            "bad_frame_crc": payload["bad_frame_crc"],
+            "stats": stats,
+        }
+        try:
+            self.preview_queue.put_nowait(item)
+        except queue.Full:
+            try:
+                self.preview_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.preview_queue.put_nowait(item)
+            except queue.Full:
+                pass
+        self.preview_status_var.set("Queued")
+
+    def _handle_preview_result(self, payload: dict):
+        result = payload["result"]
+        stats = payload["stats"]
         waiting_keyframe = bool(result.waiting_keyframe or stats.airv_waiting_keyframe)
         self.preview_decoded_var.set(str(result.decoded_count))
         self.preview_displayed_var.set(str(result.displayed_count))

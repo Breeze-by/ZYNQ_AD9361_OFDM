@@ -77,6 +77,7 @@ TRANSFER_PROTOCOL_CHOICES = (
 )
 AIRV_SOURCE_SUFFIXES = (".h264", ".264")
 DEFAULT_AIRV_FPS = 30.0
+FFPROBE_TIMEOUT_S = 2.0
 
 
 @dataclass
@@ -279,12 +280,16 @@ def probe_video_fps(file_path: str) -> Optional[float]:
         "default=noprint_wrappers=1:nokey=1",
         str(file_path),
     ]
-    completed = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=FFPROBE_TIMEOUT_S,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
     if completed.returncode != 0:
         return None
     for line in completed.stdout.splitlines():
@@ -303,14 +308,14 @@ def prepare_airv_source(file_path: str) -> AirvSource:
     if not source_path.exists():
         raise ValueError(f"source file does not exist: {source_path}")
 
+    existing = find_existing_airv_h264(source_path)
+    if existing is not None:
+        return AirvSource(existing, fps=DEFAULT_AIRV_FPS, fps_source="sidecar_fallback")
+
     fps = probe_video_fps(str(source_path))
     fps_source = "ffprobe" if fps is not None else "fallback"
     if fps is None:
         fps = DEFAULT_AIRV_FPS
-
-    existing = find_existing_airv_h264(source_path)
-    if existing is not None:
-        return AirvSource(existing, fps=fps, fps_source=fps_source)
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:

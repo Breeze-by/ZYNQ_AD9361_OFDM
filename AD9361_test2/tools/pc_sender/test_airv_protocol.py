@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from air_protocol import AIR_MAGIC
+import sender_core
 from sender_core import (
     SenderConfig,
     UdpSender,
@@ -170,6 +171,18 @@ class AirvProtocolTests(unittest.TestCase):
             h264_path.write_bytes(b"\x00\x00\x00\x01\x65")
             self.assertEqual(find_existing_airv_h264(mp4_path), h264_path)
             self.assertEqual(ensure_airv_h264_source(str(mp4_path)), h264_path)
+
+    def test_airv_sidecar_reuse_skips_ffprobe(self):
+        with TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            mp4_path = directory / "clip.mp4"
+            h264_path = directory / "clip.h264"
+            mp4_path.write_bytes(b"not a real mp4")
+            h264_path.write_bytes(b"\x00\x00\x00\x01\x65")
+            with mock.patch("sender_core.probe_video_fps", side_effect=AssertionError("unexpected ffprobe")):
+                source = sender_core.prepare_airv_source(str(mp4_path))
+            self.assertEqual(source.path, h264_path)
+            self.assertEqual(source.fps_source, "sidecar_fallback")
 
     def test_airv_h264_input_is_used_directly(self):
         with TemporaryDirectory() as temp_dir:

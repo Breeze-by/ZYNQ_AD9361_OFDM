@@ -424,15 +424,16 @@ AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸
 
 - 如果选择的就是 `.h264` / `.264`，直接发送该文件。
 - 如果选择的是 `.mp4` 等容器文件，先在同目录查找同名 `.h264` / `.264`，例如 `clip.mp4` 对应 `clip.h264`。
-- 如果同名裸流不存在，则调用 `ffmpeg` 在同目录生成 `clip.h264` 并保存下来；后续再选同一个 MP4 会直接复用这个 `.h264`。
+- 如果同名裸流已存在，发送 GUI 会直接复用这个 sidecar，不再对 MP4 做耗时探测；此时 AIRV FPS 日志显示 `fps_source=sidecar_fallback`，按 30fps 写入 PTS。
+- 如果同名裸流不存在，则调用 `ffmpeg` 在同目录生成 `clip.h264` 并保存下来；后续再选同一个 MP4 会直接快速复用这个 `.h264`。
 - 如果 MP4 内部已经是 H.264，优先无损提取并插入 AUD 分隔符；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30、带 AUD 的裸流。
-- 发送端会优先用 `ffprobe` 读取源视频帧率，并把真实帧间隔写入 AIRV `pts_us`；如果 `ffprobe` 不可用或无法识别帧率，回退到 `30fps`，GUI 日志会显示 `AIRV source file=... fps=... fps_source=...`。
+- 只有在没有 sidecar、需要从容器准备 AIRV 源时，发送端才会用 `ffprobe` 读取源视频帧率，并把真实帧间隔写入 AIRV `pts_us`；`ffprobe` 最多等待 2 秒，失败则回退到 `30fps`，GUI 日志会显示 `AIRV source file=... fps=... fps_source=...`。
 
 因此第一阶段可以直接在发送 GUI 里选择 MP4，但本机必须能在 `PATH` 中找到 `ffmpeg`。
 
 AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计和可选实时预览路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，同时把 encoded H.264 access unit 交给预览解码器。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop，并使预览等待后续 keyframe 恢复。AIRV 不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
 
-接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1080x720`，不再挤占主窗口日志区域。主窗口保留 `Preview/Preview Input/Decoded/Displayed/Decoder Errors/Waiting Key` 状态。预览依赖可选 Python 包 `av` 和 `Pillow`：
+接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1080x720`，不再挤占主窗口日志区域。AIRV 解码在后台线程执行，Tk 主线程只显示最近一帧，避免 PyAV 解码或坏码流导致 GUI 未响应。主窗口保留 `Preview/Preview Input/Decoded/Displayed/Decoder Errors/Waiting Key` 状态。预览依赖可选 Python 包 `av` 和 `Pillow`：
 
 ```bash
 python -m pip install av pillow
