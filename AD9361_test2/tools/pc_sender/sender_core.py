@@ -221,7 +221,10 @@ def _run_ffmpeg(command):
         stderr=subprocess.PIPE,
         text=True,
     )
-    return completed.returncode, completed.stderr.strip()
+    stdout_text = completed.stdout or ""
+    stderr_text = completed.stderr or ""
+    message = stderr_text.strip() or stdout_text.strip()
+    return completed.returncode, message
 
 
 def ensure_airv_h264_source(file_path: str) -> Path:

@@ -2,9 +2,11 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest import mock
 
 from air_protocol import AIR_MAGIC
-from sender_core import ensure_airv_h264_source, find_existing_airv_h264
+from sender_core import _run_ffmpeg, ensure_airv_h264_source, find_existing_airv_h264
 from video_protocol import (
     AIRV_FRAME_KEY,
     AIRV_HEADER_BYTES,
@@ -148,6 +150,13 @@ class AirvProtocolTests(unittest.TestCase):
             h264_path = Path(temp_dir) / "clip.264"
             h264_path.write_bytes(b"\x00\x00\x00\x01\x65")
             self.assertEqual(ensure_airv_h264_source(str(h264_path)), h264_path)
+
+    def test_ffmpeg_runner_handles_missing_stderr_text(self):
+        completed = SimpleNamespace(returncode=1, stdout=None, stderr=None)
+        with mock.patch("sender_core.subprocess.run", return_value=completed):
+            return_code, message = _run_ffmpeg(["ffmpeg"])
+        self.assertEqual(return_code, 1)
+        self.assertEqual(message, "")
 
 
 if __name__ == "__main__":
