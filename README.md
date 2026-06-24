@@ -17,6 +17,135 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
+## 系统总览 Mermaid 图
+
+下面这张图按当前代码状态描述完整数据链路、控制链路和两种 PC-only 上层格式。汇报时可以重点说明：PS/PL 只处理普通 UDP wire payload 和 DMA 字节流，不解析 AIR0/AIRV；AIR0/AIRV 的文件恢复、视频组帧和实时预览都在 PC 工具侧完成。
+
+```mermaid
+flowchart LR
+    %% PC sender side
+    subgraph PC_TX["PC 发送端: sender_gui.py / sender_core.py"]
+        TX_UI["发送 GUI<br/>Mode=File/Test Data<br/>Transfer Mode=air0_file/airv_video/raw"]
+        TX_SRC{"输入类型"}
+        TX_TEST["测试数据<br/>按 Test Bytes 生成"]
+        TX_FILE["文件 payload<br/>图片/视频/任意二进制"]
+        TX_AIRV_SRC["AIRV 源准备<br/>.h264/.264 直接发送<br/>MP4 优先复用同名 sidecar<br/>无 sidecar 时 ffprobe + ffmpeg 生成 H.264 Annex-B"]
+        TX_MODE{"Transfer Mode"}
+        TX_RAW["raw<br/>wire payload = 原始字节"]
+        TX_AIR0["AIR0 精确恢复<br/>64B AIR0 header + 原始文件/测试片段<br/>携带 file_size/file_crc/packet_seq"]
+        TX_AIRV["AIRV 实时视频<br/>64B AIRV header + H.264 access-unit 分片<br/>携带 frame_seq/frag_index/pts_us/CRC"]
+        TX_NET["UDP DATA 包<br/>16B net_data_header_t + wire payload<br/>session/seq/payload_crc32<br/>Chunk Bytes 默认 1440"]
+        TX_CTRL["发送控制<br/>RESET 开新 session<br/>滑动窗口/ACK 超时/重传<br/>Rate Limit 默认 400 KiB/s"]
+        TX_STAT["发送统计<br/>app_deliv / wire_acc / udp_tx<br/>busy/pending/recoverable errors"]
+    end
+
+    %% Zynq PS side
+    subgraph PS["Zynq PS 裸机: lwIP RAW UDP + net_rx.c"]
+        PS_NET["GEM/lwIP<br/>静态 IP 192.168.1.50<br/>UDP port 5001"]
+        PS_RXCFG{"RXCFG?"}
+        PS_REGISTER["注册 loopback 回传目标<br/>记录接收 GUI 的 IP/port<br/>打印 RXCFG loopback peer"]
+        PS_VALIDATE["DATA 校验<br/>magic/length/session/seq<br/>可选 payload CRC32"]
+        PS_ACK["ACK 返回发送端<br/>OK 累计确认<br/>BAD_LENGTH/BAD_CHECKSUM/BUSY/PENDING/DMA_ERROR<br/>OK ACK 默认 8 包或 1000 us 合并"]
+        PS_AGG["DDR 聚合队列<br/>有效 payload 3000B/slot<br/>stride 3008B cache-line 对齐<br/>队列深度 697"]
+        PS_FLUSH{"提交聚合块"}
+        PS_DMA_PREP["MM2S 前处理<br/>OpenWifi_Tx_Rearm(payload_len)<br/>配置 tx_intf 帧长和 DMA words<br/>D-cache flush"]
+        PS_S2MM_ARM["S2MM 回环捕获 arm<br/>8192B RX window<br/>用于 PL->PS loopback debug"]
+        PS_MM2S["AXI DMA MM2S<br/>PS DDR -> PL<br/>transfer_len = align8(payload_len)"]
+        PS_S2MM["AXI DMA S2MM 完成<br/>PL -> PS DDR<br/>D-cache invalidate<br/>跳过 RX 前 16B PL 头"]
+        PS_COMPARE["回环诊断<br/>按真实 payload_len 比较 TX/RX<br/>打印 S2MM done/cmp/rx_hdr/tx_head"]
+        PS_LBUDP["UDP loopback return<br/>40B loopback header + 1200B 分片<br/>stream_offset/chunk_offset/CRC<br/>发往已注册接收 GUI"]
+        PS_STAT["串口统计<br/>STAT rate/state<br/>rx/acc/dma/q/crc/busy/pend/agg"]
+    end
+
+    %% PL side
+    subgraph PL["PL / AD9361 当前 loopback 工程"]
+        PL_TXIF["tx_intf / openofdm_tx<br/>接收 MM2S 字节流<br/>按 payload_len 配置 PSDU"]
+        PL_RADIO["AD9361 TX/RX + OFDM loopback/decode<br/>当前用于链路回环验证"]
+        PL_RXIF["openofdm_rx / rx_intf<br/>输出恢复字节流<br/>前 16B 为 PL 诊断头"]
+    end
+
+    %% PC receiver side
+    subgraph PC_RX["PC 接收端: receiver_gui.py / receiver_core.py"]
+        RX_UI["接收 GUI<br/>先 Register RX target<br/>Bind Port 默认 15002<br/>Idle Finish 默认 10s"]
+        RXCFG["RXCFG 控制包<br/>magic=0x52435830<br/>注册回传目标"]
+        RX_LB["接收 loopback UDP 分片<br/>校验 loopback CRC/长度<br/>按 stream_offset + chunk_offset 建连续区间"]
+        RX_DETECT{"payload 格式识别"}
+        RX_RAW["raw 模式<br/>按 Raw Expected 或 idle finish 保存连续字节"]
+        RX_AIR0["AIR0 恢复<br/>校验 header_crc/payload_crc/file_crc<br/>统计 missing_seq/bad_payload_seq/bad_meta_seq<br/>完整时保存 output 文件"]
+        RX_AIRV["AIRV 组帧<br/>校验 64B AIRV header<br/>按 frame_seq/frag_index 重组 encoded frame<br/>统计 frame_rx/frame_show/frame_drop/frag_missing"]
+        RX_PREVIEW_Q["AIRV 预览输入队列<br/>最多 240 个 assembled encoded frame<br/>保持 H.264 P-frame 顺序<br/>积压满才丢预览并等待 keyframe"]
+        RX_DECODER["后台 PyAV 解码线程<br/>可选依赖 av + Pillow<br/>解码 H.264 frame -> Tk image"]
+        RX_PREVIEW["独立 AIRV Preview 窗口<br/>默认 1280x720<br/>Tk 主线程约 30fps 显示<br/>Displayed = 实际渲染帧数"]
+        RX_STAT["接收统计/日志<br/>AIR0: rx/high/gaps/crc/saved<br/>AIRV: VIDEO/DONE VIDEO<br/>Preview Input/Backlog/Drops/Decoded/Displayed"]
+    end
+
+    %% Main data path
+    TX_UI --> TX_SRC
+    TX_SRC --> TX_TEST
+    TX_SRC --> TX_FILE
+    TX_FILE --> TX_AIRV_SRC
+    TX_TEST --> TX_MODE
+    TX_FILE --> TX_MODE
+    TX_AIRV_SRC --> TX_MODE
+    TX_MODE --> TX_RAW
+    TX_MODE --> TX_AIR0
+    TX_MODE --> TX_AIRV
+    TX_RAW --> TX_NET
+    TX_AIR0 --> TX_NET
+    TX_AIRV --> TX_NET
+    TX_CTRL --> TX_NET
+    TX_NET -->|"PC -> PS UDP DATA"| PS_NET
+
+    PS_NET --> PS_RXCFG
+    PS_RXCFG -->|"yes"| PS_REGISTER
+    PS_RXCFG -->|"no: DATA"| PS_VALIDATE
+    PS_VALIDATE --> PS_ACK
+    PS_ACK -->|"PS -> PC UDP ACK"| TX_CTRL
+    PS_ACK --> TX_STAT
+    PS_VALIDATE -->|"accepted wire payload<br/>PS/PL 不解析 AIR0/AIRV"| PS_AGG
+    PS_AGG --> PS_FLUSH
+    PS_FLUSH --> PS_DMA_PREP
+    PS_DMA_PREP --> PS_S2MM_ARM
+    PS_S2MM_ARM --> PS_MM2S
+    PS_MM2S --> PL_TXIF
+    PL_TXIF --> PL_RADIO
+    PL_RADIO --> PL_RXIF
+    PL_RXIF --> PS_S2MM
+    PS_S2MM --> PS_COMPARE
+    PS_COMPARE --> PS_LBUDP
+    PS_LBUDP -->|"PS -> PC loopback UDP"| RX_LB
+    PS_VALIDATE -.-> PS_STAT
+    PS_AGG -.-> PS_STAT
+    PS_COMPARE -.-> PS_STAT
+
+    %% Receiver registration and receive branches
+    RX_UI --> RXCFG
+    RXCFG -->|"PC -> PS UDP RXCFG"| PS_NET
+    PS_REGISTER -->|"ACK OK"| RX_UI
+    RX_LB --> RX_DETECT
+    RX_DETECT --> RX_RAW
+    RX_DETECT --> RX_AIR0
+    RX_DETECT --> RX_AIRV
+    RX_RAW --> RX_STAT
+    RX_AIR0 --> RX_STAT
+    RX_AIRV --> RX_PREVIEW_Q
+    RX_PREVIEW_Q --> RX_DECODER
+    RX_DECODER --> RX_PREVIEW
+    RX_AIRV --> RX_STAT
+    RX_PREVIEW --> RX_STAT
+
+    classDef pc fill:#e8f3ff,stroke:#2f6db3,color:#111;
+    classDef ps fill:#fff4db,stroke:#c78a15,color:#111;
+    classDef pl fill:#efe9ff,stroke:#7452c7,color:#111;
+    classDef mode fill:#eaf7ea,stroke:#3c8c3c,color:#111;
+    classDef warn fill:#fff0f0,stroke:#c94a4a,color:#111;
+
+    class TX_UI,TX_SRC,TX_TEST,TX_FILE,TX_AIRV_SRC,TX_NET,TX_CTRL,TX_STAT,RX_UI,RXCFG,RX_LB,RX_DETECT,RX_PREVIEW_Q,RX_DECODER,RX_PREVIEW,RX_STAT pc;
+    class PS_NET,PS_RXCFG,PS_REGISTER,PS_VALIDATE,PS_ACK,PS_AGG,PS_FLUSH,PS_DMA_PREP,PS_S2MM_ARM,PS_MM2S,PS_S2MM,PS_COMPARE,PS_LBUDP,PS_STAT ps;
+    class PL_TXIF,PL_RADIO,PL_RXIF pl;
+    class TX_RAW,TX_AIR0,TX_AIRV,RX_RAW,RX_AIR0,RX_AIRV mode;
+```
+
 ## 目录结构
 
 ```text
@@ -408,7 +537,7 @@ AIRV 是当前 PC 工具侧的实时视频传输/预览模式。PS/PL 不解析 
 
 ```text
 air0_file   当前默认 File/Test 精确恢复模式
-airv_video  实时视频组帧/统计模式
+airv_video  实时视频组帧/预览/统计模式
 raw         旧版原始字节流
 ```
 
