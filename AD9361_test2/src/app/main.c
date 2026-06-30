@@ -47,7 +47,7 @@
 #define RX_INTF_START_TRANS_MODE_AUTO 0x00010025U
 #define RX_INTF_MAX_SIGNAL_LEN_CFG    (4095U << 16)
 #define RX_INTF_CFG_DATA_TO_ANT       (1U << 8)
-#define RX_INTF_BB_GAIN               4U
+#define RX_INTF_BB_GAIN               0U
 #define RX_INTF_TLAST_TIMEOUT_TOP     7000U
 #define RX_INTF_S2MM_INTR_DELAY       (30U * 10U)
 
@@ -179,7 +179,7 @@ static void OpenWifi_RxRegs_Init_Loopback(void)
      * 1 = digital loopback from tx_intf IQ.
      * 0 = real ADC/AD9361 RX path.
      */
-    Xil_Out32(REG(RX_INTF_BASE, 3), 0x00000100);
+    Xil_Out32(REG(RX_INTF_BASE, 3), 0x00000010);
 
     /*
      * slv_reg4:
@@ -257,7 +257,7 @@ int main(void)
     OpenWifi_Tx_Rearm(DEFAULT_PSDU_LEN_BYTES);
     OpenWifi_RxRegs_Init_Loopback();
     UART_Printf("regs done\r\n");
-    OpenWifi_RxDebugPrint();
+//    OpenWifi_RxDebugPrint();
 
     AXI_DMA_Init(&AxiDma0, XPAR_AXIDMA_0_DEVICE_ID);
     AXI_DMA_TxInt_Init(&AxiDma0, TX_INTR_ID, TxIntrHandler);
@@ -286,7 +286,7 @@ int main(void)
         debug_print_count++;
         if (debug_print_count >= DEBUG_PRINT_INTERVAL) {
             debug_print_count = 0U;
-            OpenWifi_RxDebugPrint();
+//            OpenWifi_RxDebugPrint();
         }
     }
 }
