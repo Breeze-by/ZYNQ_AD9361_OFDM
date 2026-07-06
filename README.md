@@ -632,9 +632,12 @@ NET_LOOPBACK_S2MM_DEBUG_ENABLE 1
 NET_LOOPBACK_UDP_RETURN_ENABLE 1
 RX_BUFFER_BASE                 0x01400000
 RX_TRANSFER_LENGTH_BYTES       8192
+NET_DMA_STALL_TIMEOUT_US       6000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 ```
+
+真实 DA/AD 空口链路下，RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前加了 `NET_DMA_STALL_TIMEOUT_US = 6000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
 
 每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
 
@@ -653,6 +656,8 @@ S2MM rx_hdr ts=... meta0=... meta1=... len_field=... payload_guess=... rate_gues
 S2MM rx_payload_head ...
 S2MM tx_head ...
 LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...
+DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... count=1
+DMA stall recovery reset_done=1
 S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... err_dec=... errors=1
 ```
 
@@ -665,7 +670,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
 - 如果出现 `cmp=DIFF`，提供紧随其后的 `S2MM rx_head` 和 `S2MM tx_head`。
 
-如果只看到 `S2MM start` 和周期性 `S2MM wait`，说明 S2MM 没有完成，重点看 PL 是否输出 TLAST、S2MM 中断是否接到 GIC、RX stream 是否有数据。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。
+如果只看到 `S2MM start` 后出现 `DMA stall timeout`，说明真实空口 RX 没有在 watchdog 时间内形成完整 S2MM 包，发送侧会丢弃本次回环捕获并继续下一块。重点看 `txdone/rxdone`：`txdone=1 rxdone=0` 偏向 RX/解调/TLAST 问题；`txdone=0 rxdone=0` 偏向 TX stream/tx_intf/openofdm_tx 没有消费完本块。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。
 
 ## 构建和运行
 

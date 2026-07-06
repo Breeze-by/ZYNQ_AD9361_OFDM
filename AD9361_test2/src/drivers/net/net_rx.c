@@ -70,6 +70,8 @@ static uint32_t loopback_tx_expected_len;
 static uint32_t loopback_rx_transfer_id;
 static uint32_t loopback_rx_done_count;
 static uint32_t loopback_rx_error_count;
+static uint32_t dma_stall_timeout_count;
+static XTime dma_start_time;
 static XTime loopback_rx_start_time;
 static XTime loopback_rx_last_wait_log_time;
 static int loopback_rx_busy;
@@ -86,6 +88,7 @@ static int loopback_rx_done_for_current;
 
 static int net_should_report_packet_log(void);
 static void net_start_dma_transfer(void);
+static void net_handle_dma_stall_timeout(uint64_t waited_us);
 
 static uint64_t net_elapsed_us(XTime start_time, XTime end_time)
 {
@@ -380,6 +383,8 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc)
     loopback_rx_transfer_id = 0U;
     loopback_rx_done_count = 0U;
     loopback_rx_error_count = 0U;
+    dma_stall_timeout_count = 0U;
+    dma_start_time = 0U;
     loopback_rx_start_time = 0U;
     loopback_rx_last_wait_log_time = 0U;
     loopback_rx_busy = 0;
@@ -716,6 +721,97 @@ static void net_loopback_release_dma_block_if_done(void)
     net_start_dma_transfer();
 }
 
+static int net_dma_reset_and_reenable(void)
+{
+    int timeout = RESET_TIMEOUT_COUNTER;
+
+    XAxiDma_Reset(&AxiDma0);
+    while (timeout > 0) {
+        if (XAxiDma_ResetIsDone(&AxiDma0)) {
+            break;
+        }
+        timeout -= 1;
+    }
+
+    XAxiDma_IntrAckIrq(&AxiDma0, XAXIDMA_IRQ_ALL_MASK, XAXIDMA_DMA_TO_DEVICE);
+    XAxiDma_IntrAckIrq(&AxiDma0, XAXIDMA_IRQ_ALL_MASK, XAXIDMA_DEVICE_TO_DMA);
+    XAxiDma_IntrEnable(&AxiDma0, XAXIDMA_IRQ_ALL_MASK, XAXIDMA_DMA_TO_DEVICE);
+    XAxiDma_IntrEnable(&AxiDma0, XAXIDMA_IRQ_ALL_MASK, XAXIDMA_DEVICE_TO_DMA);
+    return (timeout > 0) ? 1 : 0;
+}
+
+static void net_handle_dma_stall_timeout(uint64_t waited_us)
+{
+    uint32_t tx_sr;
+    uint32_t tx_cr;
+    uint32_t tx_buflen;
+    uint32_t rx_sr;
+    uint32_t rx_cr;
+    uint32_t rx_buflen;
+    int reset_done;
+    int tx_done_snapshot;
+
+    if ((dma_busy == 0) && (loopback_rx_busy == 0)) {
+        return;
+    }
+
+    tx_done_snapshot = TxDone;
+    tx_sr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_SR_OFFSET);
+    tx_cr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_CR_OFFSET);
+    tx_buflen = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_BUFFLEN_OFFSET);
+    rx_sr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_SR_OFFSET);
+    rx_cr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_CR_OFFSET);
+    rx_buflen = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_BUFFLEN_OFFSET);
+    dma_stall_timeout_count += 1U;
+
+    UART_Printf("DMA stall timeout id=%lu block=%d waited_us=%lu txdone=%d rxdone=%d "
+        "tx_irq=0x%08lX rx_irq=0x%08lX tx_sr=0x%08lX rx_sr=0x%08lX "
+        "tx_cr=0x%08lX rx_cr=0x%08lX tx_buflen=%lu rx_buflen=%lu count=%lu\r\n",
+        (unsigned long)loopback_rx_transfer_id,
+        dma_block_index,
+        (unsigned long)waited_us,
+        TxDone,
+        RxDone,
+        (unsigned long)TxIrqStatusLast,
+        (unsigned long)RxIrqStatusLast,
+        (unsigned long)tx_sr,
+        (unsigned long)rx_sr,
+        (unsigned long)tx_cr,
+        (unsigned long)rx_cr,
+        (unsigned long)tx_buflen,
+        (unsigned long)rx_buflen,
+        (unsigned long)dma_stall_timeout_count);
+
+    reset_done = net_dma_reset_and_reenable();
+    UART_Printf("DMA stall recovery reset_done=%d\r\n", reset_done);
+
+    if ((dma_busy != 0) && (tx_done_snapshot != 0) && (dma_block_index >= 0)) {
+        NetStats_OnDmaDone(agg_blocks[dma_block_index].transfer_len);
+    } else if (tx_done_snapshot == 0) {
+        NetStats_OnDmaError();
+    }
+    Error = 0;
+    TxError = 0;
+    RxError = 0;
+    TxDone = 0;
+    RxDone = 0;
+    TxIrqStatusLast = 0U;
+    RxIrqStatusLast = 0U;
+    TxDmaSrLast = 0U;
+    RxDmaSrLast = 0U;
+    TxDmaCrLast = 0U;
+    RxDmaCrLast = 0U;
+    TxDmaBuffLenLast = 0U;
+    RxDmaBuffLenLast = 0U;
+    dma_busy = 0;
+    loopback_rx_busy = 0;
+    loopback_rx_done_for_current = 1;
+    loopback_rx_expected_len = 0U;
+    loopback_tx_expected_len = 0U;
+    dma_start_time = 0U;
+    net_loopback_release_dma_block_if_done();
+}
+
 static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
@@ -831,9 +927,14 @@ static void net_loopback_poll_s2mm(void)
 
     if (RxDone == 0) {
         XTime_GetTime(&now_time);
+        total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
+        if ((NET_DMA_STALL_TIMEOUT_US != 0ULL) &&
+            (total_wait_us >= NET_DMA_STALL_TIMEOUT_US)) {
+            net_handle_dma_stall_timeout(total_wait_us);
+            return;
+        }
         wait_elapsed_us = net_elapsed_us(loopback_rx_last_wait_log_time, now_time);
         if (wait_elapsed_us >= NET_LOOPBACK_S2MM_WAIT_LOG_US) {
-            total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
             loopback_rx_last_wait_log_time = now_time;
             UART_Printf("S2MM wait id=%lu capture=%lu tx_transfer=%lu waited_ms=%lu txdone=%d rxdone=%d "
                 "tx_irq=0x%08lX rx_irq=0x%08lX rx_sr=0x%08lX rx_cr=0x%08lX rx_buflen=%lu\r\n",
@@ -1018,6 +1119,7 @@ static void net_start_dma_transfer(void)
     block->state = NET_AGG_BLOCK_DMA_BUSY;
     dma_block_index = ready_index;
     dma_busy = 1;
+    XTime_GetTime(&dma_start_time);
     NetStats_OnDmaStart();
     net_update_queue_stats();
 
@@ -1374,6 +1476,8 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     loopback_rx_transfer_id = 0U;
     loopback_rx_done_count = 0U;
     loopback_rx_error_count = 0U;
+    dma_stall_timeout_count = 0U;
+    dma_start_time = 0U;
     loopback_rx_start_time = 0U;
     loopback_rx_last_wait_log_time = 0U;
     loopback_rx_busy = 0;
@@ -1396,11 +1500,12 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
         (unsigned)NET_LOOPBACK_UDP_PAYLOAD_BYTES);
 #endif
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
-    UART_Printf("S2MM loopback debug ready, rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u\r\n",
+    UART_Printf("S2MM loopback debug ready, rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u stall_timeout_us=%lu\r\n",
         (unsigned long)RX_BUFFER_BASE,
         (unsigned)RX_TRANSFER_LENGTH_BYTES,
         (unsigned)NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS,
-        (unsigned)NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS);
+        (unsigned)NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS,
+        (unsigned long)NET_DMA_STALL_TIMEOUT_US);
 #endif
 
     return 0;
@@ -1408,6 +1513,9 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
 
 void Net_RxPoll(void)
 {
+    XTime now_time;
+    uint64_t dma_elapsed_us;
+
     NetStats_PrintPeriodic();
     net_check_agg_timeout();
     net_check_ack_timeout();
@@ -1449,6 +1557,15 @@ void Net_RxPoll(void)
         return;
     }
 
+    if ((dma_start_time != 0U) && (NET_DMA_STALL_TIMEOUT_US != 0ULL)) {
+        XTime_GetTime(&now_time);
+        dma_elapsed_us = net_elapsed_us(dma_start_time, now_time);
+        if (dma_elapsed_us >= NET_DMA_STALL_TIMEOUT_US) {
+            net_handle_dma_stall_timeout(dma_elapsed_us);
+            return;
+        }
+    }
+
     if (TxDone != 0) {
         if (dma_block_index >= 0) {
             NetStats_OnDmaDone(agg_blocks[dma_block_index].transfer_len);
@@ -1456,6 +1573,7 @@ void Net_RxPoll(void)
         dma_busy = 0;
         TxDone = 0;
         TxError = 0;
+        dma_start_time = 0U;
         net_loopback_release_dma_block_if_done();
     }
 }
