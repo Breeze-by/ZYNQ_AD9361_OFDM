@@ -750,12 +750,14 @@ static void net_handle_dma_stall_timeout(uint64_t waited_us)
     uint32_t rx_buflen;
     int reset_done;
     int tx_done_snapshot;
+    int tx_channel_done;
 
     if ((dma_busy == 0) && (loopback_rx_busy == 0)) {
         return;
     }
 
     tx_done_snapshot = TxDone;
+    tx_channel_done = ((dma_busy == 0) || (tx_done_snapshot != 0)) ? 1 : 0;
     tx_sr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_SR_OFFSET);
     tx_cr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_CR_OFFSET);
     tx_buflen = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_TX_OFFSET, XAXIDMA_BUFFLEN_OFFSET);
@@ -787,7 +789,7 @@ static void net_handle_dma_stall_timeout(uint64_t waited_us)
 
     if ((dma_busy != 0) && (tx_done_snapshot != 0) && (dma_block_index >= 0)) {
         NetStats_OnDmaDone(agg_blocks[dma_block_index].transfer_len);
-    } else if (tx_done_snapshot == 0) {
+    } else if (tx_channel_done == 0) {
         NetStats_OnDmaError();
     }
     Error = 0;
@@ -1557,15 +1559,6 @@ void Net_RxPoll(void)
         return;
     }
 
-    if ((dma_start_time != 0U) && (NET_DMA_STALL_TIMEOUT_US != 0ULL)) {
-        XTime_GetTime(&now_time);
-        dma_elapsed_us = net_elapsed_us(dma_start_time, now_time);
-        if (dma_elapsed_us >= NET_DMA_STALL_TIMEOUT_US) {
-            net_handle_dma_stall_timeout(dma_elapsed_us);
-            return;
-        }
-    }
-
     if (TxDone != 0) {
         if (dma_block_index >= 0) {
             NetStats_OnDmaDone(agg_blocks[dma_block_index].transfer_len);
@@ -1575,5 +1568,15 @@ void Net_RxPoll(void)
         TxError = 0;
         dma_start_time = 0U;
         net_loopback_release_dma_block_if_done();
+    }
+
+    if ((dma_busy != 0) && (dma_start_time != 0U) &&
+        (NET_DMA_STALL_TIMEOUT_US != 0ULL)) {
+        XTime_GetTime(&now_time);
+        dma_elapsed_us = net_elapsed_us(dma_start_time, now_time);
+        if (dma_elapsed_us >= NET_DMA_STALL_TIMEOUT_US) {
+            net_handle_dma_stall_timeout(dma_elapsed_us);
+            return;
+        }
     }
 }
