@@ -14,12 +14,12 @@ uint64_t rfout;
 uint32_t val_out;
 uint32_t idelay;
 uint32_t qdelay;
-uint32_t sample_rate = 40000000U;
-uint64_t tx_lo_freq = 200000000ULL;
-uint64_t rx_lo_freq = 200000000ULL;
-uint32_t bandwidth = 20000000U;
+uint32_t sample_rate = 20e6;
+uint64_t tx_lo_freq = 2400e6;
+uint64_t rx_lo_freq = 2400e6;
+uint32_t bandwidth = 20e6;
 int32_t gain = 10;
-uint32_t txatt = 70000U;
+uint32_t txatt = 10000U;
 uint32_t regr = REG_PRODUCT_ID;
 
 AD9361_InitParam default_init_param = {
