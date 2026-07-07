@@ -85,6 +85,15 @@ static int loopback_rx_done_for_current;
 #define TX_INTF_AUTO_START_EN_MASK (1U << 3)
 #define TX_INTF_AUTO_START_TH_SHIFT 4U
 #define TX_INTF_AUTO_START_TH_MASK (0x3FFU << TX_INTF_AUTO_START_TH_SHIFT)
+#define NET_AIR0_MAGIC 0x30524941U
+#define NET_AIRV_MAGIC 0x56524941U
+#define NET_AIR_HEADER_BYTES 64U
+#define NET_AIR_SCAN_BYTES 256U
+#define NET_AIR0_VERSION_OFFSET 4U
+#define NET_AIR0_HEADER_LEN_OFFSET 5U
+#define NET_AIR0_PACKET_SEQ_OFFSET 16U
+#define NET_AIR0_FILE_OFFSET_OFFSET 24U
+#define NET_AIR0_CHUNK_BYTES_OFFSET 34U
 
 static int net_should_report_packet_log(void);
 static void net_start_dma_transfer(void);
@@ -531,6 +540,88 @@ static uint32_t net_load_le32(const uint8_t *ptr)
         ((uint32_t)ptr[3] << 24);
 }
 
+static uint16_t net_load_le16(const uint8_t *ptr)
+{
+    return (uint16_t)(((uint16_t)ptr[0]) | ((uint16_t)ptr[1] << 8));
+}
+
+static uint64_t net_load_le64(const uint8_t *ptr)
+{
+    return ((uint64_t)net_load_le32(ptr)) |
+        ((uint64_t)net_load_le32(&ptr[4]) << 32);
+}
+
+static int net_find_payload_magic_offset(const uint8_t *buffer, uint32_t length,
+    uint32_t *payload_offset, uint32_t *payload_magic)
+{
+    uint32_t scan_limit;
+    uint32_t offset;
+    uint32_t word;
+
+    if ((buffer == NULL) || (payload_offset == NULL) || (payload_magic == NULL) ||
+        (length < 4U)) {
+        return 0;
+    }
+
+    scan_limit = length - 4U;
+    if (scan_limit > NET_AIR_SCAN_BYTES) {
+        scan_limit = NET_AIR_SCAN_BYTES;
+    }
+
+    for (offset = 0U; offset <= scan_limit; ++offset) {
+        word = net_load_le32(&buffer[offset]);
+        if ((word == NET_AIR0_MAGIC) || (word == NET_AIRV_MAGIC)) {
+            *payload_offset = offset;
+            *payload_magic = word;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int net_air0_stream_offset_from_payload(const uint8_t *payload,
+    uint32_t payload_len, uint32_t *stream_offset, uint32_t *packet_seq,
+    uint16_t *chunk_bytes, uint64_t *file_offset)
+{
+    uint32_t seq;
+    uint16_t chunk;
+    uint64_t offset;
+    uint64_t raw_stream_offset;
+
+    if ((payload == NULL) || (stream_offset == NULL) || (packet_seq == NULL) ||
+        (chunk_bytes == NULL) || (file_offset == NULL) ||
+        (payload_len < NET_AIR_HEADER_BYTES)) {
+        return 0;
+    }
+
+    if (net_load_le32(payload) != NET_AIR0_MAGIC) {
+        return 0;
+    }
+    if ((payload[NET_AIR0_VERSION_OFFSET] != 1U) ||
+        (payload[NET_AIR0_HEADER_LEN_OFFSET] != NET_AIR_HEADER_BYTES)) {
+        return 0;
+    }
+
+    seq = net_load_le32(&payload[NET_AIR0_PACKET_SEQ_OFFSET]);
+    chunk = net_load_le16(&payload[NET_AIR0_CHUNK_BYTES_OFFSET]);
+    offset = net_load_le64(&payload[NET_AIR0_FILE_OFFSET_OFFSET]);
+    if (chunk < NET_AIR_HEADER_BYTES) {
+        return 0;
+    }
+
+    raw_stream_offset = ((uint64_t)seq) * ((uint64_t)chunk);
+    if (raw_stream_offset > 0xFFFFFFFFULL) {
+        return 0;
+    }
+
+    *stream_offset = (uint32_t)raw_stream_offset;
+    *packet_seq = seq;
+    *chunk_bytes = chunk;
+    *file_offset = offset;
+    return 1;
+}
+
 static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
     uint32_t tx_transfer_len, uint32_t tx_payload_len)
 {
@@ -581,8 +672,8 @@ static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
 }
 
 static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t *payload,
-    uint32_t payload_len, uint32_t timestamp_lo, uint32_t timestamp_hi,
-    uint32_t meta0, uint32_t meta1)
+    uint32_t payload_len, uint32_t stream_offset, uint32_t timestamp_lo,
+    uint32_t timestamp_hi, uint32_t meta0, uint32_t meta1)
 {
 #if NET_LOOPBACK_UDP_RETURN_ENABLE
     uint32_t chunk_offset = 0U;
@@ -591,6 +682,7 @@ static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t 
     struct pbuf *packet_pbuf;
     uint8_t *packet_payload;
     err_t err;
+    (void)block;
 
     if ((udp_control_pcb == NULL) || (loopback_return_peer_valid == 0)) {
         UART_Printf("LB UDP skip reason=no_peer block=%lu len=%lu\r\n",
@@ -607,7 +699,7 @@ static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t 
 
         header.magic = NET_LOOPBACK_MAGIC;
         header.block_id = loopback_rx_transfer_id;
-        header.stream_offset = block->stream_offset;
+        header.stream_offset = stream_offset;
         header.block_payload_len = (uint16_t)payload_len;
         header.chunk_offset = (uint16_t)chunk_offset;
         header.chunk_len = (uint16_t)chunk_len;
@@ -655,7 +747,7 @@ static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t 
     if (net_loopback_should_log(loopback_rx_transfer_id) != 0) {
         UART_Printf("LB UDP sent block=%lu stream_off=%lu payload=%lu packets=%lu total_bytes=%lu peer_port=%u\r\n",
             (unsigned long)loopback_rx_transfer_id,
-            (unsigned long)block->stream_offset,
+            (unsigned long)stream_offset,
             (unsigned long)payload_len,
             (unsigned long)loopback_return_packet_count,
             (unsigned long)loopback_return_byte_count,
@@ -665,6 +757,7 @@ static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t 
     (void)block;
     (void)payload;
     (void)payload_len;
+    (void)stream_offset;
     (void)timestamp_lo;
     (void)timestamp_hi;
     (void)meta0;
@@ -887,6 +980,14 @@ static void net_loopback_poll_s2mm(void)
     uint32_t timestamp_hi = 0U;
     uint32_t rx_meta0 = 0U;
     uint32_t rx_meta1 = 0U;
+    uint32_t payload_magic_offset = NET_LOOPBACK_RX_PREFIX_BYTES;
+    uint32_t payload_magic = 0U;
+    uint32_t return_stream_offset = 0U;
+    uint32_t air0_packet_seq = 0U;
+    uint16_t air0_chunk_bytes = 0U;
+    uint64_t air0_file_offset = 0U;
+    int payload_magic_found = 0;
+    int air0_offset_valid = 0;
     const uint8_t *rx_payload_ptr;
     int mismatch_found;
     int should_log;
@@ -966,6 +1067,15 @@ static void net_loopback_poll_s2mm(void)
     if (rx_prefix_len > loopback_rx_expected_len) {
         rx_prefix_len = loopback_rx_expected_len;
     }
+
+    payload_magic_found = net_find_payload_magic_offset(loopback_rx_buffer,
+        loopback_rx_expected_len, &payload_magic_offset, &payload_magic);
+    if ((payload_magic_found != 0) &&
+        (payload_magic_offset < loopback_rx_expected_len) &&
+        ((payload_magic == NET_AIR0_MAGIC) || (payload_magic == NET_AIRV_MAGIC))) {
+        rx_prefix_len = payload_magic_offset;
+    }
+
     rx_payload_ptr = &loopback_rx_buffer[rx_prefix_len];
     if (rx_prefix_len >= 16U) {
         timestamp_lo = net_load_le32(&loopback_rx_buffer[0]);
@@ -983,6 +1093,7 @@ static void net_loopback_poll_s2mm(void)
 
     if (dma_block_index >= 0) {
         block = &agg_blocks[dma_block_index];
+        return_stream_offset = block->stream_offset;
         if (compare_len > block->payload_len) {
             compare_len = block->payload_len;
         }
@@ -995,6 +1106,15 @@ static void net_loopback_poll_s2mm(void)
         }
     }
     rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
+    if ((payload_magic == NET_AIR0_MAGIC) &&
+        (net_air0_stream_offset_from_payload(rx_payload_ptr,
+            loopback_rx_expected_len - rx_prefix_len,
+            &return_stream_offset,
+            &air0_packet_seq,
+            &air0_chunk_bytes,
+            &air0_file_offset) != 0)) {
+        air0_offset_valid = 1;
+    }
 
     if (mismatch_found != 0) {
         should_log = 1;
@@ -1028,6 +1148,26 @@ static void net_loopback_poll_s2mm(void)
             net_loopback_print_words("S2MM tx_head", agg_blocks[dma_block_index].buffer_ptr,
                 agg_blocks[dma_block_index].transfer_len);
         }
+        if (payload_magic_found != 0) {
+            UART_Printf("S2MM payload_magic offset=%lu magic=0x%08lX expected_prefix=%u\r\n",
+                (unsigned long)payload_magic_offset,
+                (unsigned long)payload_magic,
+                (unsigned)NET_LOOPBACK_RX_PREFIX_BYTES);
+        } else {
+            UART_Printf("S2MM payload_magic none scan=%u expected_prefix=%u\r\n",
+                (unsigned)NET_AIR_SCAN_BYTES,
+                (unsigned)NET_LOOPBACK_RX_PREFIX_BYTES);
+        }
+        if (air0_offset_valid != 0) {
+            UART_Printf("S2MM air0 seq=%lu chunk=%u file_off=%lu stream_off=%lu tx_stream_off=%lu desync=%s\r\n",
+                (unsigned long)air0_packet_seq,
+                (unsigned)air0_chunk_bytes,
+                (unsigned long)air0_file_offset,
+                (unsigned long)return_stream_offset,
+                (dma_block_index >= 0) ? (unsigned long)agg_blocks[dma_block_index].stream_offset : 0UL,
+                ((dma_block_index >= 0) && (return_stream_offset != agg_blocks[dma_block_index].stream_offset)) ?
+                    "yes" : "no");
+        }
     }
 
     if (dma_block_index >= 0) {
@@ -1036,7 +1176,7 @@ static void net_loopback_poll_s2mm(void)
             return_len = agg_blocks[dma_block_index].payload_len;
         }
         net_loopback_return_udp(&agg_blocks[dma_block_index], rx_payload_ptr, return_len,
-            timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
+            return_stream_offset, timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
     }
 
     net_loopback_release_dma_block_if_done();

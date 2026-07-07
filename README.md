@@ -642,6 +642,8 @@ NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 
 每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
 
+当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `256` 字节内扫描 AIR0/AIRV magic。如果找到 AIR0，会打印 `S2MM air0 seq=... chunk=... file_off=... stream_off=... tx_stream_off=... desync=...`，并用 `packet_seq * chunk_bytes` 推导 UDP 回传的 `stream_offset`；如果找不到，会打印 `S2MM payload_magic none ...`。这可以区分三类问题：payload 前缀不是固定 16 字节、RX 返回的是延迟旧帧、或者 PL/RF/RX 返回数据本身不是 AIR0/AIRV wire payload。
+
 MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_configure_tx_frame()` 写入最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 `OpenWifi_Tx_Rearm()` 放在 `net_configure_tx_frame()` 后面，否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
 关键日志：
@@ -656,6 +658,8 @@ S2MM rx_head ...
 S2MM rx_hdr ts=... meta0=... meta1=... len_field=... payload_guess=... rate_guess=... tx_payload=... tx_transfer=... match=...
 S2MM rx_payload_head ...
 S2MM tx_head ...
+S2MM payload_magic offset=16 magic=0x30524941 expected_prefix=16
+S2MM air0 seq=0 chunk=1440 file_off=0 stream_off=0 tx_stream_off=0 desync=no
 LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...
 DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... count=1
 DMA stall recovery reset_done=1
@@ -666,6 +670,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 
 - 启动后的 `S2MM loopback debug ready` 行。
 - 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
+- 所有 `S2MM payload_magic` 和 `S2MM air0` 行。
 - 所有 `LB UDP sent` 行。
 - 同一轮的 `STAT rate` / `STAT state` 行。
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
