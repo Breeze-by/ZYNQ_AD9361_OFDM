@@ -1,6 +1,6 @@
 # ZYNQ_AD9361_OFDM
 
-这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前 Vivado 工程是 PL loopback：数据经过 PL 侧 OFDM 调制/解调恢复后，通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。
+这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前板级链路已经从纯 PL 数字回环推进到 AD9361 RF 回环：PL 侧 OFDM 调制后的数据送入 AD9361 TX，经 SMA 线直连到 AD9361 RX，再进入 PL 侧 OFDM 接收/解调；解调后的数据通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。
 
 ```text
 PC UDP sender
@@ -9,7 +9,8 @@ PC UDP sender
 -> PS DDR aggregation blocks
 -> AXI DMA MM2S
 -> PL tx_intf/openofdm_tx
--> PL OFDM loopback/decode
+-> AD9361 TX -> SMA cable -> AD9361 RX
+-> PL OFDM RX/decode
 -> AXI DMA S2MM
 -> PS UDP loopback return
 -> PC receiver GUI/CLI restore
@@ -97,7 +98,7 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 3. 初始化 UART，波特率 `115200`。
 4. 初始化 SCU GIC。
 5. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `3000` 字节 PSDU 先 re-arm 一次。
-6. 初始化 `openofdm_rx/rx_intf` 的数字 loopback/debug 相关寄存器，并周期性打印 RX debug 计数。
+6. 初始化 `openofdm_rx/rx_intf` 的 AD9361 RX/debug 相关寄存器，并周期性打印 RX debug 计数。
 7. 初始化 AXI DMA 和 MM2S/S2MM 中断。
 8. 初始化 lwIP/GEM，使用静态 IPv4。
 9. 绑定 UDP `5001`，初始化 DDR 聚合缓冲。
@@ -623,9 +624,9 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 
 `rx` 是板端输入尝试流量，主机发太快或重传多时可能高于 `acc`。AIR0 模式下 `app_deliv` 与 `wire_acc/acc/dma` 本来就不应完全相等，因为 wire payload 额外包含 64 字节 AIR0 header。
 
-## PL->PS S2MM 回环调试
+## AD9361 RF 回环与 S2MM 调试
 
-当前代码已开启 PL 回环接收和 UDP 回传：
+当前代码已开启 AD9361 RF 回环后的 S2MM 接收调试和 UDP 回传：
 
 ```text
 NET_LOOPBACK_S2MM_DEBUG_ENABLE 1
