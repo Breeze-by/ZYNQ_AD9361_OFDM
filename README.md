@@ -639,9 +639,12 @@ NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 0
 NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS 0
 NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS 0
+NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER
 ```
 
 真实 DA/AD 空口链路下，RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前加了 `NET_DMA_STALL_TIMEOUT_US = 6000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
+
+当前临时启用 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式，用来排除 PC/PS 侧问题：PS 不启动 MM2S/S2MM，不经过 PL/RF，而是把已经通过 UDP 接收、CRC 校验并写入 DDR 聚合块的 TX buffer 直接用 loopback UDP 发回接收 GUI。启动日志应出现 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块返回会打印 `TXECHO return ... first=0x30524941 ...`。若该模式下 AIR0 能 `DONE ... air=1 ... file_crc=1`，说明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；后续需要把 `NET_LOOPBACK_RETURN_SOURCE` 切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM` 才能继续测试 AD9361 RF 链路。
 
 为验证 UART 打印是否影响 RF 回环实时性，当前默认关闭逐帧 S2MM 大段诊断日志：不打印前若干块，不按间隔打印，也不因 `cmp=DIFF` 强制打印。这样串口主要保留启动、reset、周期 `STAT`、DMA stall/error 等必要信息。需要定位 payload 偏移或内容时，再临时打开 `NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS`、`NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS` 或 `NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS`。
 

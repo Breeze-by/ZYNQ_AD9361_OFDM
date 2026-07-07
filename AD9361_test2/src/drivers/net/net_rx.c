@@ -765,6 +765,50 @@ static void net_loopback_return_udp(const net_agg_block_t *block, const uint8_t 
 #endif
 }
 
+static void net_return_tx_buffer_echo(int block_index)
+{
+#if (NET_LOOPBACK_UDP_RETURN_ENABLE && \
+    (NET_LOOPBACK_RETURN_SOURCE == NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER))
+    net_agg_block_t *block;
+    uint32_t tx_crc;
+    uint32_t first_word;
+
+    if ((block_index < 0) || (block_index >= (int)NET_AGG_BLOCK_COUNT)) {
+        return;
+    }
+
+    block = &agg_blocks[block_index];
+    if ((block->state != NET_AGG_BLOCK_READY) || (block->payload_len == 0U)) {
+        return;
+    }
+
+    loopback_rx_transfer_id += 1U;
+    tx_crc = Net_Protocol_Crc32(block->buffer_ptr, block->payload_len);
+    first_word = (block->payload_len >= 4U) ? net_load_le32(block->buffer_ptr) : 0U;
+    UART_Printf("TXECHO return id=%lu block=%d stream_off=%lu payload=%lu first=0x%08lX crc=0x%08lX\r\n",
+        (unsigned long)loopback_rx_transfer_id,
+        block_index,
+        (unsigned long)block->stream_offset,
+        (unsigned long)block->payload_len,
+        (unsigned long)first_word,
+        (unsigned long)tx_crc);
+
+    net_loopback_return_udp(block, block->buffer_ptr, block->payload_len,
+        block->stream_offset, 0U, 0U, 0U, 0U);
+
+    NetStats_OnDmaStart();
+    NetStats_OnDmaDone(block->transfer_len);
+    block->state = NET_AGG_BLOCK_FREE;
+    block->payload_len = 0U;
+    block->transfer_len = 0U;
+    block->submit_order = 0U;
+    block->stream_offset = 0U;
+    net_update_queue_stats();
+#else
+    (void)block_index;
+#endif
+}
+
 static void net_loopback_print_words(const char *tag, const uint8_t *buffer, uint32_t length)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
@@ -1201,6 +1245,11 @@ static void net_start_dma_transfer(void)
     }
 
     block = &agg_blocks[ready_index];
+#if NET_LOOPBACK_RETURN_SOURCE == NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER
+    net_return_tx_buffer_echo(ready_index);
+    return;
+#endif
+
     TxDone = 0;
     TxError = 0;
     TxIrqStatusLast = 0U;
@@ -1642,6 +1691,11 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     UART_Printf("Loopback UDP return ready, magic=0x%08lX chunk_bytes=%u\r\n",
         (unsigned long)NET_LOOPBACK_MAGIC,
         (unsigned)NET_LOOPBACK_UDP_PAYLOAD_BYTES);
+#if NET_LOOPBACK_RETURN_SOURCE == NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER
+    UART_Printf("Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed\r\n");
+#else
+    UART_Printf("Loopback return source=S2MM RF path\r\n");
+#endif
 #endif
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
     UART_Printf("S2MM loopback debug ready, rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u stall_timeout_us=%lu\r\n",
