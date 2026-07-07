@@ -88,12 +88,17 @@ static int loopback_rx_done_for_current;
 #define NET_AIR0_MAGIC 0x30524941U
 #define NET_AIRV_MAGIC 0x56524941U
 #define NET_AIR_HEADER_BYTES 64U
-#define NET_AIR_SCAN_BYTES 256U
+#define NET_AIR_SCAN_BYTES 2048U
 #define NET_AIR0_VERSION_OFFSET 4U
 #define NET_AIR0_HEADER_LEN_OFFSET 5U
 #define NET_AIR0_PACKET_SEQ_OFFSET 16U
 #define NET_AIR0_FILE_OFFSET_OFFSET 24U
 #define NET_AIR0_CHUNK_BYTES_OFFSET 34U
+#define NET_OPENOFDM_RX_BASE 0x40002000U
+#define NET_OPENOFDM_RX_REG(n) (NET_OPENOFDM_RX_BASE + ((n) * 4U))
+#define NET_OPENOFDM_RX_STATE_HISTORY_ADDR NET_OPENOFDM_RX_REG(20U)
+#define NET_OPENOFDM_RX_WATCHDOG_EVENT_SEL_ADDR NET_OPENOFDM_RX_REG(17U)
+#define NET_OPENOFDM_RX_WATCHDOG_EVENT_COUNTER_ADDR NET_OPENOFDM_RX_REG(30U)
 
 static int net_should_report_packet_log(void);
 static void net_start_dma_transfer(void);
@@ -532,6 +537,30 @@ static int net_loopback_should_log(uint32_t transfer_id)
     return 0;
 }
 
+static int net_loopback_should_summarize(uint32_t transfer_id, int abnormal)
+{
+#if NET_LOOPBACK_S2MM_DEBUG_ENABLE
+    if (transfer_id <= NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS) {
+        return 1;
+    }
+    if ((NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS != 0U) &&
+        ((transfer_id % NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS) == 0U)) {
+        return 1;
+    }
+#if NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS
+    if (abnormal != 0) {
+        return 1;
+    }
+#else
+    (void)abnormal;
+#endif
+#else
+    (void)transfer_id;
+    (void)abnormal;
+#endif
+    return 0;
+}
+
 static uint32_t net_load_le32(const uint8_t *ptr)
 {
     return ((uint32_t)ptr[0]) |
@@ -549,6 +578,28 @@ static uint64_t net_load_le64(const uint8_t *ptr)
 {
     return ((uint64_t)net_load_le32(ptr)) |
         ((uint64_t)net_load_le32(&ptr[4]) << 32);
+}
+
+static uint32_t net_count_bits32(uint32_t value)
+{
+    uint32_t count = 0U;
+
+    while (value != 0U) {
+        count += value & 1U;
+        value >>= 1U;
+    }
+
+    return count;
+}
+
+static uint32_t net_openofdm_rx_watchdog_event_count(uint32_t event_sel)
+{
+    volatile uint32_t delay;
+
+    Xil_Out32(NET_OPENOFDM_RX_WATCHDOG_EVENT_SEL_ADDR, event_sel);
+    for (delay = 0U; delay < 32U; ++delay) {
+    }
+    return Xil_In32(NET_OPENOFDM_RX_WATCHDOG_EVENT_COUNTER_ADDR);
 }
 
 static int net_find_payload_magic_offset(const uint8_t *buffer, uint32_t length,
@@ -578,6 +629,59 @@ static int net_find_payload_magic_offset(const uint8_t *buffer, uint32_t length,
     }
 
     return 0;
+}
+
+static int net_find_best_magic_candidate(const uint8_t *buffer, uint32_t length,
+    uint32_t *payload_offset, uint32_t *payload_magic, uint32_t *xor_value,
+    uint32_t *bit_errors)
+{
+    uint32_t scan_limit;
+    uint32_t offset;
+    uint32_t word;
+    uint32_t xor_air0;
+    uint32_t xor_airv;
+    uint32_t bits_air0;
+    uint32_t bits_airv;
+    uint32_t best_bits = 33U;
+    uint32_t best_offset = 0U;
+    uint32_t best_magic = 0U;
+    uint32_t best_xor = 0U;
+
+    if ((buffer == NULL) || (payload_offset == NULL) || (payload_magic == NULL) ||
+        (xor_value == NULL) || (bit_errors == NULL) || (length < 4U)) {
+        return 0;
+    }
+
+    scan_limit = length - 4U;
+    if (scan_limit > NET_AIR_SCAN_BYTES) {
+        scan_limit = NET_AIR_SCAN_BYTES;
+    }
+
+    for (offset = 0U; offset <= scan_limit; ++offset) {
+        word = net_load_le32(&buffer[offset]);
+        xor_air0 = word ^ NET_AIR0_MAGIC;
+        xor_airv = word ^ NET_AIRV_MAGIC;
+        bits_air0 = net_count_bits32(xor_air0);
+        bits_airv = net_count_bits32(xor_airv);
+        if (bits_air0 < best_bits) {
+            best_bits = bits_air0;
+            best_offset = offset;
+            best_magic = NET_AIR0_MAGIC;
+            best_xor = xor_air0;
+        }
+        if (bits_airv < best_bits) {
+            best_bits = bits_airv;
+            best_offset = offset;
+            best_magic = NET_AIRV_MAGIC;
+            best_xor = xor_airv;
+        }
+    }
+
+    *payload_offset = best_offset;
+    *payload_magic = best_magic;
+    *xor_value = best_xor;
+    *bit_errors = best_bits;
+    return 1;
 }
 
 static int net_air0_stream_offset_from_payload(const uint8_t *payload,
@@ -885,6 +989,12 @@ static void net_handle_dma_stall_timeout(uint64_t waited_us)
     uint32_t rx_sr;
     uint32_t rx_cr;
     uint32_t rx_buflen;
+    uint32_t rx_state_history;
+    uint32_t wd0;
+    uint32_t wd1;
+    uint32_t wd2;
+    uint32_t wd3;
+    uint32_t wd4;
     int reset_done;
     int tx_done_snapshot;
     int tx_channel_done;
@@ -901,11 +1011,18 @@ static void net_handle_dma_stall_timeout(uint64_t waited_us)
     rx_sr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_SR_OFFSET);
     rx_cr = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_CR_OFFSET);
     rx_buflen = XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_BUFFLEN_OFFSET);
+    rx_state_history = Xil_In32(NET_OPENOFDM_RX_STATE_HISTORY_ADDR);
+    wd0 = net_openofdm_rx_watchdog_event_count(0U);
+    wd1 = net_openofdm_rx_watchdog_event_count(1U);
+    wd2 = net_openofdm_rx_watchdog_event_count(2U);
+    wd3 = net_openofdm_rx_watchdog_event_count(3U);
+    wd4 = net_openofdm_rx_watchdog_event_count(4U);
     dma_stall_timeout_count += 1U;
 
     UART_Printf("DMA stall timeout id=%lu block=%d waited_us=%lu txdone=%d rxdone=%d "
         "tx_irq=0x%08lX rx_irq=0x%08lX tx_sr=0x%08lX rx_sr=0x%08lX "
-        "tx_cr=0x%08lX rx_cr=0x%08lX tx_buflen=%lu rx_buflen=%lu count=%lu\r\n",
+        "tx_cr=0x%08lX rx_cr=0x%08lX tx_buflen=%lu rx_buflen=%lu "
+        "rx_state=0x%08lX wd=%lu,%lu,%lu,%lu,%lu count=%lu\r\n",
         (unsigned long)loopback_rx_transfer_id,
         dma_block_index,
         (unsigned long)waited_us,
@@ -919,6 +1036,12 @@ static void net_handle_dma_stall_timeout(uint64_t waited_us)
         (unsigned long)rx_cr,
         (unsigned long)tx_buflen,
         (unsigned long)rx_buflen,
+        (unsigned long)rx_state_history,
+        (unsigned long)wd0,
+        (unsigned long)wd1,
+        (unsigned long)wd2,
+        (unsigned long)wd3,
+        (unsigned long)wd4,
         (unsigned long)dma_stall_timeout_count);
 
     reset_done = net_dma_reset_and_reenable();
@@ -1026,15 +1149,34 @@ static void net_loopback_poll_s2mm(void)
     uint32_t rx_meta1 = 0U;
     uint32_t payload_magic_offset = NET_LOOPBACK_RX_PREFIX_BYTES;
     uint32_t payload_magic = 0U;
+    uint32_t best_magic_offset = 0U;
+    uint32_t best_magic = 0U;
+    uint32_t best_magic_xor = 0U;
+    uint32_t best_magic_bits = 0U;
     uint32_t return_stream_offset = 0U;
     uint32_t air0_packet_seq = 0U;
     uint16_t air0_chunk_bytes = 0U;
     uint64_t air0_file_offset = 0U;
+    uint32_t length_field = 0U;
+    uint32_t payload_len_guess = 0U;
+    uint32_t rx_state_history = 0U;
+    uint32_t wd0 = 0U;
+    uint32_t wd1 = 0U;
+    uint32_t wd2 = 0U;
+    uint32_t wd3 = 0U;
+    uint32_t wd4 = 0U;
+    uint32_t rx_head0 = 0U;
+    uint32_t rx_payload_head0 = 0U;
+    uint32_t tx_head0 = 0U;
     int payload_magic_found = 0;
+    int best_magic_found = 0;
     int air0_offset_valid = 0;
     const uint8_t *rx_payload_ptr;
     int mismatch_found;
     int should_log;
+    int should_summarize;
+    int abnormal;
+    const char *diag_class;
     XTime now_time;
     uint64_t wait_elapsed_us;
     uint64_t total_wait_us;
@@ -1114,6 +1256,9 @@ static void net_loopback_poll_s2mm(void)
 
     payload_magic_found = net_find_payload_magic_offset(loopback_rx_buffer,
         loopback_rx_expected_len, &payload_magic_offset, &payload_magic);
+    best_magic_found = net_find_best_magic_candidate(loopback_rx_buffer,
+        loopback_rx_expected_len, &best_magic_offset, &best_magic,
+        &best_magic_xor, &best_magic_bits);
     if ((payload_magic_found != 0) &&
         (payload_magic_offset < loopback_rx_expected_len) &&
         ((payload_magic == NET_AIR0_MAGIC) || (payload_magic == NET_AIRV_MAGIC))) {
@@ -1126,6 +1271,8 @@ static void net_loopback_poll_s2mm(void)
         timestamp_hi = net_load_le32(&loopback_rx_buffer[4]);
         rx_meta0 = net_load_le32(&loopback_rx_buffer[8]);
         rx_meta1 = net_load_le32(&loopback_rx_buffer[12]);
+        length_field = rx_meta1 & 0xFFFFU;
+        payload_len_guess = (length_field >= 4U) ? (length_field - 4U) : length_field;
     }
     compare_len = loopback_tx_expected_len;
     if (compare_len > (loopback_rx_expected_len - rx_prefix_len)) {
@@ -1142,6 +1289,9 @@ static void net_loopback_poll_s2mm(void)
             compare_len = block->payload_len;
         }
         tx_crc = Net_Protocol_Crc32(block->buffer_ptr, compare_len);
+        if (block->payload_len >= 4U) {
+            tx_head0 = net_load_le32(block->buffer_ptr);
+        }
         for (mismatch_index = 0U; mismatch_index < compare_len; ++mismatch_index) {
             if (rx_payload_ptr[mismatch_index] != block->buffer_ptr[mismatch_index]) {
                 mismatch_found = 1;
@@ -1165,6 +1315,69 @@ static void net_loopback_poll_s2mm(void)
         should_log = 1;
     }
 #endif
+
+    abnormal = ((mismatch_found != 0) || (payload_magic_found == 0) ||
+        (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES)) ? 1 : 0;
+    should_summarize = net_loopback_should_summarize(loopback_rx_transfer_id, abnormal);
+    rx_state_history = Xil_In32(NET_OPENOFDM_RX_STATE_HISTORY_ADDR);
+    wd0 = net_openofdm_rx_watchdog_event_count(0U);
+    wd1 = net_openofdm_rx_watchdog_event_count(1U);
+    wd2 = net_openofdm_rx_watchdog_event_count(2U);
+    wd3 = net_openofdm_rx_watchdog_event_count(3U);
+    wd4 = net_openofdm_rx_watchdog_event_count(4U);
+    if (loopback_rx_expected_len >= 4U) {
+        rx_head0 = net_load_le32(loopback_rx_buffer);
+    }
+    if ((loopback_rx_expected_len - rx_prefix_len) >= 4U) {
+        rx_payload_head0 = net_load_le32(rx_payload_ptr);
+    }
+
+    if (payload_magic_found == 0) {
+        diag_class = "NO_AIR_MAGIC";
+    } else if (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES) {
+        diag_class = "AIR_MAGIC_SHIFT";
+    } else if (mismatch_found != 0) {
+        diag_class = "AIR_MAGIC_PAYLOAD_DIFF";
+    } else {
+        diag_class = "OK";
+    }
+
+    if (should_summarize != 0) {
+        UART_Printf(
+            "S2MM diag id=%lu class=%s cap=%lu tx_payload=%lu tx_transfer=%lu "
+            "prefix=%lu len_guess=%lu magic=%s off=%lu word=0x%08lX "
+            "best_off=%lu best_magic=0x%08lX best_xor=0x%08lX best_bits=%lu "
+            "rx0=0x%08lX rx_payload0=0x%08lX tx0=0x%08lX "
+            "rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s diff=%lu "
+            "rx_state=0x%08lX wd=%lu,%lu,%lu,%lu,%lu\r\n",
+            (unsigned long)loopback_rx_transfer_id,
+            diag_class,
+            (unsigned long)loopback_rx_expected_len,
+            (dma_block_index >= 0) ? (unsigned long)agg_blocks[dma_block_index].payload_len : 0UL,
+            (unsigned long)loopback_tx_expected_len,
+            (unsigned long)rx_prefix_len,
+            (unsigned long)payload_len_guess,
+            (payload_magic_found != 0) ? "yes" : "no",
+            (payload_magic_found != 0) ? (unsigned long)payload_magic_offset : 0UL,
+            (unsigned long)payload_magic,
+            (best_magic_found != 0) ? (unsigned long)best_magic_offset : 0UL,
+            (unsigned long)best_magic,
+            (unsigned long)best_magic_xor,
+            (unsigned long)best_magic_bits,
+            (unsigned long)rx_head0,
+            (unsigned long)rx_payload_head0,
+            (unsigned long)tx_head0,
+            (unsigned long)rx_crc,
+            (unsigned long)tx_crc,
+            (mismatch_found != 0) ? "DIFF" : "OK",
+            (unsigned long)mismatch_index,
+            (unsigned long)rx_state_history,
+            (unsigned long)wd0,
+            (unsigned long)wd1,
+            (unsigned long)wd2,
+            (unsigned long)wd3,
+            (unsigned long)wd4);
+    }
 
     if (should_log != 0) {
         UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu rx_prefix=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",

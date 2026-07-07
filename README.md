@@ -636,21 +636,24 @@ RX_TRANSFER_LENGTH_BYTES       8192
 NET_DMA_STALL_TIMEOUT_US       6000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
-NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 0
+NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 8
 NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS 0
 NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS 0
-NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER
+NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS 16
+NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS 0
+NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 1
+NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_S2MM
 ```
 
 真实 DA/AD 空口链路下，RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前加了 `NET_DMA_STALL_TIMEOUT_US = 6000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
 
-当前临时启用 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式，用来排除 PC/PS 侧问题：PS 不启动 MM2S/S2MM，不经过 PL/RF，而是把已经通过 UDP 接收、CRC 校验并写入 DDR 聚合块的 TX buffer 直接用 loopback UDP 发回接收 GUI。启动日志应出现 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块返回会打印 `TXECHO return ... first=0x30524941 ...`。若该模式下 AIR0 能 `DONE ... air=1 ... file_crc=1`，说明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；后续需要把 `NET_LOOPBACK_RETURN_SOURCE` 切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM` 才能继续测试 AD9361 RF 链路。
+当前默认已经切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM`，启动日志应出现 `Loopback return source=S2MM RF path`。上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；如果后续再次怀疑 PC/PS 侧，可临时切回该模式，启动日志会显示 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块打印 `TXECHO return ... first=0x30524941 ...`。
 
-为验证 UART 打印是否影响 RF 回环实时性，当前默认关闭逐帧 S2MM 大段诊断日志：不打印前若干块，不按间隔打印，也不因 `cmp=DIFF` 强制打印。这样串口主要保留启动、reset、周期 `STAT`、DMA stall/error 等必要信息。需要定位 payload 偏移或内容时，再临时打开 `NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS`、`NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS` 或 `NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS`。
+为定位 RF/S2MM 问题且避免 UART 过载，当前只对前 8 个 S2MM block 打印较完整的 `S2MM done/rx_head/rx_hdr/rx_payload_head/tx_head`，之后不按间隔打印大段 dump，也不因 `cmp=DIFF` 强制打印整块诊断。另有一行轻量 `S2MM diag ...` 摘要：前 16 个 block 固定打印，之后只在异常时打印。该摘要包含 AIR0/AIRV magic 搜索、最接近 magic 的候选、TX/RX CRC、首字、openofdm RX state history 和 watchdog event 计数。
 
 每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
 
-当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `256` 字节内扫描 AIR0/AIRV magic。如果找到 AIR0，会打印 `S2MM air0 seq=... chunk=... file_off=... stream_off=... tx_stream_off=... desync=...`，并用 `packet_seq * chunk_bytes` 推导 UDP 回传的 `stream_offset`；如果找不到，会打印 `S2MM payload_magic none ...`。这可以区分三类问题：payload 前缀不是固定 16 字节、RX 返回的是延迟旧帧、或者 PL/RF/RX 返回数据本身不是 AIR0/AIRV wire payload。
+当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic。如果找到 AIR0，会打印 `S2MM air0 seq=... chunk=... file_off=... stream_off=... tx_stream_off=... desync=...`，并用 `packet_seq * chunk_bytes` 推导 UDP 回传的 `stream_offset`；如果找不到，会在 `S2MM diag` 中给出 `class=NO_AIR_MAGIC`、最接近 magic 的 `best_off/best_xor/best_bits`。这可以区分三类问题：payload 前缀不是固定 16 字节、RX 返回的是延迟旧帧、或者 PL/RF/RX 返回数据本身不是 AIR0/AIRV wire payload。
 
 MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_configure_tx_frame()` 写入最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 `OpenWifi_Tx_Rearm()` 放在 `net_configure_tx_frame()` 后面，否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
@@ -660,6 +663,7 @@ MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_con
 S2MM loopback debug ready, rx_base=0x01400000 rx_bytes=8192 ...
 S2MM start id=1 block=0 capture=8192 tx_transfer=2880 tx_payload=2880
 S2MM wait id=1 capture=8192 tx_transfer=2880 waited_ms=1000 txdone=... rxdone=... tx_irq=... rx_irq=... rx_sr=...
+S2MM diag id=1 class=NO_AIR_MAGIC cap=8192 tx_payload=1440 tx_transfer=1440 prefix=16 len_guess=... magic=no off=0 word=0x00000000 best_off=... best_magic=... best_xor=... best_bits=... rx0=... rx_payload0=... tx0=0x30524941 rx_crc=... tx_crc=... cmp=DIFF diff=0 rx_state=... wd=...
 S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=OK done=1
 S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=DIFF first_diff=...
 S2MM rx_head ...
@@ -669,7 +673,7 @@ S2MM tx_head ...
 S2MM payload_magic offset=16 magic=0x30524941 expected_prefix=16
 S2MM air0 seq=0 chunk=1440 file_off=0 stream_off=0 tx_stream_off=0 desync=no
 LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...
-DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... count=1
+DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... rx_state=0x... wd=... count=1
 DMA stall recovery reset_done=1
 S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... err_dec=... errors=1
 ```
@@ -678,7 +682,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 
 - 启动后的 `S2MM loopback debug ready` 行。
 - 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
-- 所有 `S2MM payload_magic` 和 `S2MM air0` 行。
+- 所有 `S2MM diag`、`S2MM payload_magic` 和 `S2MM air0` 行。
 - 所有 `LB UDP sent` 行。
 - 同一轮的 `STAT rate` / `STAT state` 行。
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
