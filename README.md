@@ -636,9 +636,14 @@ RX_TRANSFER_LENGTH_BYTES       8192
 NET_DMA_STALL_TIMEOUT_US       6000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
+NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 0
+NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS 0
+NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS 0
 ```
 
 真实 DA/AD 空口链路下，RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前加了 `NET_DMA_STALL_TIMEOUT_US = 6000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
+
+为验证 UART 打印是否影响 RF 回环实时性，当前默认关闭逐帧 S2MM 大段诊断日志：不打印前若干块，不按间隔打印，也不因 `cmp=DIFF` 强制打印。这样串口主要保留启动、reset、周期 `STAT`、DMA stall/error 等必要信息。需要定位 payload 偏移或内容时，再临时打开 `NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS`、`NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS` 或 `NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS`。
 
 每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
 

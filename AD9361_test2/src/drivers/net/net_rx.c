@@ -1116,9 +1116,11 @@ static void net_loopback_poll_s2mm(void)
         air0_offset_valid = 1;
     }
 
+#if NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS
     if (mismatch_found != 0) {
         should_log = 1;
     }
+#endif
 
     if (should_log != 0) {
         UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu rx_prefix=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
