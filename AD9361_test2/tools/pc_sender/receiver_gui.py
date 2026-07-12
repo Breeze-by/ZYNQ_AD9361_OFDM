@@ -683,6 +683,10 @@ class ReceiverGui:
             )
             return
 
+        if event_name == "video_diag":
+            self._append_log(f"VIDEO_DIAG {payload['message']}")
+            return
+
         if event_name == "progress":
             stats = payload["stats"]
             self._update_stats(stats)

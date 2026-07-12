@@ -363,6 +363,8 @@ class LoopbackReceiver:
         self._air_bad_meta_seqs = set()
         self._air_meta = None
         self._video = VideoStreamAssembler()
+        self._airv_diag_count = 0
+        self._airv_wait_diag_offset = -1
 
     def stop(self):
         self._stop_requested = True
@@ -378,6 +380,12 @@ class LoopbackReceiver:
     def _emit(self, callback: Optional[Callable[[str, dict], None]], event_name: str, payload: dict):
         if callback is not None:
             callback(event_name, payload)
+
+    def _emit_airv_diag(self, callback, message: str, *, force: bool = False):
+        if self._airv_diag_count >= 64 or (not force and self._airv_diag_count >= 24):
+            return
+        self._airv_diag_count += 1
+        self._emit(callback, "video_diag", {"message": message})
 
     def _refresh_rates(self, stats: ReceiverStats, event_time: Optional[float] = None):
         if event_time is None:
@@ -597,7 +605,7 @@ class LoopbackReceiver:
             stats.air_last_seq = header.packet_seq
         return True
 
-    def _try_enable_air_mode(self, stats: ReceiverStats):
+    def _try_enable_air_mode(self, stats: ReceiverStats, callback=None):
         if self._air_checked:
             return
 
@@ -615,6 +623,10 @@ class LoopbackReceiver:
             self._airv_mode = True
             stats.airv_mode = True
             self._airv_parse_offset = 0
+            self._emit_airv_diag(
+                callback,
+                f"mode=AIRV contiguous={contiguous} first=0x{first_word:08X}",
+            )
 
     def _refresh_airv_stats(self, stats: ReceiverStats):
         metrics = self._video.metrics()
@@ -699,7 +711,7 @@ class LoopbackReceiver:
     def _parse_airv_stream(self, stats: ReceiverStats, callback):
         contiguous, _gaps = self._raw_assembler.coverage()
 
-        self._try_enable_air_mode(stats)
+        self._try_enable_air_mode(stats, callback)
         if not self._airv_mode:
             return
 
@@ -716,21 +728,50 @@ class LoopbackReceiver:
                 scan_data = self._raw_assembler.read_at(self._airv_parse_offset, scan_len)
                 next_magic = scan_data.find(struct.pack("<I", AIRV_MAGIC), 1)
                 if next_magic < 0:
+                    self._emit_airv_diag(
+                        callback,
+                        f"wait_magic parse_off={self._airv_parse_offset} "
+                        f"contiguous={contiguous} scan={scan_len} "
+                        f"head={header_bytes[:8].hex()}",
+                    )
                     self._airv_parse_offset = max(contiguous - 3, self._airv_parse_offset)
                     return
                 stats.airv_bad_header += 1
+                self._emit_airv_diag(
+                    callback,
+                    f"resync parse_off={self._airv_parse_offset} skip={next_magic} "
+                    f"next_off={self._airv_parse_offset + next_magic} "
+                    f"head={header_bytes[:8].hex()}",
+                    force=True,
+                )
                 self._airv_parse_offset += next_magic
                 continue
 
             try:
                 header = parse_airv_header(header_bytes)
-            except ValueError:
+            except ValueError as exc:
                 stats.airv_bad_header += 1
+                self._emit_airv_diag(
+                    callback,
+                    f"bad_header parse_off={self._airv_parse_offset} "
+                    f"reason={exc} head={header_bytes[:16].hex()}",
+                    force=True,
+                )
                 self._airv_parse_offset += 1
                 continue
 
             if self._airv_parse_offset + header.chunk_bytes > contiguous:
+                if self._airv_wait_diag_offset != self._airv_parse_offset:
+                    self._airv_wait_diag_offset = self._airv_parse_offset
+                    self._emit_airv_diag(
+                        callback,
+                        f"wait_chunk parse_off={self._airv_parse_offset} "
+                        f"need_end={self._airv_parse_offset + header.chunk_bytes} "
+                        f"contiguous={contiguous} frame={header.frame_seq} "
+                        f"frag={header.frag_index}/{header.frag_count} chunk={header.chunk_bytes}",
+                    )
                 return
+            self._airv_wait_diag_offset = -1
 
             payload = self._raw_assembler.read_at(
                 self._airv_parse_offset + header.header_len,
@@ -740,9 +781,24 @@ class LoopbackReceiver:
                 return
 
             fragment_crc_ok = airv_crc32(payload) == header.fragment_crc32
+            self._emit_airv_diag(
+                callback,
+                f"fragment parse_off={self._airv_parse_offset} frame={header.frame_seq} "
+                f"frag={header.frag_index}/{header.frag_count} type={header.frame_type} "
+                f"frag_len={header.fragment_len} frame_size={header.frame_size} "
+                f"chunk={header.chunk_bytes} frag_crc={'OK' if fragment_crc_ok else 'BAD'}",
+                force=not fragment_crc_ok,
+            )
             frames = self._video.process_fragment(header, payload, fragment_crc_ok)
             self._refresh_airv_stats(stats)
             for frame in frames:
+                self._emit_airv_diag(
+                    callback,
+                    f"frame_complete frame={frame.frame_seq} type={frame.frame_type} "
+                    f"bytes={len(frame.payload)} frag_crc={'BAD' if frame.bad_fragment_crc else 'OK'} "
+                    f"frame_crc={'BAD' if frame.bad_frame_crc else 'OK'}",
+                    force=frame.bad_fragment_crc or frame.bad_frame_crc,
+                )
                 self._emit(callback, "video_frame", {
                     "frame_seq": frame.frame_seq,
                     "frame_type": frame.frame_type,

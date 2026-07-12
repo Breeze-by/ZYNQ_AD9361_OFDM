@@ -442,6 +442,14 @@ python -m pip install av pillow
 
 如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；如果连续解码失败或参考帧状态不可用，会等待下一帧 keyframe 后重建 H.264 解码器并继续显示。
 
+AIRV 接收 GUI 还会限量输出 `VIDEO_DIAG` 分层诊断。正常短视频应依次看到
+`mode=AIRV`、`fragment ... frag_crc=OK` 和
+`frame_complete ... frame_crc=OK`。`wait_chunk` 表示接收端仍在等待当前固定
+wire chunk 的后续字节；`wait_magic`、`resync` 或 `bad_header` 则优先指向
+回传流偏移、连续性或 AIRV 头损坏。如果 fragment 和 frame CRC 均正常，但
+`Decoded` / `Displayed` 不增长，应继续查看 `VIDEO_PREVIEW`，重点检查
+PyAV/Pillow 环境或 H.264 解码状态。
+
 AIRV 接收日志示例：
 
 ```text

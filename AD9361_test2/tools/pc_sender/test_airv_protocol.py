@@ -26,9 +26,39 @@ from video_protocol import (
     parse_airv_header,
 )
 from video_receiver_core import VideoStreamAssembler
+from receiver_core import LoopbackReceiver, ReceiverConfig, ReceiverStats
 
 
 class AirvProtocolTests(unittest.TestCase):
+    def test_receiver_emits_airv_layer_diagnostics(self):
+        packet = build_airv_packet(
+            b"abc",
+            session_id=1,
+            stream_id=2,
+            frame_seq=0,
+            frag_index=0,
+            frag_count=1,
+            frame_type=AIRV_FRAME_KEY,
+            frame_size=3,
+            fragment_offset=0,
+            chunk_bytes=1440,
+            frame_crc32=crc32(b"abc"),
+            pts_us=0,
+        ).ljust(1440, b"\x00")
+        receiver = LoopbackReceiver(ReceiverConfig())
+        stats = ReceiverStats()
+        events = []
+        try:
+            receiver._raw_assembler.write(0, packet)
+            receiver._parse_airv_stream(stats, lambda name, payload: events.append((name, payload)))
+        finally:
+            receiver._discard_unsaved()
+
+        messages = [payload["message"] for name, payload in events if name == "video_diag"]
+        self.assertTrue(any("mode=AIRV" in message for message in messages))
+        self.assertTrue(any("fragment parse_off=0" in message for message in messages))
+        self.assertTrue(any("frame_complete frame=0" in message for message in messages))
+
     def test_header_roundtrip(self):
         packet = build_airv_packet(
             b"abc",
