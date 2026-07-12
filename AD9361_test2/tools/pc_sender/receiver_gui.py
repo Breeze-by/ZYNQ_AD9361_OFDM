@@ -38,6 +38,7 @@ class ReceiverGui:
         self.receiver = None
         self.last_summary_log_time = 0.0
         self.last_preview_log_time = 0.0
+        self.last_preview_summary_log_time = 0.0
         self.video_decoder = VideoPreviewDecoder()
         self.preview_photo = None
         self.preview_unavailable_logged = False
@@ -429,6 +430,7 @@ class ReceiverGui:
         self.packet_chart.reset()
         self.last_summary_log_time = 0.0
         self.last_preview_log_time = 0.0
+        self.last_preview_summary_log_time = 0.0
 
     def _on_done(self):
         self.start_button.configure(state=tk.NORMAL)
@@ -635,6 +637,21 @@ class ReceiverGui:
         self.preview_decoded_var.set(str(result.decoded_count))
         self.preview_errors_var.set(str(result.decoder_errors))
         self.preview_waiting_var.set(str(int(waiting_keyframe)))
+        now = time.time()
+        if (
+            self.last_preview_summary_log_time == 0.0 or
+            (now - self.last_preview_summary_log_time) >= 1.0 or
+            result.error
+        ):
+            self.last_preview_summary_log_time = now
+            self._append_log(
+                f"VIDEO_PREVIEW input={stats.airv_frames_show} "
+                f"backlog={payload.get('queue_size', 0)} drops={self.preview_input_drops} "
+                f"decoded={result.decoded_count} rendered={self.preview_rendered_frames} "
+                f"decoder_errors={result.decoder_errors} waiting_key={int(waiting_keyframe)} "
+                f"images={len(result.images)} skipped={int(result.skipped_waiting_keyframe)} "
+                f"error={result.error or '-'}"
+            )
 
         if result.error:
             self.preview_status_var.set("Unavailable" if not self.video_decoder.available else "Decode error")
@@ -744,6 +761,16 @@ class ReceiverGui:
                 f"latency_ms={stats.airv_latency_ms:.1f} "
                 f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
                 f"latency_max_ms={stats.airv_latency_max_ms:.1f}"
+            )
+            self._append_log(
+                f"VIDEO_PREVIEW_DONE input={stats.airv_frames_show} "
+                f"backlog={self.preview_queue.qsize()} drops={self.preview_input_drops} "
+                f"decoded={self.video_decoder.decoded_frames} "
+                f"rendered={self.preview_rendered_frames} "
+                f"decoder_errors={self.video_decoder.decoder_errors} "
+                f"waiting_key={int(self.video_decoder.waiting_keyframe)} "
+                f"available={int(self.video_decoder.available)} "
+                f"status={self.video_decoder.status_text()}"
             )
             return
 

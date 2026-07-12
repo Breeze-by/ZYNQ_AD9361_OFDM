@@ -460,6 +460,12 @@ AIRV 是实时预览模式，允许在开头若干 S2MM block 丢失时从第一
 `initial_missing=...`；接收器继续组帧并等待后续 H.264 keyframe。该行为不用于
 AIR0，AIR0 精确文件恢复仍要求从 offset 0 连续接收，不能跳过开头缺失。
 
+预览线程正常运行时，接收 GUI 每秒输出一条 `VIDEO_PREVIEW`，包含
+`input/backlog/drops/decoded/rendered/decoder_errors/waiting_key/images/skipped/error`；
+AIRV idle finish 时还会输出 `VIDEO_PREVIEW_DONE`。其中 `decoded` 是 PyAV 解码
+出的图像累计数，`rendered` 是 Tk 实际显示数，两者可用于区分组帧、解码和 GUI
+渲染三个阶段。
+
 AIRV 接收日志示例：
 
 ```text
