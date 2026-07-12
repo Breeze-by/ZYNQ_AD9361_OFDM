@@ -89,6 +89,52 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertEqual(stats.airv_frames_rx, 1)
         self.assertTrue(any("late_attach initial_missing=23040" in message for message in messages))
 
+    def test_receiver_can_skip_airv_gap_mid_stream(self):
+        first = build_airv_packet(
+            b"abc",
+            session_id=1,
+            stream_id=2,
+            frame_seq=0,
+            frag_index=0,
+            frag_count=2,
+            frame_type=AIRV_FRAME_KEY,
+            frame_size=6,
+            fragment_offset=0,
+            chunk_bytes=1440,
+            frame_crc32=crc32(b"abcdef"),
+            pts_us=0,
+        ).ljust(1440, b"\x00")
+        recovered = build_airv_packet(
+            b"xyz",
+            session_id=1,
+            stream_id=2,
+            frame_seq=2,
+            frag_index=0,
+            frag_count=1,
+            frame_type=AIRV_FRAME_KEY,
+            frame_size=3,
+            fragment_offset=0,
+            chunk_bytes=1440,
+            frame_crc32=crc32(b"xyz"),
+            pts_us=2 * 33333,
+        ).ljust(1440, b"\x00")
+        receiver = LoopbackReceiver(ReceiverConfig())
+        stats = ReceiverStats()
+        events = []
+        try:
+            receiver._raw_assembler.write(0, first)
+            receiver._parse_airv_stream(stats, lambda name, payload: events.append((name, payload)))
+            receiver._raw_assembler.write(4320, recovered)
+            receiver._parse_airv_stream(stats, lambda name, payload: events.append((name, payload)))
+        finally:
+            receiver._discard_unsaved()
+
+        messages = [payload["message"] for name, payload in events if name == "video_diag"]
+        self.assertEqual(stats.airv_stream_gap_bytes, 2880)
+        self.assertEqual(stats.airv_frames_rx, 1)
+        self.assertEqual(stats.airv_frames_drop, 1)
+        self.assertTrue(any("gap_skip from=1440 to=4320 bytes=2880" in message for message in messages))
+
     def test_header_roundtrip(self):
         packet = build_airv_packet(
             b"abc",

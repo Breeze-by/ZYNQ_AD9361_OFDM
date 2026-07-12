@@ -124,6 +124,7 @@ class ReceiverStats:
     airv_fps: float = 0.0
     airv_last_frame_seq: int = -1
     airv_initial_missing_bytes: int = 0
+    airv_stream_gap_bytes: int = 0
 
 
 def parse_args():
@@ -321,6 +322,12 @@ class SparseFileAssembler:
                 break
         return offset
 
+    def next_range_after(self, offset: int) -> Optional[Tuple[int, int]]:
+        for start, end in self.ranges:
+            if start > offset:
+                return start, end
+        return None
+
     def sample(self, length: int = 64) -> bytes:
         self.fp.flush()
         self.fp.seek(0)
@@ -377,6 +384,7 @@ class LoopbackReceiver:
         self._video = VideoStreamAssembler()
         self._airv_diag_count = 0
         self._airv_wait_diag_offset = -1
+        self._airv_chunk_bytes = 0
 
     def stop(self):
         self._stop_requested = True
@@ -742,9 +750,12 @@ class LoopbackReceiver:
         self._try_enable_air_mode(stats, callback)
         if not self._airv_mode:
             return
-        contiguous = self._raw_assembler.contiguous_end_from(self._airv_parse_offset)
-
-        while self._airv_parse_offset + AIRV_HEADER_BYTES <= contiguous:
+        while True:
+            contiguous = self._raw_assembler.contiguous_end_from(self._airv_parse_offset)
+            if self._airv_parse_offset + AIRV_HEADER_BYTES > contiguous:
+                if self._try_skip_airv_gap(stats, callback, contiguous):
+                    continue
+                return
             header_bytes = self._raw_assembler.read_at(
                 self._airv_parse_offset,
                 AIRV_HEADER_BYTES,
@@ -789,7 +800,11 @@ class LoopbackReceiver:
                 self._airv_parse_offset += 1
                 continue
 
+            self._airv_chunk_bytes = header.chunk_bytes
+
             if self._airv_parse_offset + header.chunk_bytes > contiguous:
+                if self._try_skip_airv_gap(stats, callback, contiguous):
+                    continue
                 if self._airv_wait_diag_offset != self._airv_parse_offset:
                     self._airv_wait_diag_offset = self._airv_parse_offset
                     self._emit_airv_diag(
@@ -840,6 +855,35 @@ class LoopbackReceiver:
                 })
 
             self._airv_parse_offset += header.chunk_bytes
+
+    def _try_skip_airv_gap(self, stats: ReceiverStats, callback, contiguous_end: int) -> bool:
+        chunk_bytes = self._airv_chunk_bytes
+        if chunk_bytes <= AIRV_HEADER_BYTES:
+            return False
+        next_range = self._raw_assembler.next_range_after(contiguous_end)
+        if next_range is None:
+            return False
+        next_offset, next_end = next_range
+        gap_bytes = next_offset - self._airv_parse_offset
+        if gap_bytes < chunk_bytes or (gap_bytes % chunk_bytes) != 0:
+            return False
+        if (next_end - next_offset) < AIRV_HEADER_BYTES:
+            return False
+        if struct.unpack("<I", self._raw_assembler.read_at(next_offset, 4))[0] != AIRV_MAGIC:
+            return False
+
+        old_offset = self._airv_parse_offset
+        self._video.flush_missing()
+        stats.airv_stream_gap_bytes += gap_bytes
+        self._airv_parse_offset = next_offset
+        self._airv_wait_diag_offset = -1
+        self._emit_airv_diag(
+            callback,
+            f"gap_skip from={old_offset} to={next_offset} bytes={gap_bytes} "
+            f"available_end={next_end} chunk={chunk_bytes}",
+            force=True,
+        )
+        return True
 
     def _process_loopback(self, packet: dict, stats: ReceiverStats, callback):
         payload = packet["payload"]
