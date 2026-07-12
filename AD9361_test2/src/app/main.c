@@ -179,7 +179,7 @@ static void OpenWifi_RxRegs_Init_Loopback(void)
      * 1 = digital loopback from tx_intf IQ.
      * 0 = real ADC/AD9361 RX path.
      */
-    Xil_Out32(REG(RX_INTF_BASE, 3), 0x00000010);
+    Xil_Out32(REG(RX_INTF_BASE, 3), 0x00000100);
 
     /*
      * slv_reg4:

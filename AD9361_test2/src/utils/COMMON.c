@@ -19,7 +19,7 @@ uint64_t tx_lo_freq = 2400e6;
 uint64_t rx_lo_freq = 2400e6;
 uint32_t bandwidth = 20e6;
 int32_t gain = 10;
-uint32_t txatt = 10000U;
+uint32_t txatt = 10000;
 uint32_t regr = REG_PRODUCT_ID;
 
 AD9361_InitParam default_init_param = {
