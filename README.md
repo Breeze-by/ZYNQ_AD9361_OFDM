@@ -656,6 +656,11 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 
 ## AD9361 RF 回环与 S2MM 调试
 
+当前 PL 数字回环启动排查将 DMA stall watchdog 从 `6000 us` 临时放宽到
+`20000 us`。AIR0 Test Data 测试用于区分两种情况：如果前几个块在
+6～20 ms 内完成，旧 watchdog 阈值过短；如果仍连续超时并依赖多次 DMA reset
+恢复，则问题优先位于 PL RX/S2MM 启动状态或 AXI-Stream/TLAST 握手。
+
 当前代码已开启 AD9361 RF 回环后的 S2MM 接收调试和 UDP 回传：
 
 ```text
@@ -663,7 +668,7 @@ NET_LOOPBACK_S2MM_DEBUG_ENABLE 1
 NET_LOOPBACK_UDP_RETURN_ENABLE 1
 RX_BUFFER_BASE                 0x01400000
 RX_TRANSFER_LENGTH_BYTES       8192
-NET_DMA_STALL_TIMEOUT_US       6000
+NET_DMA_STALL_TIMEOUT_US       20000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 8
@@ -675,7 +680,7 @@ NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 1
 NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_S2MM
 ```
 
-真实 DA/AD 空口链路下，RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前加了 `NET_DMA_STALL_TIMEOUT_US = 6000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
+RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前使用 `NET_DMA_STALL_TIMEOUT_US = 20000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
 
 当前默认已经切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM`，启动日志应出现 `Loopback return source=S2MM RF path`。上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；如果后续再次怀疑 PC/PS 侧，可临时切回该模式，启动日志会显示 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块打印 `TXECHO return ... first=0x30524941 ...`。
 
