@@ -123,6 +123,7 @@ class ReceiverStats:
     airv_latency_max_ms: float = 0.0
     airv_fps: float = 0.0
     airv_last_frame_seq: int = -1
+    airv_initial_missing_bytes: int = 0
 
 
 def parse_args():
@@ -308,6 +309,17 @@ class SparseFileAssembler:
             if end > contiguous:
                 contiguous = end
         return contiguous, gaps
+
+    def first_range(self) -> Optional[Tuple[int, int]]:
+        return self.ranges[0] if self.ranges else None
+
+    def contiguous_end_from(self, offset: int) -> int:
+        for start, end in self.ranges:
+            if start <= offset < end:
+                return end
+            if start > offset:
+                break
+        return offset
 
     def sample(self, length: int = 64) -> bytes:
         self.fp.flush()
@@ -610,10 +622,19 @@ class LoopbackReceiver:
             return
 
         contiguous, _gaps = self._raw_assembler.coverage()
+        probe_offset = 0
         if contiguous < 4:
-            return
+            first_range = self._raw_assembler.first_range()
+            if first_range is None or (first_range[1] - first_range[0]) < 4:
+                return
+            probe_offset = first_range[0]
 
-        first_word = struct.unpack("<I", self._raw_assembler.read_at(0, 4))[0]
+        first_word = struct.unpack(
+            "<I",
+            self._raw_assembler.read_at(probe_offset, 4),
+        )[0]
+        if probe_offset != 0 and first_word != AIRV_MAGIC:
+            return
         self._air_checked = True
         if first_word == AIR_MAGIC:
             self._air_mode = True
@@ -622,11 +643,20 @@ class LoopbackReceiver:
         elif first_word == AIRV_MAGIC:
             self._airv_mode = True
             stats.airv_mode = True
-            self._airv_parse_offset = 0
+            self._airv_parse_offset = probe_offset
+            stats.airv_initial_missing_bytes = probe_offset
             self._emit_airv_diag(
                 callback,
-                f"mode=AIRV contiguous={contiguous} first=0x{first_word:08X}",
+                f"mode=AIRV parse_off={probe_offset} contiguous={contiguous} "
+                f"initial_missing={probe_offset} first=0x{first_word:08X}",
             )
+            if probe_offset != 0:
+                self._emit_airv_diag(
+                    callback,
+                    f"late_attach initial_missing={probe_offset} "
+                    f"available_end={self._raw_assembler.contiguous_end_from(probe_offset)}",
+                    force=True,
+                )
 
     def _refresh_airv_stats(self, stats: ReceiverStats):
         metrics = self._video.metrics()
@@ -709,11 +739,10 @@ class LoopbackReceiver:
             self._update_air_missing(stats)
 
     def _parse_airv_stream(self, stats: ReceiverStats, callback):
-        contiguous, _gaps = self._raw_assembler.coverage()
-
         self._try_enable_air_mode(stats, callback)
         if not self._airv_mode:
             return
+        contiguous = self._raw_assembler.contiguous_end_from(self._airv_parse_offset)
 
         while self._airv_parse_offset + AIRV_HEADER_BYTES <= contiguous:
             header_bytes = self._raw_assembler.read_at(

@@ -701,6 +701,7 @@ class ReceiverGui:
                         f"bad_meta={stats.airv_bad_meta} bad_frag_crc={stats.airv_bad_frag_crc} "
                         f"bad_frame_crc={stats.airv_bad_frame_crc} keyframe_rx={stats.airv_keyframe_rx} "
                         f"waiting_keyframe={stats.airv_waiting_keyframe} fps={stats.airv_fps:.1f} "
+                        f"initial_missing={stats.airv_initial_missing_bytes} "
                         f"latency_ms={stats.airv_latency_ms:.1f} "
                         f"latency_avg_ms={stats.airv_latency_avg_ms:.1f} "
                         f"latency_max_ms={stats.airv_latency_max_ms:.1f}"

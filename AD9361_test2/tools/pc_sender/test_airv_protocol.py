@@ -59,6 +59,36 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertTrue(any("fragment parse_off=0" in message for message in messages))
         self.assertTrue(any("frame_complete frame=0" in message for message in messages))
 
+    def test_receiver_can_late_attach_to_airv_after_initial_gap(self):
+        packet = build_airv_packet(
+            b"abc",
+            session_id=1,
+            stream_id=2,
+            frame_seq=8,
+            frag_index=0,
+            frag_count=1,
+            frame_type=AIRV_FRAME_KEY,
+            frame_size=3,
+            fragment_offset=0,
+            chunk_bytes=1440,
+            frame_crc32=crc32(b"abc"),
+            pts_us=8 * 33333,
+        ).ljust(1440, b"\x00")
+        receiver = LoopbackReceiver(ReceiverConfig())
+        stats = ReceiverStats()
+        events = []
+        try:
+            receiver._raw_assembler.write(23040, packet)
+            receiver._parse_airv_stream(stats, lambda name, payload: events.append((name, payload)))
+        finally:
+            receiver._discard_unsaved()
+
+        messages = [payload["message"] for name, payload in events if name == "video_diag"]
+        self.assertTrue(stats.airv_mode)
+        self.assertEqual(stats.airv_initial_missing_bytes, 23040)
+        self.assertEqual(stats.airv_frames_rx, 1)
+        self.assertTrue(any("late_attach initial_missing=23040" in message for message in messages))
+
     def test_header_roundtrip(self):
         packet = build_airv_packet(
             b"abc",

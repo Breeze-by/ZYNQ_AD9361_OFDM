@@ -2,6 +2,10 @@
 
 这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前板级链路已经从纯 PL 数字回环推进到 AD9361 RF 回环：PL 侧 OFDM 调制后的数据送入 AD9361 TX，经 SMA 线直连到 AD9361 RX，再进入 PL 侧 OFDM 接收/解调；解调后的数据通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。
 
+当前排查 AIRV 视频问题时，Vivado/PL 已临时切回数字回环：OFDM 调制输出在
+PL 内直接送入解调接收路径，不经过 AD9361 TX、SMA 和 AD9361 RX。下面的 RF
+拓扑仍是工程目标链路；本轮日志和测试结论应按 PL 数字回环解释。
+
 ```text
 PC UDP sender
 -> Zynq PS lwIP RAW UDP
@@ -449,6 +453,12 @@ wire chunk 的后续字节；`wait_magic`、`resync` 或 `bad_header` 则优先�
 回传流偏移、连续性或 AIRV 头损坏。如果 fragment 和 frame CRC 均正常，但
 `Decoded` / `Displayed` 不增长，应继续查看 `VIDEO_PREVIEW`，重点检查
 PyAV/Pillow 环境或 H.264 解码状态。
+
+AIRV 是实时预览模式，允许在开头若干 S2MM block 丢失时从第一个实际收到的
+完整 AIRV chunk 中途接入。此时日志会打印
+`VIDEO_DIAG late_attach initial_missing=...`，`VIDEO` 行也会保留
+`initial_missing=...`；接收器继续组帧并等待后续 H.264 keyframe。该行为不用于
+AIR0，AIR0 精确文件恢复仍要求从 offset 0 连续接收，不能跳过开头缺失。
 
 AIRV 接收日志示例：
 
