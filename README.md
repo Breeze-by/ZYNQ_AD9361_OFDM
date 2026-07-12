@@ -656,12 +656,13 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 
 ## AD9361 RF 回环与 S2MM 调试
 
-当前 PL 数字回环启动排查将 DMA stall watchdog 从 `6000 us` 临时放宽到
-`20000 us`。AIR0 Test Data 测试用于区分两种情况：如果前几个块在
-6～20 ms 内完成，旧 watchdog 阈值过短；如果仍连续超时并依赖多次 DMA reset
-恢复，则问题优先位于 PL RX/S2MM 启动状态或 AXI-Stream/TLAST 握手。
+当前 PL 数字回环使用 `NET_DMA_STALL_TIMEOUT_US = 20000`。64 KiB AIR0
+精确恢复测试表明前 8 个块的主循环观察耗时约 `8.1～10.1 ms`，旧 `6000 us`
+阈值会误判正常 S2MM 为 stall；改为 `20000 us` 后所有块 `cmp=OK`，文件
+`65536/65536` 字节、48/48 AIR0 包和最终 CRC 全部正确。
 成功完成的 `S2MM diag` 和 `S2MM done` 会输出 `wait_us`，表示从 arm S2MM
-到主循环观察到 `RxDone` 的耗时，用于确定最终 watchdog 阈值。
+到主循环观察到 `RxDone` 的耗时。该值包含主循环处理 UART、lwIP 和 UDP 回传
+造成的观察延迟；只要进入完成分支，就不会再按 watchdog 判为超时。
 
 当前代码已开启 AD9361 RF 回环后的 S2MM 接收调试和 UDP 回传：
 
