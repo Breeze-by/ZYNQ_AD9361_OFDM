@@ -660,6 +660,8 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 `20000 us`。AIR0 Test Data 测试用于区分两种情况：如果前几个块在
 6～20 ms 内完成，旧 watchdog 阈值过短；如果仍连续超时并依赖多次 DMA reset
 恢复，则问题优先位于 PL RX/S2MM 启动状态或 AXI-Stream/TLAST 握手。
+成功完成的 `S2MM diag` 和 `S2MM done` 会输出 `wait_us`，表示从 arm S2MM
+到主循环观察到 `RxDone` 的耗时，用于确定最终 watchdog 阈值。
 
 当前代码已开启 AD9361 RF 回环后的 S2MM 接收调试和 UDP 回传：
 

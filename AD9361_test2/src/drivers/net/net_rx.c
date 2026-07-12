@@ -1246,6 +1246,8 @@ static void net_loopback_poll_s2mm(void)
     loopback_rx_busy = 0;
     loopback_rx_done_for_current = 1;
     loopback_rx_done_count += 1U;
+    XTime_GetTime(&now_time);
+    total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
     Xil_DCacheInvalidateRange((UINTPTR)loopback_rx_buffer, loopback_rx_expected_len);
 
     should_log = net_loopback_should_log(loopback_rx_transfer_id);
@@ -1344,7 +1346,7 @@ static void net_loopback_poll_s2mm(void)
 
     if (should_summarize != 0) {
         UART_Printf(
-            "S2MM diag id=%lu class=%s cap=%lu tx_payload=%lu tx_transfer=%lu "
+            "S2MM diag id=%lu class=%s wait_us=%lu cap=%lu tx_payload=%lu tx_transfer=%lu "
             "prefix=%lu len_guess=%lu magic=%s off=%lu word=0x%08lX "
             "best_off=%lu best_magic=0x%08lX best_xor=0x%08lX best_bits=%lu "
             "rx0=0x%08lX rx_payload0=0x%08lX tx0=0x%08lX "
@@ -1352,6 +1354,7 @@ static void net_loopback_poll_s2mm(void)
             "rx_state=0x%08lX wd=%lu,%lu,%lu,%lu,%lu\r\n",
             (unsigned long)loopback_rx_transfer_id,
             diag_class,
+            (unsigned long)total_wait_us,
             (unsigned long)loopback_rx_expected_len,
             (dma_block_index >= 0) ? (unsigned long)agg_blocks[dma_block_index].payload_len : 0UL,
             (unsigned long)loopback_tx_expected_len,
@@ -1380,8 +1383,9 @@ static void net_loopback_poll_s2mm(void)
     }
 
     if (should_log != 0) {
-        UART_Printf("S2MM done id=%lu capture=%lu tx_transfer=%lu rx_prefix=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
+        UART_Printf("S2MM done id=%lu wait_us=%lu capture=%lu tx_transfer=%lu rx_prefix=%lu cmp_len=%lu irq=0x%08lX sr=0x%08lX rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s",
             (unsigned long)loopback_rx_transfer_id,
+            (unsigned long)total_wait_us,
             (unsigned long)loopback_rx_expected_len,
             (unsigned long)loopback_tx_expected_len,
             (unsigned long)rx_prefix_len,
