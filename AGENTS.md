@@ -22,7 +22,7 @@
 - AIRV 接收器允许开头 S2MM block 丢失后从第一个完整 AIRV chunk 中途接入，日志打印 `VIDEO_DIAG late_attach initial_missing=...`；随后等待 H.264 keyframe 恢复预览。AIR0 仍要求 offset 0 起始连续，不能用该行为掩盖精确文件缺失。
 - AIRV 流中间出现完整 chunk 级缺口时，接收器会在下一段通过 chunk 对齐和 AIRV magic 校验后打印 `VIDEO_DIAG gap_skip ...`、丢弃跨缺口未完成帧并等待 keyframe；`VIDEO stream_gap=...` 累计跳过字节。AIR0 不跳过流中缺口。
 - AIRV 接收 GUI 每秒输出 `VIDEO_PREVIEW input/backlog/drops/decoded/rendered/decoder_errors/waiting_key/images/skipped/error`，结束时输出 `VIDEO_PREVIEW_DONE`；用它区分组帧成功后是 PyAV 解码未出图，还是 Tk 未渲染。
-- 当前为定位 AIRV 问题，Vivado/PL 已临时切回数字回环：PL OFDM 调制输出直接送入解调接收路径，不经过 AD9361 TX、SMA 和 AD9361 RX；RF 回环仍是后续目标链路。板级调试继续分阶段做，不要一次性写完大功能；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
+- 当前 SDK 默认 `APP_RX_SOURCE=APP_RX_SOURCE_AD9361`，走真实 AD9361 TX -> SMA -> AD9361 RX 链路；PL 数字回环保留为 `APP_RX_SOURCE_DIGITAL_LOOPBACK` 诊断选项。启动日志必须打印当前 RX source。板级调试继续分阶段做；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
 - 当前默认走真实 `NET_LOOPBACK_RETURN_SOURCE_S2MM` RF/S2MM 回传路径，不再是 `TX_BUFFER` 诊断模式。S2MM 前 8 个 block 会打印较完整 dump，前 16 个 block 和后续异常 block 会打印一行 `S2MM diag ...` 摘要。需要用户反馈时，优先要 `RXCFG loopback peer`、`UDP RX reset`、`S2MM diag`、`STAT rate/state`、`DMA stall timeout/recovery`、`S2MM error`、`MM2S error`；如果前 8 包内还有详细日志，也要复制 `S2MM start/done`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`S2MM payload_magic`、`S2MM air0`、`LB UDP sent`。如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、AIR0 的 `PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...`、`DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=...`，以及 AIRV 的 `VIDEO frame_rx=... frame_show=... frame_drop=... frag_rx=... frag_missing=... bad_hdr=... bad_meta=... bad_frag_crc=... bad_frame_crc=... keyframe_rx=... waiting_keyframe=... fps=... latency_ms=...`、`VIDEO_FRAME ...`、`VIDEO_DONE ...`、`DONE VIDEO ...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
@@ -97,6 +97,7 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - AIRV 预览依赖可选 `av` 和 `Pillow`。接收 GUI 会打开独立 `AIRV Preview` 窗口，默认 `1280x720`；后台线程解码，Tk 主线程约 30fps 刷新。预览输入队列最多缓存 240 个 assembled encoded frame，按 H.264 顺序送入解码器；队列满时才丢弃预览队列并等待下一帧 keyframe。`Preview Input`、`Preview Backlog`、`Preview Drops`、`Decoded`、`Displayed`、`Decoder Errors`、`Waiting Key` 是预览指标，其中 `Displayed` 表示实际渲染到 Tk 预览窗口的帧数；预览丢帧不代表 AIRV 传输丢包。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 3000。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
+- 当前 AD9361/PL 速率契约是 2R2T LVDS `40 MSPS`、DATA_CLK 约 `160 MHz`；`tx_fb_clock_delay=4`（寄存器读回 `0x40`，约 `1.2 ns`）。不要只在 SDK 改采样率而不同时检查 PL bridge 和 XDC。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
 - 发送 GUI 的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。判断文件是否完整，以发送端 `app_ack == total_size` 和接收端 `rx/high == file_size`、`gaps=0`、`crc=0`、`len=0` 为准。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。

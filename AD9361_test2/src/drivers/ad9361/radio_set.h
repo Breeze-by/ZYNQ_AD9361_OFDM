@@ -6,6 +6,16 @@
 #include "ad9361.h"
 #include "ad9361_api.h"
 
+/*
+ * PL clock contract for the current 2R2T LVDS design:
+ *   AD9361 sample rate = 40 MSPS
+ *   AD9361 DATA_CLK    = 160 MHz
+ * The PL bridge transfers one 64-bit sample word every four DATA_CLK cycles.
+ */
+#define AD9361_SAMPLE_RATE_HZ 40000000U
+#define AD9361_SAMPLE_RATE_TOLERANCE_HZ 1000U
+#define AD9361_RF_BANDWIDTH_HZ 20000000U
+
 extern struct ad9361_rf_phy *ad9361_phy;
 extern struct ad9361_rf_phy *ad9361_phy_b;
 extern uint64_t rfout;

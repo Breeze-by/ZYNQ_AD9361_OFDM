@@ -7,6 +7,19 @@
 #define APP_ENABLE_ICACHE 1
 #define APP_ENABLE_DCACHE 1
 
+/*
+ * RX source selected by rx_intf slv_reg3[8]. Keep the choice in one place so
+ * an RF build cannot accidentally retain the old digital-loopback register
+ * literal from main.c.
+ */
+#define APP_RX_SOURCE_AD9361 0U
+#define APP_RX_SOURCE_DIGITAL_LOOPBACK 1U
+#define APP_RX_SOURCE APP_RX_SOURCE_AD9361
+
+#if (APP_RX_SOURCE != APP_RX_SOURCE_AD9361) && (APP_RX_SOURCE != APP_RX_SOURCE_DIGITAL_LOOPBACK)
+#error "Unsupported APP_RX_SOURCE"
+#endif
+
 #define TX_BUFFER_WORD_COUNT ((2U * 1024U * 1024U) / 8U)
 #define TX_BUFFER_BASE 0x1200000
 #define RX_BUFFER_BASE 0x1400000

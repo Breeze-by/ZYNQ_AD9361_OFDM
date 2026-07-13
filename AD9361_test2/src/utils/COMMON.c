@@ -14,10 +14,10 @@ uint64_t rfout;
 uint32_t val_out;
 uint32_t idelay;
 uint32_t qdelay;
-uint32_t sample_rate = 20e6;
+uint32_t sample_rate = AD9361_SAMPLE_RATE_HZ;
 uint64_t tx_lo_freq = 2400e6;
 uint64_t rx_lo_freq = 2400e6;
-uint32_t bandwidth = 20e6;
+uint32_t bandwidth = AD9361_RF_BANDWIDTH_HZ;
 int32_t gain = 10;
 uint32_t txatt = 10000;
 uint32_t regr = REG_PRODUCT_ID;
@@ -181,7 +181,8 @@ AD9361_InitParam default_init_param = {
     .delay_rx_data = 0,
     .rx_data_clock_delay = 0,
     .rx_data_delay = 4,
-    .tx_fb_clock_delay = 7,
+    /* 4 taps = about 1.2 ns; this matches the TX timing constraint model. */
+    .tx_fb_clock_delay = 4,
     .tx_data_delay = 0,
     .lvds_bias_mV = 150,
     .lvds_rx_onchip_termination_enable = 1,
@@ -311,57 +312,134 @@ void gpio_initial(void)
     gpio_set_value(REF_SELECT, 0);
 }
 
+static int32_t ad9361_config_result(const char *step, int32_t status)
+{
+    if (status != 0) {
+        printf("AD9361 config failed: %s status=%ld\r\n",
+            step, (long)status);
+    }
+    return status;
+}
+
 int32_t ad9361_config(struct ad9361_rf_phy *phy)
 {
     int32_t val;
-    uint32_t sampling_freq_hz;
+    uint32_t tx_sampling_freq_hz;
+    uint32_t rx_sampling_freq_hz;
+    uint32_t tx_rate_error_hz;
+    uint32_t rx_rate_error_hz;
 
-    ad9361_set_tx_fir_config(phy, tx_fir_config);
-    ad9361_set_rx_fir_config(phy, rx_fir_config);
-    ad9361_set_tx_sampling_freq(phy, sample_rate);
-    ad9361_set_tx_lo_freq(phy, tx_lo_freq);
-    ad9361_set_rx_lo_freq(phy, rx_lo_freq);
-    ad9361_set_rx_rf_bandwidth(phy, bandwidth);
-    ad9361_set_tx_rf_bandwidth(phy, bandwidth);
-    ad9361_set_rx_rf_gain(phy, 0, gain);
-    ad9361_set_rx_rf_gain(phy, 1, gain);
-    ad9361_set_rx_gain_control_mode(phy, 0, 1);
-    ad9361_set_rx_gain_control_mode(phy, 1, 1);
-    ad9361_set_tx_attenuation(phy, 0, txatt);
-    ad9361_set_tx_attenuation(phy, 1, txatt);
+    if ((phy == NULL) || (phy->spi == NULL)) {
+        printf("AD9361 config failed: invalid phy\r\n");
+        return -EINVAL;
+    }
 
-    val = ad9361_spi_read(phy->spi, regr);
+    val = ad9361_config_result("tx_fir",
+        ad9361_set_tx_fir_config(phy, tx_fir_config));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx_fir",
+        ad9361_set_rx_fir_config(phy, rx_fir_config));
+    if (val != 0) return val;
 
-    ad9361_get_tx_sampling_freq(phy, &sampling_freq_hz);
-    printf("sampling_freq=%fMHz\n", ((double)sampling_freq_hz) / 1e6);
+    /* This API programs both RX and TX clock chains to the same sample rate. */
+    val = ad9361_config_result("sample_rate",
+        ad9361_set_tx_sampling_freq(phy, sample_rate));
+    if (val != 0) return val;
+    val = ad9361_config_result("tx_lo", ad9361_set_tx_lo_freq(phy, tx_lo_freq));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx_lo", ad9361_set_rx_lo_freq(phy, rx_lo_freq));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx_bandwidth",
+        ad9361_set_rx_rf_bandwidth(phy, bandwidth));
+    if (val != 0) return val;
+    val = ad9361_config_result("tx_bandwidth",
+        ad9361_set_tx_rf_bandwidth(phy, bandwidth));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx1_gain", ad9361_set_rx_rf_gain(phy, 0, gain));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx2_gain", ad9361_set_rx_rf_gain(phy, 1, gain));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx1_gain_mode",
+        ad9361_set_rx_gain_control_mode(phy, 0, RF_GAIN_FASTATTACK_AGC));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx2_gain_mode",
+        ad9361_set_rx_gain_control_mode(phy, 1, RF_GAIN_FASTATTACK_AGC));
+    if (val != 0) return val;
+    val = ad9361_config_result("tx1_attenuation",
+        ad9361_set_tx_attenuation(phy, 0, txatt));
+    if (val != 0) return val;
+    val = ad9361_config_result("tx2_attenuation",
+        ad9361_set_tx_attenuation(phy, 1, txatt));
+    if (val != 0) return val;
 
     if (tx_lo_freq >= 70000000ULL && tx_lo_freq < 3000000000ULL) {
         gpio_set_value(TX_BAND_SEL, 0);
-        ad9361_set_tx_rf_port_output(phy, 1);
+        val = ad9361_config_result("tx_rf_port",
+            ad9361_set_tx_rf_port_output(phy, 1));
     } else {
         gpio_set_value(TX_BAND_SEL, 1);
-        ad9361_set_tx_rf_port_output(phy, 0);
+        val = ad9361_config_result("tx_rf_port",
+            ad9361_set_tx_rf_port_output(phy, 0));
     }
+    if (val != 0) return val;
 
     if (rx_lo_freq >= 70000000ULL && rx_lo_freq < 2000000000ULL) {
         gpio_set_value(RX1_BAND_SEL_A, 0);
         gpio_set_value(RX1_BAND_SEL_B, 1);
         gpio_set_value(RX2_BAND_SEL_A, 0);
         gpio_set_value(RX2_BAND_SEL_B, 1);
-        ad9361_set_rx_rf_port_input(phy, 2);
+        val = ad9361_config_result("rx_rf_port",
+            ad9361_set_rx_rf_port_input(phy, 2));
     } else if (rx_lo_freq >= 2000000000ULL && rx_lo_freq < 3500000000ULL) {
         gpio_set_value(RX1_BAND_SEL_A, 1);
         gpio_set_value(RX1_BAND_SEL_B, 1);
         gpio_set_value(RX2_BAND_SEL_A, 1);
         gpio_set_value(RX2_BAND_SEL_B, 0);
-        ad9361_set_rx_rf_port_input(phy, 1);
+        val = ad9361_config_result("rx_rf_port",
+            ad9361_set_rx_rf_port_input(phy, 1));
     } else {
         gpio_set_value(RX1_BAND_SEL_A, 1);
         gpio_set_value(RX1_BAND_SEL_B, 0);
         gpio_set_value(RX2_BAND_SEL_A, 1);
         gpio_set_value(RX2_BAND_SEL_B, 1);
-        ad9361_set_rx_rf_port_input(phy, 0);
+        val = ad9361_config_result("rx_rf_port",
+            ad9361_set_rx_rf_port_input(phy, 0));
+    }
+    if (val != 0) return val;
+
+    val = ad9361_spi_read(phy->spi, regr);
+    if (val < 0) {
+        return ad9361_config_result("product_id_read", val);
+    }
+    if ((val & PRODUCT_ID_MASK) != PRODUCT_ID_9361) {
+        printf("AD9361 config failed: product_id=0x%02lX\r\n",
+            (unsigned long)val);
+        return -ENODEV;
     }
 
-    return val;
+    val = ad9361_config_result("get_tx_sample_rate",
+        ad9361_get_tx_sampling_freq(phy, &tx_sampling_freq_hz));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx_sample_rate",
+        ad9361_get_rx_sampling_freq(phy, &rx_sampling_freq_hz));
+    if (val != 0) return val;
+    tx_rate_error_hz = (tx_sampling_freq_hz > sample_rate) ?
+        (tx_sampling_freq_hz - sample_rate) : (sample_rate - tx_sampling_freq_hz);
+    rx_rate_error_hz = (rx_sampling_freq_hz > sample_rate) ?
+        (rx_sampling_freq_hz - sample_rate) : (sample_rate - rx_sampling_freq_hz);
+    if ((tx_rate_error_hz > AD9361_SAMPLE_RATE_TOLERANCE_HZ) ||
+        (rx_rate_error_hz > AD9361_SAMPLE_RATE_TOLERANCE_HZ)) {
+        printf("AD9361 config failed: sample rate tx=%lu rx=%lu expected=%lu\r\n",
+            (unsigned long)tx_sampling_freq_hz,
+            (unsigned long)rx_sampling_freq_hz,
+            (unsigned long)sample_rate);
+        return -EINVAL;
+    }
+
+    printf("AD9361 configured: sample_rate=%luHz bandwidth=%luHz tx_lo=%luMHz rx_lo=%luMHz\r\n",
+        (unsigned long)tx_sampling_freq_hz,
+        (unsigned long)bandwidth,
+        (unsigned long)(tx_lo_freq / 1000000ULL),
+        (unsigned long)(rx_lo_freq / 1000000ULL));
+    return 0;
 }

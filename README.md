@@ -2,9 +2,11 @@
 
 这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前板级链路已经从纯 PL 数字回环推进到 AD9361 RF 回环：PL 侧 OFDM 调制后的数据送入 AD9361 TX，经 SMA 线直连到 AD9361 RX，再进入 PL 侧 OFDM 接收/解调；解调后的数据通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。
 
-当前排查 AIRV 视频问题时，Vivado/PL 已临时切回数字回环：OFDM 调制输出在
-PL 内直接送入解调接收路径，不经过 AD9361 TX、SMA 和 AD9361 RX。下面的 RF
-拓扑仍是工程目标链路；本轮日志和测试结论应按 PL 数字回环解释。
+SDK 默认 `APP_RX_SOURCE=APP_RX_SOURCE_AD9361`，即 `rx_intf` 使用真实 AD9361
+ADC 数据。PL 内部数字回环仍保留为单独的诊断选项；需要隔离 RF 链路时，可把
+`AD9361_test2/src/app/app_config.h` 中该宏改为
+`APP_RX_SOURCE_DIGITAL_LOOPBACK`。启动日志会明确打印 `AD9361_RF` 或
+`DIGITAL_LOOPBACK`，不要再根据函数名或寄存器魔数猜测当前路径。
 
 ```text
 PC UDP sender
@@ -57,7 +59,7 @@ AD9361_test2/src/app/main.c
     UART、GIC、AXI DMA、lwIP，然后进入网络轮询主循环。
 
 AD9361_test2/src/app/app_config.h
-    cache 开关、DMA buffer 地址和长度、静态 IPv4 配置。
+    RX 数据源、cache 开关、DMA buffer 地址和长度、静态 IPv4 配置。
 
 AD9361_test2/src/drivers/net/net_config.h
     UDP 端口、协议 magic/flag、ACK 状态、聚合块、ACK 合并、轮询预算。
@@ -98,15 +100,16 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 `main.c` 当前流程：
 
 1. 根据 `APP_ENABLE_ICACHE` / `APP_ENABLE_DCACHE` 开关启用或关闭 cache。
-2. 初始化 GPIO、SPI、AD9361，并写入 AD9361 TX clock/data delay。
-3. 初始化 UART，波特率 `115200`。
-4. 初始化 SCU GIC。
-5. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `3000` 字节 PSDU 先 re-arm 一次。
-6. 初始化 `openofdm_rx/rx_intf` 的 AD9361 RX/debug 相关寄存器，并周期性打印 RX debug 计数。
-7. 初始化 AXI DMA 和 MM2S/S2MM 中断。
-8. 初始化 lwIP/GEM，使用静态 IPv4。
-9. 绑定 UDP `5001`，初始化 DDR 聚合缓冲。
-10. 进入主循环：
+2. 初始化 UART，波特率 `115200`，确保 AD9361 初始化日志不会走 JTAG DCC。
+3. 初始化 GPIO、SPI 和 AD9361；任一步失败都会打印阶段名并停止启动。
+4. 将 2R2T LVDS 采样率配置为 `40 MSPS`（DATA_CLK 约 `160 MHz`），并读回
+   校验 TX clock/data delay 为 `0x40`（FB_CLK delay 4 taps，约 `1.2 ns`）。
+5. 初始化 SCU GIC。
+6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `3000` 字节 PSDU 先 re-arm 一次。
+7. 根据 `APP_RX_SOURCE` 初始化 `openofdm_rx/rx_intf`，并打印实际 RX 数据源。
+8. 初始化 AXI DMA 和高电平敏感的 MM2S/S2MM 中断。
+9. 初始化 lwIP/GEM，使用静态 IPv4。
+10. 绑定 UDP `5001`，初始化 DDR 聚合缓冲并进入主循环：
 
 ```c
 while (1) {
@@ -656,7 +659,7 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 
 ## AD9361 RF 回环与 S2MM 调试
 
-当前 PL 数字回环使用 `NET_DMA_STALL_TIMEOUT_US = 20000`。64 KiB AIR0
+当前 DMA 调试使用 `NET_DMA_STALL_TIMEOUT_US = 20000`。此前 64 KiB AIR0 数字回环
 精确恢复测试表明前 8 个块的主循环观察耗时约 `8.1～10.1 ms`，旧 `6000 us`
 阈值会误判正常 S2MM 为 stall；改为 `20000 us` 后所有块 `cmp=OK`，文件
 `65536/65536` 字节、48/48 AIR0 包和最终 CRC 全部正确。
@@ -689,7 +692,13 @@ RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了
 
 为定位 RF/S2MM 问题且避免 UART 过载，当前只对前 8 个 S2MM block 打印较完整的 `S2MM done/rx_head/rx_hdr/rx_payload_head/tx_head`，之后不按间隔打印大段 dump，也不因 `cmp=DIFF` 强制打印整块诊断。另有一行轻量 `S2MM diag ...` 摘要：前 16 个 block 固定打印，之后只在异常时打印。该摘要包含 AIR0/AIRV magic 搜索、最接近 magic 的候选、TX/RX CRC、首字、openofdm RX state history 和 watchdog event 计数。
 
-每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节 S2MM 捕获窗口。S2MM 完成后，PS 会 invalidate RX buffer，跳过 PL/RX 接口返回数据前面的 16 字节前缀，并按当前聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。比较完成后，PS 会把跳过 16 字节头后的 payload 按 1200 字节 UDP 分片发回已注册的 PC 接收工具。
+每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节
+S2MM 捕获窗口。简单模式 AXI DMA 只保留编程的窗口容量，没有独立的实际接收
+字节数；因此 S2MM 完成后，PS 会从 16 字节 PL 头中的 OFDM length 字段推导
+真实 payload 长度，并校验它不超过 OFDM/捕获窗口上限。magic 扫描、CRC、比较
+和 UDP 回传都被限制在该可信长度内，窗口尾部未写入的旧数据不再参与处理。
+若头部长度非法或与当前 TX block 不同，摘要分别显示
+`RX_LENGTH_INVALID` / `RX_LENGTH_MISMATCH`，且非法长度的帧不会回传。
 
 当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic。如果找到 AIR0，会打印 `S2MM air0 seq=... chunk=... file_off=... stream_off=... tx_stream_off=... desync=...`，并用 `packet_seq * chunk_bytes` 推导 UDP 回传的 `stream_offset`；如果找不到，会在 `S2MM diag` 中给出 `class=NO_AIR_MAGIC`、最接近 magic 的 `best_off/best_xor/best_bits`。这可以区分三类问题：payload 前缀不是固定 16 字节、RX 返回的是延迟旧帧、或者 PL/RF/RX 返回数据本身不是 AIR0/AIRV wire payload。
 
@@ -701,7 +710,7 @@ MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_con
 S2MM loopback debug ready, rx_base=0x01400000 rx_bytes=8192 ...
 S2MM start id=1 block=0 capture=8192 tx_transfer=2880 tx_payload=2880
 S2MM wait id=1 capture=8192 tx_transfer=2880 waited_ms=1000 txdone=... rxdone=... tx_irq=... rx_irq=... rx_sr=...
-S2MM diag id=1 class=NO_AIR_MAGIC cap=8192 tx_payload=1440 tx_transfer=1440 prefix=16 len_guess=... magic=no off=0 word=0x00000000 best_off=... best_magic=... best_xor=... best_bits=... rx0=... rx_payload0=... tx0=0x30524941 rx_crc=... tx_crc=... cmp=DIFF diff=0 rx_state=... wd=...
+S2MM diag id=1 class=NO_AIR_MAGIC cap=8192 tx_payload=1440 tx_transfer=1440 prefix=16 len_guess=... len_valid=1 magic=no off=0 word=0x00000000 best_off=... best_magic=... best_xor=... best_bits=... rx0=... rx_payload0=... tx0=0x30524941 rx_crc=... tx_crc=... cmp=DIFF diff=0 rx_state=... wd=...
 S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=OK done=1
 S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=DIFF first_diff=...
 S2MM rx_head ...
@@ -735,7 +744,8 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 1. 打开 Xilinx SDK 2018.3。
 2. 使用仓库根目录作为 workspace。
 3. 如未自动识别，导入 `System_wrapper_hw_platform_0`、`AD9361_test2_bsp`、`AD9361_test2`。
-4. 构建 `AD9361_test2_bsp`。
+4. 在 BSP Settings 中确认 standalone `stdin/stdout` 都是 `ps7_uart_0`，然后
+   重新生成并构建 `AD9361_test2_bsp`；不要使用 `ps7_coresight_comp_0`。
 5. 构建 `AD9361_test2`。
 6. 使用 `System_wrapper_hw_platform_0/System_wrapper.bit` 配置 FPGA。
 7. 下载并运行 `AD9361_test2.elf`。

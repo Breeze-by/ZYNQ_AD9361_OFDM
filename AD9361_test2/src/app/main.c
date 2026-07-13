@@ -37,8 +37,9 @@
 #define TX_INTF_CTS_WAIT_SIFS_TOP     (((16U * 10U) << 16) | (16U * 10U))
 #define TX_INTF_INTERRUPT_PHY_DONE    0x00000103U
 
+#define OPENOFDM_RX_ENABLE_RF         0x00000001U
 #define OPENOFDM_RX_ENABLE_LOOPBACK   0x00010001U
-#define OPENOFDM_RX_POWER_THRES_LB    ((127U << 16) | 0U)
+#define OPENOFDM_RX_POWER_THRES_NO_RSSI ((127U << 16) | 0U)
 #define OPENOFDM_RX_MIN_PLATEAU 100U
 #define OPENOFDM_RX_SIGNAL_LEN_CFG    ((4095U << 16) | (14U << 12) | 1U)
 #define OPENOFDM_RX_FFT_WIN_CFG       ((48U << 4) | 4U)
@@ -50,10 +51,21 @@
 #define RX_INTF_BB_GAIN               0U
 #define RX_INTF_TLAST_TIMEOUT_TOP     7000U
 #define RX_INTF_S2MM_INTR_DELAY       (30U * 10U)
+#define RX_INTF_RF_VALID_DELAY_ENABLE (1U << 4)
+#define RX_INTF_DIGITAL_LOOPBACK_ENABLE (1U << 8)
+#define AD9361_TX_CLOCK_DATA_DELAY_EXPECTED 0x40U
 
 static unsigned char mac_ethernet_address[] = {
     0x02, 0x00, 0x00, 0x00, 0x00, 0x01
 };
+
+static void App_Fatal(const char *stage, int32_t status)
+{
+    UART_Printf("FATAL: %s failed, status=%ld\r\n",
+        stage, (long)status);
+    while (1) {
+    }
+}
 
 static uint32_t OpenWifi_RxWatchdogEventCount(uint32_t event_sel)
 {
@@ -134,28 +146,35 @@ void OpenWifi_Tx_Rearm(uint32_t psdu_len)
     Xil_Out32(REG(TX_INTF_BASE, 17), psdu_len);
 }
 
-static void OpenWifi_RxRegs_Init_Loopback(void)
+static void OpenWifi_RxRegs_Init(void)
 {
+    uint32_t openofdm_rx_enable;
+    uint32_t rx_intf_source;
+
     /*
      * openofdm_rx_0 @ 0x40002000
      */
     Xil_Out32(REG(OPENOFDM_RX_BASE, 0), 0x00000001);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 0), 0x00000000);
 
+    if (APP_RX_SOURCE == APP_RX_SOURCE_DIGITAL_LOOPBACK) {
+        /* Digital loopback is deterministic, so disable the EQ watchdog. */
+        openofdm_rx_enable = OPENOFDM_RX_ENABLE_LOOPBACK;
+        rx_intf_source = RX_INTF_DIGITAL_LOOPBACK_ENABLE;
+    } else {
+        /* Real RF/AD9361 input keeps the equalizer watchdog enabled. */
+        openofdm_rx_enable = OPENOFDM_RX_ENABLE_RF;
+        rx_intf_source = RX_INTF_RF_VALID_DELAY_ENABLE;
+    }
+
+    /* bit0 keeps force_ht_smoothing; bit16 disables the EQ watchdog. */
+    Xil_Out32(REG(OPENOFDM_RX_BASE, 1), openofdm_rx_enable);
     /*
-     * bit0  = 1 keeps the openwifi driver default force_ht_smoothing.
-     * bit16 = 1 disables the equalizer monitor watchdog.
-     *
-     * Keep bit13 at 0. Disabling the whole signal watchdog on this loopback
-     * design can prevent long_preamble_detected.
+     * The current wrapper has no usable RSSI feed, so threshold 0 keeps the
+     * detector active for both sources. The high DC watchdog threshold avoids
+     * false resets while the RF input/AGC is being validated.
      */
-    Xil_Out32(REG(OPENOFDM_RX_BASE, 1), OPENOFDM_RX_ENABLE_LOOPBACK);
-    /*
-     * Digital loopback has no meaningful RSSI input in this design, so keep
-     * the RSSI trigger threshold at 0. Use the largest positive DC watchdog
-     * threshold to avoid false resets on the loopback stream.
-     */
-    Xil_Out32(REG(OPENOFDM_RX_BASE, 2), OPENOFDM_RX_POWER_THRES_LB);
+    Xil_Out32(REG(OPENOFDM_RX_BASE, 2), OPENOFDM_RX_POWER_THRES_NO_RSSI);
     /*
      * slv_reg3 is sync_short min_plateau. The openofdm_rx testbench uses
      * 100; leaving this at 0 makes the short-preamble detector window too
@@ -174,12 +193,8 @@ static void OpenWifi_RxRegs_Init_Loopback(void)
 
     Xil_Out32(REG(RX_INTF_BASE, 2), 0x00000000);
 
-    /*
-     * slv_reg3 bit8:
-     * 1 = digital loopback from tx_intf IQ.
-     * 0 = real ADC/AD9361 RX path.
-     */
-    Xil_Out32(REG(RX_INTF_BASE, 3), 0x00000100);
+    /* slv_reg3[8]: 1=digital loopback, 0=real AD9361 ADC samples. */
+    Xil_Out32(REG(RX_INTF_BASE, 3), rx_intf_source);
 
     /*
      * slv_reg4:
@@ -233,6 +248,12 @@ int main(void)
     Xil_DCacheDisable();
 #endif
 
+    /* Bring up the physical UART before AD9361 code emits any diagnostics. */
+    UART_Init(PS_UART_DEFAULT_BAUDRATE);
+    UART_Printf("boot: rx_source=%s sample_rate=%luHz\r\n",
+        (APP_RX_SOURCE == APP_RX_SOURCE_AD9361) ? "AD9361_RF" : "DIGITAL_LOOPBACK",
+        (unsigned long)AD9361_SAMPLE_RATE_HZ);
+
     gpio_initial();
 
     default_init_param.gpio_resetb = RESETB;
@@ -240,13 +261,35 @@ int main(void)
     default_init_param.gpio_cal_sw1 = -1;
     default_init_param.gpio_cal_sw2 = -1;
 
-    spi_init(SPI_DEVICE_ID, 1, 0);
-    ad9361_init(&ad9361_phy, &default_init_param);
-    ad9361_spi_write(ad9361_phy->spi, REG_TX_CLOCK_DATA_DELAY, 0x40);
-    val = ad9361_config(ad9361_phy);
-    (void)val;
+    val = spi_init(SPI_DEVICE_ID, 1, 0);
+    if (val != 0) {
+        App_Fatal("spi_init", val);
+    }
 
-    UART_Init(115200);
+    ad9361_phy = NULL;
+    val = ad9361_init(&ad9361_phy, &default_init_param);
+    if ((val != 0) || (ad9361_phy == NULL) || (ad9361_phy->spi == NULL)) {
+        App_Fatal("ad9361_init", (val != 0) ? val : -1);
+    }
+
+    val = ad9361_config(ad9361_phy);
+    if (val != 0) {
+        App_Fatal("ad9361_config", val);
+    }
+
+    /* The default init parameter is authoritative; verify the final HW value. */
+    val = ad9361_spi_read(ad9361_phy->spi, REG_TX_CLOCK_DATA_DELAY);
+    if (val < 0) {
+        App_Fatal("tx_clock_data_delay_read", val);
+    }
+    if (((uint32_t)val & 0xFFU) != AD9361_TX_CLOCK_DATA_DELAY_EXPECTED) {
+        UART_Printf("FATAL: TX clock/data delay readback=0x%02lX expected=0x%02lX\r\n",
+            (unsigned long)((uint32_t)val & 0xFFU),
+            (unsigned long)AD9361_TX_CLOCK_DATA_DELAY_EXPECTED);
+        App_Fatal("tx_clock_data_delay_verify", -1);
+    }
+    UART_Printf("AD9361 TX clock/data delay=0x%02lX\r\n",
+        (unsigned long)((uint32_t)val & 0xFFU));
     UART_Printf("main start\r\n");
 
     TxBufferPtr = (uint8_t *)TX_BUFFER_BASE;
@@ -255,8 +298,9 @@ int main(void)
 
     OpenWifi_TxStaticRegs_Init();
     OpenWifi_Tx_Rearm(DEFAULT_PSDU_LEN_BYTES);
-    OpenWifi_RxRegs_Init_Loopback();
-    UART_Printf("regs done\r\n");
+    OpenWifi_RxRegs_Init();
+    UART_Printf("regs done, rx_source=%s\r\n",
+        (APP_RX_SOURCE == APP_RX_SOURCE_AD9361) ? "AD9361_RF" : "DIGITAL_LOOPBACK");
 //    OpenWifi_RxDebugPrint();
 
     AXI_DMA_Init(&AxiDma0, XPAR_AXIDMA_0_DEVICE_ID);

@@ -45,7 +45,8 @@ void AXI_DMA_Init(XAxiDma *AxiDma, uint32_t DeviceId)
 void AXI_DMA_TxInt_Init(XAxiDma *AxiDma, uint16_t TxIntrId, Xil_InterruptHandler Handler)
 {
 	//连接中断服务函数
-	Set_ScuGic_Link(TxIntrId, 0xA0, Rising_Edge_Sensitive, Handler, (void *)AxiDma);
+	/* AXI DMA mm2s_introut remains asserted until DMASR is acknowledged. */
+	Set_ScuGic_Link(TxIntrId, 0xA0, HIGH_Level_Sensitive, Handler, (void *)AxiDma);
 
 	//使能DMATx中断
 	XAxiDma_IntrEnable(AxiDma, XAXIDMA_IRQ_ALL_MASK, XAXIDMA_DMA_TO_DEVICE);
@@ -61,7 +62,8 @@ void AXI_DMA_TxInt_Init(XAxiDma *AxiDma, uint16_t TxIntrId, Xil_InterruptHandler
 void AXI_DMA_RxInt_Init(XAxiDma *AxiDma, uint16_t RxIntrId, Xil_InterruptHandler Handler)
 {
 	//连接中断服务函数
-	Set_ScuGic_Link(RxIntrId, 0xA0, Rising_Edge_Sensitive, Handler, (void *)AxiDma);
+	/* AXI DMA s2mm_introut remains asserted until DMASR is acknowledged. */
+	Set_ScuGic_Link(RxIntrId, 0xA0, HIGH_Level_Sensitive, Handler, (void *)AxiDma);
 
 	//使能DMARx中断
 	XAxiDma_IntrEnable(AxiDma, XAXIDMA_IRQ_ALL_MASK,XAXIDMA_DEVICE_TO_DMA);

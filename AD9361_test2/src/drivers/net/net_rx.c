@@ -1159,6 +1159,8 @@ static void net_loopback_poll_s2mm(void)
     uint64_t air0_file_offset = 0U;
     uint32_t length_field = 0U;
     uint32_t payload_len_guess = 0U;
+    uint32_t trusted_capture_len;
+    uint32_t rx_payload_available_len;
     uint32_t rx_state_history = 0U;
     uint32_t wd0 = 0U;
     uint32_t wd1 = 0U;
@@ -1171,6 +1173,8 @@ static void net_loopback_poll_s2mm(void)
     int payload_magic_found = 0;
     int best_magic_found = 0;
     int air0_offset_valid = 0;
+    int payload_len_valid = 0;
+    int payload_len_mismatch = 0;
     const uint8_t *rx_payload_ptr;
     int mismatch_found;
     int should_log;
@@ -1256,10 +1260,33 @@ static void net_loopback_poll_s2mm(void)
         rx_prefix_len = loopback_rx_expected_len;
     }
 
+    /*
+     * AXI DMA simple S2MM mode exposes the programmed buffer capacity, not a
+     * separate actual-byte count. The decoded OFDM header is therefore the
+     * only trustworthy frame-length source. Never parse or return bytes past
+     * that length; the remainder of the 8192-byte window may be stale data.
+     */
+    trusted_capture_len = rx_prefix_len;
+    if (loopback_rx_expected_len >= NET_LOOPBACK_RX_PREFIX_BYTES) {
+        timestamp_lo = net_load_le32(&loopback_rx_buffer[0]);
+        timestamp_hi = net_load_le32(&loopback_rx_buffer[4]);
+        rx_meta0 = net_load_le32(&loopback_rx_buffer[8]);
+        rx_meta1 = net_load_le32(&loopback_rx_buffer[12]);
+        length_field = rx_meta1 & 0xFFFFU;
+        payload_len_guess = (length_field >= 4U) ? (length_field - 4U) : 0U;
+        if ((length_field >= 4U) &&
+            (payload_len_guess <= NET_OFDM_MAX_PSDU_BYTES) &&
+            (payload_len_guess <=
+                (loopback_rx_expected_len - NET_LOOPBACK_RX_PREFIX_BYTES))) {
+            payload_len_valid = 1;
+            trusted_capture_len = NET_LOOPBACK_RX_PREFIX_BYTES + payload_len_guess;
+        }
+    }
+
     payload_magic_found = net_find_payload_magic_offset(loopback_rx_buffer,
-        loopback_rx_expected_len, &payload_magic_offset, &payload_magic);
+        trusted_capture_len, &payload_magic_offset, &payload_magic);
     best_magic_found = net_find_best_magic_candidate(loopback_rx_buffer,
-        loopback_rx_expected_len, &best_magic_offset, &best_magic,
+        trusted_capture_len, &best_magic_offset, &best_magic,
         &best_magic_xor, &best_magic_bits);
     if ((payload_magic_found != 0) &&
         (payload_magic_offset < loopback_rx_expected_len) &&
@@ -1268,17 +1295,13 @@ static void net_loopback_poll_s2mm(void)
     }
 
     rx_payload_ptr = &loopback_rx_buffer[rx_prefix_len];
-    if (rx_prefix_len >= 16U) {
-        timestamp_lo = net_load_le32(&loopback_rx_buffer[0]);
-        timestamp_hi = net_load_le32(&loopback_rx_buffer[4]);
-        rx_meta0 = net_load_le32(&loopback_rx_buffer[8]);
-        rx_meta1 = net_load_le32(&loopback_rx_buffer[12]);
-        length_field = rx_meta1 & 0xFFFFU;
-        payload_len_guess = (length_field >= 4U) ? (length_field - 4U) : length_field;
+    rx_payload_available_len = trusted_capture_len - rx_prefix_len;
+    compare_len = (payload_len_valid != 0) ? payload_len_guess : 0U;
+    if (compare_len > loopback_tx_expected_len) {
+        compare_len = loopback_tx_expected_len;
     }
-    compare_len = loopback_tx_expected_len;
-    if (compare_len > (loopback_rx_expected_len - rx_prefix_len)) {
-        compare_len = loopback_rx_expected_len - rx_prefix_len;
+    if (compare_len > rx_payload_available_len) {
+        compare_len = rx_payload_available_len;
     }
     tx_crc = 0U;
     mismatch_index = 0U;
@@ -1287,6 +1310,10 @@ static void net_loopback_poll_s2mm(void)
     if (dma_block_index >= 0) {
         block = &agg_blocks[dma_block_index];
         return_stream_offset = block->stream_offset;
+        if ((payload_len_valid != 0) &&
+            (payload_len_guess != block->payload_len)) {
+            payload_len_mismatch = 1;
+        }
         if (compare_len > block->payload_len) {
             compare_len = block->payload_len;
         }
@@ -1304,7 +1331,7 @@ static void net_loopback_poll_s2mm(void)
     rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
     if ((payload_magic == NET_AIR0_MAGIC) &&
         (net_air0_stream_offset_from_payload(rx_payload_ptr,
-            loopback_rx_expected_len - rx_prefix_len,
+            rx_payload_available_len,
             &return_stream_offset,
             &air0_packet_seq,
             &air0_chunk_bytes,
@@ -1318,7 +1345,8 @@ static void net_loopback_poll_s2mm(void)
     }
 #endif
 
-    abnormal = ((mismatch_found != 0) || (payload_magic_found == 0) ||
+    abnormal = ((payload_len_valid == 0) || (payload_len_mismatch != 0) ||
+        (mismatch_found != 0) || (payload_magic_found == 0) ||
         (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES)) ? 1 : 0;
     should_summarize = net_loopback_should_summarize(loopback_rx_transfer_id, abnormal);
     rx_state_history = Xil_In32(NET_OPENOFDM_RX_STATE_HISTORY_ADDR);
@@ -1330,11 +1358,15 @@ static void net_loopback_poll_s2mm(void)
     if (loopback_rx_expected_len >= 4U) {
         rx_head0 = net_load_le32(loopback_rx_buffer);
     }
-    if ((loopback_rx_expected_len - rx_prefix_len) >= 4U) {
+    if (rx_payload_available_len >= 4U) {
         rx_payload_head0 = net_load_le32(rx_payload_ptr);
     }
 
-    if (payload_magic_found == 0) {
+    if (payload_len_valid == 0) {
+        diag_class = "RX_LENGTH_INVALID";
+    } else if (payload_len_mismatch != 0) {
+        diag_class = "RX_LENGTH_MISMATCH";
+    } else if (payload_magic_found == 0) {
         diag_class = "NO_AIR_MAGIC";
     } else if (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES) {
         diag_class = "AIR_MAGIC_SHIFT";
@@ -1347,7 +1379,7 @@ static void net_loopback_poll_s2mm(void)
     if (should_summarize != 0) {
         UART_Printf(
             "S2MM diag id=%lu class=%s wait_us=%lu cap=%lu tx_payload=%lu tx_transfer=%lu "
-            "prefix=%lu len_guess=%lu magic=%s off=%lu word=0x%08lX "
+            "prefix=%lu len_guess=%lu len_valid=%u magic=%s off=%lu word=0x%08lX "
             "best_off=%lu best_magic=0x%08lX best_xor=0x%08lX best_bits=%lu "
             "rx0=0x%08lX rx_payload0=0x%08lX tx0=0x%08lX "
             "rx_crc=0x%08lX tx_crc=0x%08lX cmp=%s diff=%lu "
@@ -1360,6 +1392,7 @@ static void net_loopback_poll_s2mm(void)
             (unsigned long)loopback_tx_expected_len,
             (unsigned long)rx_prefix_len,
             (unsigned long)payload_len_guess,
+            (unsigned)payload_len_valid,
             (payload_magic_found != 0) ? "yes" : "no",
             (payload_magic_found != 0) ? (unsigned long)payload_magic_offset : 0UL,
             (unsigned long)payload_magic,
@@ -1372,7 +1405,8 @@ static void net_loopback_poll_s2mm(void)
             (unsigned long)tx_head0,
             (unsigned long)rx_crc,
             (unsigned long)tx_crc,
-            (mismatch_found != 0) ? "DIFF" : "OK",
+            ((payload_len_valid != 0) && (payload_len_mismatch == 0) &&
+                (mismatch_found == 0)) ? "OK" : "DIFF",
             (unsigned long)mismatch_index,
             (unsigned long)rx_state_history,
             (unsigned long)wd0,
@@ -1394,7 +1428,8 @@ static void net_loopback_poll_s2mm(void)
             (unsigned long)RxDmaSrLast,
             (unsigned long)rx_crc,
             (unsigned long)tx_crc,
-            (mismatch_found != 0) ? "DIFF" : "OK");
+            ((payload_len_valid != 0) && (payload_len_mismatch == 0) &&
+                (mismatch_found == 0)) ? "OK" : "DIFF");
         if (mismatch_found != 0) {
             UART_Printf(" first_diff=%lu rx=0x%02X tx=0x%02X",
                 (unsigned long)mismatch_index,
@@ -1402,8 +1437,8 @@ static void net_loopback_poll_s2mm(void)
                 (unsigned)agg_blocks[dma_block_index].buffer_ptr[mismatch_index]);
         }
         UART_Printf(" done=%lu\r\n", (unsigned long)loopback_rx_done_count);
-        net_loopback_print_words("S2MM rx_head", loopback_rx_buffer, loopback_rx_expected_len);
-        net_loopback_print_rx_header(loopback_rx_buffer, loopback_rx_expected_len,
+        net_loopback_print_words("S2MM rx_head", loopback_rx_buffer, trusted_capture_len);
+        net_loopback_print_rx_header(loopback_rx_buffer, trusted_capture_len,
             loopback_tx_expected_len,
             (dma_block_index >= 0) ? agg_blocks[dma_block_index].payload_len : compare_len);
         net_loopback_print_words("S2MM rx_payload_head", rx_payload_ptr, compare_len);
@@ -1433,10 +1468,10 @@ static void net_loopback_poll_s2mm(void)
         }
     }
 
-    if (dma_block_index >= 0) {
-        return_len = compare_len;
-        if (return_len > agg_blocks[dma_block_index].payload_len) {
-            return_len = agg_blocks[dma_block_index].payload_len;
+    if ((dma_block_index >= 0) && (payload_len_valid != 0)) {
+        return_len = payload_len_guess;
+        if (return_len > rx_payload_available_len) {
+            return_len = rx_payload_available_len;
         }
         net_loopback_return_udp(&agg_blocks[dma_block_index], rx_payload_ptr, return_len,
             return_stream_offset, timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
