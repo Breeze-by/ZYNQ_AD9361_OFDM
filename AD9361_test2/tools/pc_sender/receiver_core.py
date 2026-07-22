@@ -766,6 +766,27 @@ class LoopbackReceiver:
         stats.airv_fps = metrics["fps"]
         stats.airv_last_frame_seq = self._video.latest_frame_seq
 
+    def _emit_airv_frames(self, frames, stats: ReceiverStats, callback):
+        self._refresh_airv_stats(stats)
+        for frame in frames:
+            self._emit_airv_diag(
+                callback,
+                f"frame_complete frame={frame.frame_seq} type={frame.frame_type} "
+                f"bytes={len(frame.payload)} frag_crc={'BAD' if frame.bad_fragment_crc else 'OK'} "
+                f"frame_crc={'BAD' if frame.bad_frame_crc else 'OK'}",
+                force=frame.bad_fragment_crc or frame.bad_frame_crc,
+            )
+            self._emit(callback, "video_frame", {
+                "frame_seq": frame.frame_seq,
+                "frame_type": frame.frame_type,
+                "bytes": len(frame.payload),
+                "payload": frame.payload,
+                "bad_fragment_crc": frame.bad_fragment_crc,
+                "bad_frame_crc": frame.bad_frame_crc,
+                "latency_ms": frame.latency_ms,
+                "stats": stats,
+            })
+
     def _parse_air_stream(self, stats: ReceiverStats):
         contiguous, _gaps = self._raw_assembler.coverage()
 
@@ -856,8 +877,8 @@ class LoopbackReceiver:
                         f"contiguous={contiguous} scan={scan_len} "
                         f"head={header_bytes[:8].hex()}",
                     )
-                    self._airv_parse_offset = max(contiguous - 3, self._airv_parse_offset)
-                    return
+                    self._airv_parse_offset += max(scan_len - 3, 1)
+                    continue
                 stats.airv_bad_header += 1
                 self._emit_airv_diag(
                     callback,
@@ -916,25 +937,7 @@ class LoopbackReceiver:
                 force=not fragment_crc_ok,
             )
             frames = self._video.process_fragment(header, payload, fragment_crc_ok)
-            self._refresh_airv_stats(stats)
-            for frame in frames:
-                self._emit_airv_diag(
-                    callback,
-                    f"frame_complete frame={frame.frame_seq} type={frame.frame_type} "
-                    f"bytes={len(frame.payload)} frag_crc={'BAD' if frame.bad_fragment_crc else 'OK'} "
-                    f"frame_crc={'BAD' if frame.bad_frame_crc else 'OK'}",
-                    force=frame.bad_fragment_crc or frame.bad_frame_crc,
-                )
-                self._emit(callback, "video_frame", {
-                    "frame_seq": frame.frame_seq,
-                    "frame_type": frame.frame_type,
-                    "bytes": len(frame.payload),
-                    "payload": frame.payload,
-                    "bad_fragment_crc": frame.bad_fragment_crc,
-                    "bad_frame_crc": frame.bad_frame_crc,
-                    "latency_ms": frame.latency_ms,
-                    "stats": stats,
-                })
+            self._emit_airv_frames(frames, stats, callback)
 
             self._airv_parse_offset += header.chunk_bytes
 
@@ -1025,6 +1028,8 @@ class LoopbackReceiver:
 
         if self._airv_mode:
             if force and not stats.incomplete_reason:
+                frames = self._video.flush_complete()
+                self._emit_airv_frames(frames, stats, callback)
                 self._video.flush_missing()
                 self._refresh_airv_stats(stats)
                 stats.incomplete_reason = "AIRV stream idle finish; realtime mode does not save an exact file"

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 import binascii
 import struct
-import time
 from dataclasses import dataclass
 from typing import Iterable, List
 
 
 AIRV_MAGIC = 0x56524941
-AIRV_VERSION = 1
+AIRV_VERSION = 2
 AIRV_HEADER_BYTES = 64
 
 AIRV_FLAG_DATA = 0x0001
@@ -20,8 +19,9 @@ AIRV_FRAME_KEY = 1
 AIRV_FRAME_DELTA = 2
 AIRV_FRAME_CONFIG = 3
 
-# v1 keeps the header at 64 bytes. tx_timestamp_us is carried as the low
-# 32 bits; pts_us remains 64-bit for playback ordering.
+# v2 keeps the header at 64 bytes and replaces the unused low 32-bit transmit
+# timestamp with a global packet sequence. The board uses packet_seq to recover
+# the absolute AIRV stream offset even when RF RX is delayed from the current TX.
 AIRV_HEADER_FORMAT = "<IBBHIIIHHBBIIIHHIIQIH"
 AIRV_HEADER_SIZE = struct.calcsize(AIRV_HEADER_FORMAT)
 if AIRV_HEADER_SIZE != AIRV_HEADER_BYTES:
@@ -49,12 +49,8 @@ class AirvHeader:
     frame_crc32: int
     fragment_crc32: int
     pts_us: int
-    tx_timestamp_us_lo: int
+    packet_seq: int
     reserved1: int
-
-    @property
-    def tx_timestamp_us(self) -> int:
-        return self.tx_timestamp_us_lo
 
 
 @dataclass
@@ -68,10 +64,6 @@ class AirvPacket:
 
 def crc32(data: bytes) -> int:
     return binascii.crc32(data) & 0xFFFFFFFF
-
-
-def now_us() -> int:
-    return int(time.time() * 1000000)
 
 
 def make_stream_id(file_size: int, file_crc32: int, session_id: int) -> int:
@@ -100,7 +92,7 @@ def _pack_header(header: AirvHeader, header_crc32: int) -> bytes:
         header.frame_crc32,
         header.fragment_crc32,
         header.pts_us,
-        header.tx_timestamp_us_lo,
+        header.packet_seq,
         header.reserved1,
     )
 
@@ -110,6 +102,7 @@ def build_airv_packet(
     *,
     session_id: int,
     stream_id: int,
+    packet_seq: int,
     frame_seq: int,
     frag_index: int,
     frag_count: int,
@@ -159,7 +152,7 @@ def build_airv_packet(
         frame_crc32=frame_crc32 & 0xFFFFFFFF,
         fragment_crc32=crc32(fragment),
         pts_us=pts_us & 0xFFFFFFFFFFFFFFFF,
-        tx_timestamp_us_lo=now_us() & 0xFFFFFFFF,
+        packet_seq=packet_seq & 0xFFFFFFFF,
         reserved1=0,
     )
     raw_without_crc = _pack_header(header, 0)
@@ -385,6 +378,7 @@ def build_airv_stream(
                 fragment,
                 session_id=session_id,
                 stream_id=stream_id,
+                packet_seq=len(packets),
                 frame_seq=frame_seq,
                 frag_index=frag_index,
                 frag_count=frag_count,

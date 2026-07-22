@@ -336,8 +336,8 @@ def prepare_airv_source(file_path: str) -> AirvSource:
 
     output_path = source_path.with_suffix(".h264")
     temp_path = output_path.with_suffix(".h264.tmp")
-
-    copy_command = [
+    keyframe_interval = max(int(round(fps)), 1)
+    transcode_command = [
         ffmpeg,
         "-y",
         "-i",
@@ -346,53 +346,39 @@ def prepare_airv_source(file_path: str) -> AirvSource:
         "0:v:0",
         "-an",
         "-c:v",
-        "copy",
-        "-bsf:v",
-        "h264_mp4toannexb,h264_metadata=aud=insert",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-tune",
+        "zerolatency",
+        "-profile:v",
+        "baseline",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        str(keyframe_interval),
+        "-keyint_min",
+        str(keyframe_interval),
+        "-sc_threshold",
+        "0",
+        "-bf",
+        "0",
+        "-x264-params",
+        f"aud=1:repeat-headers=1:keyint={keyframe_interval}:min-keyint={keyframe_interval}:scenecut=0",
         "-f",
         "h264",
         str(temp_path),
     ]
-    return_code, copy_error = _run_ffmpeg(copy_command)
+    return_code, transcode_error = _run_ffmpeg(transcode_command)
     if return_code != 0:
-        transcode_command = [
-            ffmpeg,
-            "-y",
-            "-i",
-            str(source_path),
-            "-map",
-            "0:v:0",
-            "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-tune",
-            "zerolatency",
-            "-profile:v",
-            "baseline",
-            "-pix_fmt",
-            "yuv420p",
-            "-g",
-            "30",
-            "-bf",
-            "0",
-            "-x264-params",
-            "aud=1",
-            "-f",
-            "h264",
-            str(temp_path),
-        ]
-        return_code, transcode_error = _run_ffmpeg(transcode_command)
-        if return_code != 0:
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise RuntimeError(
-                "ffmpeg could not extract or generate an AIRV H.264 elementary stream. "
-                f"copy error: {copy_error[-800:]} transcode error: {transcode_error[-800:]}"
-            )
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise RuntimeError(
+            "ffmpeg could not generate the recovery-friendly AIRV H.264 stream. "
+            f"transcode error: {transcode_error[-800:]}"
+        )
 
     if not temp_path.exists() or temp_path.stat().st_size <= 0:
         raise RuntimeError("ffmpeg completed but did not create a non-empty H.264 file")

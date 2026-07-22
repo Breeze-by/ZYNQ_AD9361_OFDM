@@ -102,6 +102,12 @@ static int loopback_rx_done_for_current;
 #define NET_AIR0_PACKET_SEQ_OFFSET 16U
 #define NET_AIR0_FILE_OFFSET_OFFSET 24U
 #define NET_AIR0_CHUNK_BYTES_OFFSET 34U
+#define NET_AIRV_VERSION 2U
+#define NET_AIRV_VERSION_OFFSET 4U
+#define NET_AIRV_HEADER_LEN_OFFSET 5U
+#define NET_AIRV_HEADER_CRC_OFFSET 26U
+#define NET_AIRV_CHUNK_BYTES_OFFSET 40U
+#define NET_AIRV_PACKET_SEQ_OFFSET 58U
 #define NET_OPENOFDM_RX_BASE 0x40002000U
 #define NET_OPENOFDM_RX_REG(n) (NET_OPENOFDM_RX_BASE + ((n) * 4U))
 #define NET_RX_INTF_BASE 0x40003000U
@@ -761,6 +767,58 @@ static int net_air0_stream_offset_from_payload(const uint8_t *payload,
     return 1;
 }
 
+static int net_airv_stream_offset_from_payload(const uint8_t *payload,
+    uint32_t payload_len, uint32_t *stream_offset, uint32_t *packet_seq,
+    uint16_t *chunk_bytes)
+{
+    uint32_t seq;
+    uint32_t stored_header_crc;
+    uint32_t calculated_header_crc;
+    uint16_t chunk;
+    uint64_t raw_stream_offset;
+    uint8_t header_copy[NET_AIR_HEADER_BYTES];
+
+    if ((payload == NULL) || (stream_offset == NULL) || (packet_seq == NULL) ||
+        (chunk_bytes == NULL) || (payload_len < NET_AIR_HEADER_BYTES)) {
+        return 0;
+    }
+
+    if (net_load_le32(payload) != NET_AIRV_MAGIC) {
+        return 0;
+    }
+    if ((payload[NET_AIRV_VERSION_OFFSET] != NET_AIRV_VERSION) ||
+        (payload[NET_AIRV_HEADER_LEN_OFFSET] != NET_AIR_HEADER_BYTES)) {
+        return 0;
+    }
+
+    stored_header_crc = net_load_le32(&payload[NET_AIRV_HEADER_CRC_OFFSET]);
+    memcpy(header_copy, payload, NET_AIR_HEADER_BYTES);
+    header_copy[NET_AIRV_HEADER_CRC_OFFSET + 0U] = 0U;
+    header_copy[NET_AIRV_HEADER_CRC_OFFSET + 1U] = 0U;
+    header_copy[NET_AIRV_HEADER_CRC_OFFSET + 2U] = 0U;
+    header_copy[NET_AIRV_HEADER_CRC_OFFSET + 3U] = 0U;
+    calculated_header_crc = Net_Protocol_Crc32(header_copy, NET_AIR_HEADER_BYTES);
+    if (calculated_header_crc != stored_header_crc) {
+        return 0;
+    }
+
+    seq = net_load_le32(&payload[NET_AIRV_PACKET_SEQ_OFFSET]);
+    chunk = net_load_le16(&payload[NET_AIRV_CHUNK_BYTES_OFFSET]);
+    if (chunk < NET_AIR_HEADER_BYTES) {
+        return 0;
+    }
+
+    raw_stream_offset = ((uint64_t)seq) * ((uint64_t)chunk);
+    if (raw_stream_offset > 0xFFFFFFFFULL) {
+        return 0;
+    }
+
+    *stream_offset = (uint32_t)raw_stream_offset;
+    *packet_seq = seq;
+    *chunk_bytes = chunk;
+    return 1;
+}
+
 static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
     uint32_t tx_transfer_len, uint32_t tx_payload_len)
 {
@@ -1332,6 +1390,8 @@ static void net_loopback_poll_s2mm(void)
     uint32_t air0_packet_seq = 0U;
     uint16_t air0_chunk_bytes = 0U;
     uint64_t air0_file_offset = 0U;
+    uint32_t airv_packet_seq = 0U;
+    uint16_t airv_chunk_bytes = 0U;
     uint32_t length_field = 0U;
     uint32_t payload_len_guess = 0U;
     uint32_t trusted_capture_len;
@@ -1348,6 +1408,7 @@ static void net_loopback_poll_s2mm(void)
     int payload_magic_found = 0;
     int best_magic_found = 0;
     int air0_offset_valid = 0;
+    int airv_offset_valid = 0;
     int payload_len_valid = 0;
     int payload_len_mismatch = 0;
     const uint8_t *rx_payload_ptr;
@@ -1508,6 +1569,14 @@ static void net_loopback_poll_s2mm(void)
             &air0_file_offset) != 0)) {
         air0_offset_valid = 1;
     }
+    if ((payload_magic == NET_AIRV_MAGIC) &&
+        (net_airv_stream_offset_from_payload(rx_payload_ptr,
+            rx_payload_available_len,
+            &return_stream_offset,
+            &airv_packet_seq,
+            &airv_chunk_bytes) != 0)) {
+        airv_offset_valid = 1;
+    }
 
 #if NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS
     if (mismatch_found != 0) {
@@ -1522,12 +1591,14 @@ static void net_loopback_poll_s2mm(void)
         ((rf_retry_enabled == 0) || (mismatch_found == 0)) &&
         (payload_magic_found != 0) &&
         (rx_prefix_len == NET_LOOPBACK_RX_PREFIX_BYTES) &&
-        ((payload_magic != NET_AIR0_MAGIC) || (air0_offset_valid != 0))) ? 1 : 0;
+        ((payload_magic != NET_AIR0_MAGIC) || (air0_offset_valid != 0)) &&
+        ((payload_magic != NET_AIRV_MAGIC) || (airv_offset_valid != 0))) ? 1 : 0;
     abnormal = ((block_index_valid == 0) || (payload_len_valid == 0) ||
         (payload_len_mismatch != 0) ||
         (mismatch_found != 0) || (payload_magic_found == 0) ||
         (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES) ||
-        ((payload_magic == NET_AIR0_MAGIC) && (air0_offset_valid == 0))) ? 1 : 0;
+        ((payload_magic == NET_AIR0_MAGIC) && (air0_offset_valid == 0)) ||
+        ((payload_magic == NET_AIRV_MAGIC) && (airv_offset_valid == 0))) ? 1 : 0;
     should_summarize = net_loopback_should_summarize(loopback_rx_transfer_id, abnormal);
     rx_state_history = Xil_In32(NET_OPENOFDM_RX_STATE_HISTORY_ADDR);
     wd0 = net_openofdm_rx_watchdog_event_count(0U);
@@ -1554,6 +1625,8 @@ static void net_loopback_poll_s2mm(void)
         diag_class = "AIR_MAGIC_SHIFT";
     } else if ((payload_magic == NET_AIR0_MAGIC) && (air0_offset_valid == 0)) {
         diag_class = "AIR0_HEADER_INVALID";
+    } else if ((payload_magic == NET_AIRV_MAGIC) && (airv_offset_valid == 0)) {
+        diag_class = "AIRV_HEADER_INVALID";
     } else if (mismatch_found != 0) {
         diag_class = "AIR_MAGIC_PAYLOAD_DIFF";
     } else {
@@ -1647,6 +1720,17 @@ static void net_loopback_poll_s2mm(void)
                 (unsigned long)air0_packet_seq,
                 (unsigned)air0_chunk_bytes,
                 (unsigned long)air0_file_offset,
+                (unsigned long)return_stream_offset,
+                (block_index_valid != 0) ?
+                    (unsigned long)agg_blocks[dma_block_index].stream_offset : 0UL,
+                ((block_index_valid != 0) &&
+                    (return_stream_offset != agg_blocks[dma_block_index].stream_offset)) ?
+                    "yes" : "no");
+        }
+        if (airv_offset_valid != 0) {
+            UART_Printf("S2MM airv packet=%lu chunk=%u stream_off=%lu tx_stream_off=%lu desync=%s\r\n",
+                (unsigned long)airv_packet_seq,
+                (unsigned)airv_chunk_bytes,
                 (unsigned long)return_stream_offset,
                 (block_index_valid != 0) ?
                     (unsigned long)agg_blocks[dma_block_index].stream_offset : 0UL,

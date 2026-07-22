@@ -37,9 +37,11 @@ class VideoFrameState:
 
 
 class VideoStreamAssembler:
-    def __init__(self, max_incomplete_frames: int = 8):
+    def __init__(self, max_incomplete_frames: int = 3):
         self.max_incomplete_frames = max_incomplete_frames
         self.frames: Dict[int, VideoFrameState] = {}
+        self.completed_frames: Dict[int, VideoFrame] = {}
+        self.unavailable_frames = set()
         self.stream_meta = None
         self.frame_rx = 0
         self.frame_show = 0
@@ -60,6 +62,8 @@ class VideoStreamAssembler:
         self.last_pts_us = None
         self.fps = 0.0
         self.latest_frame_seq = -1
+        self.next_output_seq = None
+        self.allow_sequence_jump = False
 
     def _meta_tuple(self, header: AirvHeader):
         return (
@@ -82,15 +86,53 @@ class VideoStreamAssembler:
             return False
         return True
 
-    def _drop_stale_frames(self, newest_frame_seq: int):
-        stale_limit = newest_frame_seq - self.max_incomplete_frames
-        stale = [seq for seq in self.frames if seq < stale_limit]
-        for seq in stale:
-            state = self.frames.pop(seq)
-            missing = max(state.frag_count - len(state.fragments), 0)
-            self.frag_missing += missing
+    def _discard_frame(self, frame_seq: int, *, count_missing: bool = True):
+        state = self.frames.pop(frame_seq, None)
+        if state is not None and count_missing:
+            self.frag_missing += max(state.frag_count - len(state.fragments), 0)
+        self.completed_frames.pop(frame_seq, None)
+        if frame_seq not in self.unavailable_frames:
+            self.unavailable_frames.add(frame_seq)
             self.frame_drop += 1
-            self.waiting_keyframe = True
+
+    def _record_emitted_frame(self, frame: VideoFrame):
+        self.frame_show += 1
+        if self.last_pts_us is not None and frame.pts_us > self.last_pts_us:
+            interval = max((frame.pts_us - self.last_pts_us) / 1000000.0, 1e-6)
+            instant_fps = 1.0 / interval
+            self.fps = instant_fps if self.fps <= 0.0 else (self.fps * 0.8 + instant_fps * 0.2)
+        self.last_pts_us = frame.pts_us
+        if frame.frame_type == AIRV_FRAME_KEY:
+            self.waiting_keyframe = False
+
+    def _drain_ordered_frames(self, newest_frame_seq: int, *, force: bool = False) -> List[VideoFrame]:
+        emitted = []
+        if self.next_output_seq is None:
+            return emitted
+
+        while self.next_output_seq <= newest_frame_seq:
+            frame = self.completed_frames.pop(self.next_output_seq, None)
+            if frame is not None:
+                self.unavailable_frames.discard(self.next_output_seq)
+                self._record_emitted_frame(frame)
+                emitted.append(frame)
+                self.next_output_seq += 1
+                continue
+
+            if self.next_output_seq in self.unavailable_frames:
+                self.unavailable_frames.remove(self.next_output_seq)
+                self.next_output_seq += 1
+                continue
+
+            reorder_depth = newest_frame_seq - self.next_output_seq
+            if not force and reorder_depth < self.max_incomplete_frames:
+                break
+
+            self._discard_frame(self.next_output_seq)
+            self.unavailable_frames.remove(self.next_output_seq)
+            self.next_output_seq += 1
+
+        return emitted
 
     def _complete_frame(self, state: VideoFrameState) -> Optional[VideoFrame]:
         if len(state.fragments) != state.frag_count:
@@ -103,7 +145,6 @@ class VideoStreamAssembler:
             offset = state.offsets.get(frag_index)
             if fragment is None or offset != expected_offset:
                 self.bad_meta += 1
-                self.frame_drop += 1
                 return None
             ordered.append(fragment)
             expected_offset += len(fragment)
@@ -111,7 +152,6 @@ class VideoStreamAssembler:
         payload = b"".join(ordered)
         if len(payload) != state.frame_size:
             self.bad_meta += 1
-            self.frame_drop += 1
             return None
 
         bad_frame_crc = airv_crc32(payload) != state.frame_crc32
@@ -126,16 +166,9 @@ class VideoStreamAssembler:
         self.latency_sum_ms += latency_ms
         self.latency_count += 1
         self.latency_max_ms = max(self.latency_max_ms, latency_ms)
-        if self.last_pts_us is not None and state.pts_us > self.last_pts_us:
-            interval = max((state.pts_us - self.last_pts_us) / 1000000.0, 1e-6)
-            instant_fps = 1.0 / interval
-            self.fps = instant_fps if self.fps <= 0.0 else (self.fps * 0.8 + instant_fps * 0.2)
-        self.last_pts_us = state.pts_us
         self.frame_rx += 1
-        self.frame_show += 1
         if state.frame_type == AIRV_FRAME_KEY:
             self.keyframe_rx += 1
-            self.waiting_keyframe = False
 
         return VideoFrame(
             frame_seq=state.frame_seq,
@@ -157,9 +190,20 @@ class VideoStreamAssembler:
             return []
 
         self.frag_rx += 1
+        if self.next_output_seq is None:
+            self.next_output_seq = header.frame_seq
+        elif self.allow_sequence_jump:
+            while self.next_output_seq < header.frame_seq:
+                self._discard_frame(self.next_output_seq)
+                self.unavailable_frames.remove(self.next_output_seq)
+                self.next_output_seq += 1
+            self.allow_sequence_jump = False
+
+        if header.frame_seq < self.next_output_seq:
+            return []
+
         if header.frame_seq > self.latest_frame_seq:
             self.latest_frame_seq = header.frame_seq
-            self._drop_stale_frames(header.frame_seq)
 
         if not fragment_crc_ok:
             self.bad_frag_crc += 1
@@ -180,7 +224,9 @@ class VideoStreamAssembler:
             if (
                 state.frame_size != header.frame_size or
                 state.frag_count != header.frag_count or
-                state.frame_crc32 != header.frame_crc32
+                state.frame_crc32 != header.frame_crc32 or
+                state.frame_type != header.frame_type or
+                state.pts_us != header.pts_us
             ):
                 self.bad_meta += 1
                 return []
@@ -195,17 +241,29 @@ class VideoStreamAssembler:
 
         frame = self._complete_frame(state)
         if frame is None:
-            return []
+            if len(state.fragments) == state.frag_count:
+                self._discard_frame(header.frame_seq, count_missing=False)
+            return self._drain_ordered_frames(self.latest_frame_seq)
         self.frames.pop(header.frame_seq, None)
-        return [frame]
+        self.completed_frames[header.frame_seq] = frame
+        return self._drain_ordered_frames(self.latest_frame_seq)
 
     def flush_missing(self):
-        for state in list(self.frames.values()):
-            missing = max(state.frag_count - len(state.fragments), 0)
-            self.frag_missing += missing
-            self.frame_drop += 1
-            self.waiting_keyframe = True
+        for frame_seq in list(self.frames):
+            self._discard_frame(frame_seq)
+        for frame_seq in list(self.completed_frames):
+            self._discard_frame(frame_seq, count_missing=False)
         self.frames.clear()
+        self.completed_frames.clear()
+        self.unavailable_frames.clear()
+        if self.latest_frame_seq >= 0:
+            self.next_output_seq = self.latest_frame_seq + 1
+            self.allow_sequence_jump = True
+
+    def flush_complete(self) -> List[VideoFrame]:
+        if self.latest_frame_seq < 0:
+            return []
+        return self._drain_ordered_frames(self.latest_frame_seq, force=True)
 
     def metrics(self) -> dict:
         return {

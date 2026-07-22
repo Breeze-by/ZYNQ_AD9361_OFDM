@@ -431,13 +431,13 @@ AIR0 强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1440`
 64-byte AIR0 header + up to 1376-byte original file/test payload
 ```
 
-PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payload。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 本身不做 FEC、接收端 ACK 或分片级重传，只用于让接收端明确知道是否完整以及缺了哪些包；发送 GUI 可另行开启板端 `RF Strict Match + Retry (max 3)`，让整个 PS 聚合块在 RF/S2MM 失败后重发。
+PL 不解析 AIR0；PS 不恢复文件，只读取捕获块起始 AIR0 头的 `packet_seq/chunk_bytes` 来恢复延迟 RF 帧的回传偏移，其余内容仍按普通 payload 转发。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 本身不做 FEC、接收端 ACK 或分片级重传，只用于让接收端明确知道是否完整以及缺了哪些包；发送 GUI 可另行开启板端 `RF Strict Match + Retry (max 3)`，让整个 PS 聚合块在 RF/S2MM 失败后重发。
 
 如需回到旧版纯字节流，对发送 GUI 取消勾选 `AIR0 Packet Header`，或 CLI 使用 `--no-air-protocol`。
 
 ## PC-only AIRV realtime video payload header
 
-AIRV 是当前 PC 工具侧的实时视频传输/预览模式。PS/PL 不解析 AIRV；它们继续把 `net_data_header_t` 后面的 wire payload 当普通字节转发。发送 GUI 提供 `Transfer Mode`：
+AIRV 是当前 PC 工具侧的实时视频传输/预览模式。PL 不解析 AIRV；PS 也不组帧或解码，只校验捕获块起始的 AIRV v2 头并读取全局 `packet_seq/chunk_bytes`，用于给延迟到达的 RF/S2MM 数据恢复正确的 UDP 回传 `stream_offset`。发送 GUI 提供 `Transfer Mode`：
 
 ```text
 air0_file   当前默认 File/Test 精确恢复模式
@@ -451,7 +451,7 @@ AIRV 使用 64 字节固定头，`Chunk Bytes=1440` 时每个 PC->PS wire payloa
 64-byte AIRV header + up to 1376-byte encoded video frame fragment + optional zero padding
 ```
 
-AIRV v1 头包含 `session_id/stream_id/frame_seq/frag_index/frag_count/frame_type/frame_size/fragment_offset/fragment_len/chunk_bytes/frame_crc32/fragment_crc32/pts_us` 等字段。为保持 64 字节头，`tx_timestamp_us` 当前只携带低 32 bit，主要用于诊断。发送端会把 H.264 Annex-B elementary stream 按 access unit 粗分帧；如果输入文件没有 Annex-B start code，则先作为单个 encoded frame 分片发送。
+AIRV v2 头包含 `session_id/stream_id/packet_seq/frame_seq/frag_index/frag_count/frame_type/frame_size/fragment_offset/fragment_len/chunk_bytes/frame_crc32/fragment_crc32/pts_us` 等字段。每个分片都重复携带完整帧元数据，不要求先收到 `frag_index=0` 才能建立帧状态；全局 `packet_seq` 位于 64 字节头偏移 58，PS 用 `packet_seq * chunk_bytes` 计算绝对回传偏移，避免 TX/RX 解耦时误用当前 TX block 的偏移。发送端会把 H.264 Annex-B elementary stream 按 access unit 粗分帧；如果输入文件没有 Annex-B start code，则先作为单个 encoded frame 分片发送。AIRV v1 与 v2 不混用，升级后必须同时使用新版 ELF 和新版 PC 工具。
 
 AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸流：
 
@@ -459,12 +459,12 @@ AIRV 模式选择视频文件时，发送工具会自动准备 H.264 Annex-B 裸
 - 如果选择的是 `.mp4` 等容器文件，先在同目录查找同名 `.h264` / `.264`，例如 `clip.mp4` 对应 `clip.h264`。
 - 如果同名裸流已存在，发送 GUI 会直接复用这个 sidecar，不再对 MP4 做耗时探测；此时 AIRV FPS 日志显示 `fps_source=sidecar_fallback`，按 30fps 写入 PTS。
 - 如果同名裸流不存在，则调用 `ffmpeg` 在同目录生成 `clip.h264` 并保存下来；后续再选同一个 MP4 会直接快速复用这个 `.h264`。
-- 如果 MP4 内部已经是 H.264，优先无损提取并插入 AUD 分隔符；如果不是 H.264，则转码为 H.264 baseline、无 B 帧、GOP 30、带 AUD 的裸流。
+- 新生成的 sidecar 统一转码为 H.264 baseline、无 B 帧、带 AUD，并按源 FPS 设置约每秒一个固定 IDR；关闭 scenecut 漂移且在 IDR 重复 SPS/PPS，使连续错误触发重建后最多约一秒恢复。已有 `.h264/.264` 仍直接复用，其 GOP 和 SPS/PPS 周期由原文件决定；需要统一恢复上限时，删除旧 sidecar 后重新选择 MP4 生成。
 - 只有在没有 sidecar、需要从容器准备 AIRV 源时，发送端才会用 `ffprobe` 读取源视频帧率，并把真实帧间隔写入 AIRV `pts_us`；`ffprobe` 最多等待 2 秒，失败则回退到 `30fps`，GUI 日志会显示 `AIRV source file=... fps=... fps_source=...`。
 
 因此可以直接在发送 GUI 里选择 MP4；只有首次为没有 sidecar 的容器视频准备 AIRV 源时，本机必须能在 `PATH` 中找到 `ffmpeg`。
 
-AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计和可选实时预览路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端会把帧组出来并计入 `frame_show`，同时把 encoded H.264 access unit 交给预览解码器。缺分片、坏头、元数据不一致或超过实时窗口的未完成帧会被 drop，并使预览等待后续 keyframe 恢复。AIRV 不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
+AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模式，并走实时组帧统计和可选实时预览路径。头校验严格：magic/version/header_len/header_crc32、分片序号、分片长度和 LAST_FRAGMENT 都必须合法。payload CRC 和 frame CRC 只计数，不作为自动丢帧条件；只要头有效且分片齐全，接收端仍把 encoded H.264 access unit 交给预览解码器，允许错码表现为局部马赛克。组帧器以 `(session_id, stream_id, frame_seq)` 保存分片，按 `frag_index/fragment_offset` 拼接，并只按递增 `frame_seq` 输出；最多保留 3 帧乱序深度，确认某帧无法补齐后只 drop 该帧，再立即释放后续完整帧。单帧缺失不会强制等待 keyframe。AIRV 不保存精确文件，不做接收端 ACK、重传、FEC 或音频。
 
 接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1280x720`，不再挤占主窗口日志区域。AIRV 解码在后台线程执行，Tk 主线程以约 `30fps` 刷新最近一张已解码图片，避免 PyAV 解码或坏码流导致 GUI 未响应。预览输入端会缓存最多 `240` 个 assembled encoded frame，并按 H.264 顺序送给解码器，避免为了追最新画面而跳过 P 帧参考链。只有预览队列真的满了，才清空预览队列并等待下一帧 keyframe 恢复；这只影响预览，不影响 AIRV 统计。主窗口保留 `Preview/Preview Input/Preview Backlog/Preview Drops/Decoded/Displayed/Decoder Errors/Waiting Key` 状态，其中 `Displayed` 是实际渲染到 Tk 预览窗口的帧数。预览依赖可选 Python 包 `av` 和 `Pillow`：
 
@@ -472,7 +472,7 @@ AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模�
 python -m pip install av pillow
 ```
 
-如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；如果连续解码失败或参考帧状态不可用，会等待下一帧 keyframe 后重建 H.264 解码器并继续显示。
+如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；一次或两次连续 P 帧解码异常只显示 `Decode warning` 并继续喂后续帧，连续 3 次失败才重建解码器并等待下一帧 keyframe。
 
 AIRV 接收 GUI 还会限量输出 `VIDEO_DIAG` 分层诊断。正常短视频应依次看到
 `mode=AIRV`、`fragment ... frag_crc=OK` 和
@@ -490,8 +490,8 @@ AIR0，AIR0 精确文件恢复仍要求从 offset 0 连续接收，不能跳过�
 
 AIRV 流中间出现至少一个完整 wire chunk 的缺口时，接收器会在下一段起点同时
 满足 chunk 对齐和 AIRV magic 校验后跳过缺口，打印
-`VIDEO_DIAG gap_skip from=... to=... bytes=...`，丢弃跨缺口的未完成帧并等待
-后续 keyframe。`VIDEO` 中的 `stream_gap` 累计这类跳过的字节数。AIR0 不允许
+`VIDEO_DIAG gap_skip from=... to=... bytes=...`，只丢弃跨缺口的未完成帧，
+后续完整帧继续按序送入解码器；只有连续解码失败才等待 keyframe。`VIDEO` 中的 `stream_gap` 累计这类跳过的字节数。AIR0 不允许
 该行为。
 
 预览线程正常运行时，接收 GUI 每秒输出一条 `VIDEO_PREVIEW`，包含
@@ -751,7 +751,7 @@ S2MM 捕获窗口。简单模式 AXI DMA 只保留编程的窗口容量，没有
 若头部长度非法或与当前 TX block 不同，摘要分别显示
 `RX_LENGTH_INVALID` / `RX_LENGTH_MISMATCH`，且非法长度的帧不会回传。
 
-当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic。如果找到 AIR0，会打印 `S2MM air0 seq=... chunk=... file_off=... stream_off=... tx_stream_off=... desync=...`，并用 `packet_seq * chunk_bytes` 推导 UDP 回传的 `stream_offset`；如果找不到，会在 `S2MM diag` 中给出 `class=NO_AIR_MAGIC`、最接近 magic 的 `best_off/best_xor/best_bits`。这可以区分三类问题：payload 前缀不是固定 16 字节、RX 返回的是延迟旧帧、或者 PL/RF/RX 返回数据本身不是 AIR0/AIRV wire payload。
+当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic。AIR0 与 AIRV v2 都会校验必要头字段，并用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`；详细日志分别打印 `S2MM air0 ... desync=...` 和 `S2MM airv packet=... chunk=... stream_off=... tx_stream_off=... desync=...`。AIRV v2 头 CRC 或关键字段非法时摘要为 `class=AIRV_HEADER_INVALID`；找不到 magic 时为 `class=NO_AIR_MAGIC`，并给出最接近 magic 的 `best_off/best_xor/best_bits`。
 
 S2MM 完成后的校验和动作取决于 RF 模式：
 
@@ -775,6 +775,7 @@ S2MM rx_payload_head ...
 S2MM tx_head ...
 S2MM payload_magic offset=16 magic=0x30524941 expected_prefix=16
 S2MM air0 seq=0 chunk=1440 file_off=0 stream_off=0 tx_stream_off=0 desync=no
+S2MM airv packet=0 chunk=1440 stream_off=0 tx_stream_off=0 desync=no
 LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...
 DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... rx_state=0x... wd=... count=1
 DMA stall recovery reset_done=1
@@ -789,7 +790,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 
 - 启动后的 `S2MM loopback debug ready` 行。
 - 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
-- 所有 `S2MM diag`、`S2MM payload_magic` 和 `S2MM air0` 行。
+- 所有 `S2MM diag`、`S2MM payload_magic`、`S2MM air0` 和 `S2MM airv` 行。
 - 所有 `LB UDP sent` 行。
 - 同一轮的 `UDP RX reset ... rf_mode=...`、`RF retry`、`RF drop`、`S2MM pass corrupt/reject`、`STAT rate` / `STAT state` 行。
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。

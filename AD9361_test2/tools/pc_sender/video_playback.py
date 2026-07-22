@@ -18,6 +18,8 @@ class VideoPlaybackResult:
 
 
 class VideoPreviewDecoder:
+    MAX_CONSECUTIVE_ERRORS = 3
+
     def __init__(self):
         self.available = False
         self.unavailable_reason = ""
@@ -82,8 +84,9 @@ class VideoPreviewDecoder:
             result.error = self.unavailable_reason
             return result
 
+        was_waiting_keyframe = self.waiting_keyframe
         if frame_type == AIRV_FRAME_KEY:
-            if self.waiting_keyframe:
+            if was_waiting_keyframe:
                 self._reset_decoder()
             self.waiting_keyframe = False
         elif self.waiting_keyframe:
@@ -100,9 +103,11 @@ class VideoPreviewDecoder:
         except Exception as exc:
             self.decoder_errors += 1
             self.consecutive_errors += 1
-            if frame_type != AIRV_FRAME_KEY or self.consecutive_errors >= 3:
+            if was_waiting_keyframe or self.consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
                 self.waiting_keyframe = True
                 self._reset_decoder()
+            else:
+                self.waiting_keyframe = False
             result.decoder_errors = self.decoder_errors
             result.waiting_keyframe = self.waiting_keyframe
             result.error = str(exc)

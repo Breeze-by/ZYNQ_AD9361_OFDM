@@ -713,8 +713,13 @@ class ReceiverGui:
             )
 
         if result.error:
-            self.preview_status_var.set("Unavailable" if not self.video_decoder.available else "Decode error")
-            self._set_preview_message(result.error, clear_image=True)
+            if not self.video_decoder.available:
+                self.preview_status_var.set("Unavailable")
+            elif waiting_keyframe:
+                self.preview_status_var.set("Waiting keyframe")
+            else:
+                self.preview_status_var.set("Decode warning")
+            self._set_preview_message(result.error, clear_image=waiting_keyframe)
             now = time.time()
             if (not self.preview_unavailable_logged) or (now - self.last_preview_log_time) >= 2.0:
                 self.preview_unavailable_logged = True

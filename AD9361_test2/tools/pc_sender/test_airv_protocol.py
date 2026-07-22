@@ -35,6 +35,7 @@ class AirvProtocolTests(unittest.TestCase):
             b"abc",
             session_id=1,
             stream_id=2,
+            packet_seq=0,
             frame_seq=0,
             frag_index=0,
             frag_count=1,
@@ -64,6 +65,7 @@ class AirvProtocolTests(unittest.TestCase):
             b"abc",
             session_id=1,
             stream_id=2,
+            packet_seq=8,
             frame_seq=8,
             frag_index=0,
             frag_count=1,
@@ -94,6 +96,7 @@ class AirvProtocolTests(unittest.TestCase):
             b"abc",
             session_id=1,
             stream_id=2,
+            packet_seq=0,
             frame_seq=0,
             frag_index=0,
             frag_count=2,
@@ -108,6 +111,7 @@ class AirvProtocolTests(unittest.TestCase):
             b"xyz",
             session_id=1,
             stream_id=2,
+            packet_seq=3,
             frame_seq=2,
             frag_index=0,
             frag_count=1,
@@ -132,14 +136,51 @@ class AirvProtocolTests(unittest.TestCase):
         messages = [payload["message"] for name, payload in events if name == "video_diag"]
         self.assertEqual(stats.airv_stream_gap_bytes, 2880)
         self.assertEqual(stats.airv_frames_rx, 1)
-        self.assertEqual(stats.airv_frames_drop, 1)
+        self.assertEqual(stats.airv_frames_drop, 2)
         self.assertTrue(any("gap_skip from=1440 to=4320 bytes=2880" in message for message in messages))
+
+    def test_receiver_resync_scans_past_multiple_damaged_headers(self):
+        def packet(packet_seq, frame_seq, payload):
+            return build_airv_packet(
+                payload,
+                session_id=1,
+                stream_id=2,
+                packet_seq=packet_seq,
+                frame_seq=frame_seq,
+                frag_index=0,
+                frag_count=1,
+                frame_type=AIRV_FRAME_KEY,
+                frame_size=len(payload),
+                fragment_offset=0,
+                chunk_bytes=1440,
+                frame_crc32=crc32(payload),
+                pts_us=frame_seq * 33333,
+            ).ljust(1440, b"\x00")
+
+        stream = packet(0, 0, b"first")
+        stream += b"damaged".ljust(1440 * 3, b"\xA5")
+        stream += packet(4, 4, b"recovered")
+        receiver = LoopbackReceiver(ReceiverConfig())
+        stats = ReceiverStats()
+        events = []
+        try:
+            receiver._raw_assembler.write(0, stream)
+            callback = lambda name, payload: events.append((name, payload))
+            receiver._parse_airv_stream(stats, callback)
+            receiver._save_if_ready(stats, callback, force=True)
+        finally:
+            receiver._discard_unsaved()
+
+        video_frames = [payload for name, payload in events if name == "video_frame"]
+        self.assertEqual([payload["frame_seq"] for payload in video_frames], [0, 4])
+        self.assertGreater(stats.airv_bad_header, 0)
 
     def test_header_roundtrip(self):
         packet = build_airv_packet(
             b"abc",
             session_id=7,
             stream_id=11,
+            packet_seq=7,
             frame_seq=3,
             frag_index=0,
             frag_count=1,
@@ -152,8 +193,12 @@ class AirvProtocolTests(unittest.TestCase):
         )
         header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
         self.assertEqual(header.magic, AIRV_MAGIC)
+        self.assertEqual(header.version, 2)
         self.assertEqual(header.header_len, AIRV_HEADER_BYTES)
+        self.assertEqual(header.packet_seq, 7)
         self.assertEqual(header.fragment_len, 3)
+        self.assertEqual(int.from_bytes(packet[40:42], "little"), 1440)
+        self.assertEqual(int.from_bytes(packet[58:62], "little"), 7)
         self.assertEqual(packet[AIRV_HEADER_BYTES:AIRV_HEADER_BYTES + 3], b"abc")
 
     def test_fragment_reassembly(self):
@@ -169,6 +214,7 @@ class AirvProtocolTests(unittest.TestCase):
                 fragment,
                 session_id=1,
                 stream_id=2,
+                packet_seq=frag_index,
                 frame_seq=0,
                 frag_index=frag_index,
                 frag_count=frag_count,
@@ -196,6 +242,7 @@ class AirvProtocolTests(unittest.TestCase):
             b"abc",
             session_id=1,
             stream_id=2,
+            packet_seq=0,
             frame_seq=0,
             frag_index=0,
             frag_count=1,
@@ -216,11 +263,99 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertEqual(assembler.bad_frag_crc, 1)
         self.assertEqual(assembler.bad_frame_crc, 1)
 
+    def test_incomplete_frame_drops_locally_and_releases_later_frames_in_order(self):
+        assembler = VideoStreamAssembler(max_incomplete_frames=2)
+
+        def process(frame_seq, payload, frag_index=0, frag_count=1, frame_size=None):
+            if frame_size is None:
+                frame_size = len(payload)
+            packet = build_airv_packet(
+                payload,
+                session_id=1,
+                stream_id=2,
+                packet_seq=frame_seq,
+                frame_seq=frame_seq,
+                frag_index=frag_index,
+                frag_count=frag_count,
+                frame_type=AIRV_FRAME_KEY if frame_seq == 0 else 2,
+                frame_size=frame_size,
+                fragment_offset=frag_index * len(payload),
+                chunk_bytes=1440,
+                frame_crc32=crc32(payload if frag_count == 1 else payload + b"missing"),
+                pts_us=frame_seq * 33333,
+            )
+            header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+            return assembler.process_fragment(header, payload, True)
+
+        self.assertEqual(process(0, b"partial", frag_count=2, frame_size=14), [])
+        self.assertEqual(process(1, b"frame1"), [])
+        released = process(2, b"frame2")
+        self.assertEqual([frame.frame_seq for frame in released], [1, 2])
+        self.assertEqual(assembler.frame_drop, 1)
+        self.assertEqual(assembler.frag_missing, 1)
+        self.assertFalse(assembler.waiting_keyframe)
+
+    def test_completed_frames_never_emit_backwards(self):
+        assembler = VideoStreamAssembler()
+
+        def process(frame_seq):
+            payload = f"frame{frame_seq}".encode()
+            packet = build_airv_packet(
+                payload,
+                session_id=1,
+                stream_id=2,
+                packet_seq=frame_seq,
+                frame_seq=frame_seq,
+                frag_index=0,
+                frag_count=1,
+                frame_type=AIRV_FRAME_KEY,
+                frame_size=len(payload),
+                fragment_offset=0,
+                chunk_bytes=1440,
+                frame_crc32=crc32(payload),
+                pts_us=frame_seq * 33333,
+            )
+            header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+            return assembler.process_fragment(header, payload, True)
+
+        emitted = process(1) + process(0) + process(2)
+        self.assertEqual([frame.frame_seq for frame in emitted], [1, 2])
+
+    def test_idle_finish_releases_complete_frames_after_a_missing_frame(self):
+        assembler = VideoStreamAssembler(max_incomplete_frames=3)
+
+        def process(frame_seq, payload, frag_count=1, frame_size=None):
+            frame_size = len(payload) if frame_size is None else frame_size
+            packet = build_airv_packet(
+                payload,
+                session_id=1,
+                stream_id=2,
+                packet_seq=frame_seq,
+                frame_seq=frame_seq,
+                frag_index=0,
+                frag_count=frag_count,
+                frame_type=AIRV_FRAME_KEY,
+                frame_size=frame_size,
+                fragment_offset=0,
+                chunk_bytes=1440,
+                frame_crc32=crc32(payload),
+                pts_us=frame_seq * 33333,
+            )
+            header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+            return assembler.process_fragment(header, payload, True)
+
+        self.assertEqual(process(0, b"partial", frag_count=2, frame_size=14), [])
+        self.assertEqual(process(1, b"complete"), [])
+        released = assembler.flush_complete()
+        self.assertEqual([frame.frame_seq for frame in released], [1])
+        self.assertEqual(assembler.frame_drop, 1)
+
     def test_bad_header_crc_rejected(self):
         packet = bytearray(build_airv_packet(
             b"abc",
             session_id=1,
             stream_id=2,
+            packet_seq=0,
             frame_seq=0,
             frag_index=0,
             frag_count=1,
@@ -239,7 +374,7 @@ class AirvProtocolTests(unittest.TestCase):
         self.assertNotEqual(AIR_MAGIC, AIRV_MAGIC)
 
     def test_airv_stream_uses_fixed_wire_chunks(self):
-        h264_idr = b"\x00\x00\x00\x01\x65" + bytes(range(100))
+        h264_idr = b"\x00\x00\x00\x01\x65" + bytes(index & 0xFF for index in range(3000))
         stream = build_airv_stream(
             h264_idr,
             chunk_bytes=1440,
@@ -247,8 +382,12 @@ class AirvProtocolTests(unittest.TestCase):
             stream_id=2,
         )
         self.assertEqual(len(stream) % 1440, 0)
-        header = parse_airv_header(stream[:AIRV_HEADER_BYTES])
-        self.assertEqual(header.frame_seq, 0)
+        headers = [
+            parse_airv_header(stream[offset:offset + AIRV_HEADER_BYTES])
+            for offset in range(0, len(stream), 1440)
+        ]
+        self.assertEqual([header.packet_seq for header in headers], list(range(len(headers))))
+        self.assertTrue(all(header.frame_seq == 0 for header in headers))
 
     def test_h264_multislice_frame_is_not_overcounted(self):
         start = b"\x00\x00\x00\x01"
@@ -290,6 +429,31 @@ class AirvProtocolTests(unittest.TestCase):
             self.assertEqual(source.path, h264_path)
             self.assertEqual(source.fps_source, "sidecar_fallback")
 
+    def test_new_airv_sidecar_has_one_second_idr_and_repeated_headers(self):
+        with TemporaryDirectory() as temp_dir:
+            mp4_path = Path(temp_dir) / "clip.mp4"
+            mp4_path.write_bytes(b"not a real mp4")
+            commands = []
+
+            def fake_run(command):
+                commands.append(command)
+                Path(command[-1]).write_bytes(b"\x00\x00\x00\x01\x65")
+                return 0, ""
+
+            with mock.patch("sender_core.probe_video_fps", return_value=25.0), \
+                    mock.patch("sender_core.shutil.which", return_value="ffmpeg"), \
+                    mock.patch("sender_core._run_ffmpeg", side_effect=fake_run):
+                source = sender_core.prepare_airv_source(str(mp4_path))
+
+            self.assertEqual(source.fps, 25.0)
+            self.assertEqual(len(commands), 1)
+            command = commands[0]
+            self.assertEqual(command[command.index("-g") + 1], "25")
+            self.assertEqual(command[command.index("-keyint_min") + 1], "25")
+            x264_params = command[command.index("-x264-params") + 1]
+            self.assertIn("repeat-headers=1", x264_params)
+            self.assertIn("scenecut=0", x264_params)
+
     def test_airv_h264_input_is_used_directly(self):
         with TemporaryDirectory() as temp_dir:
             h264_path = Path(temp_dir) / "clip.264"
@@ -324,6 +488,7 @@ class AirvProtocolTests(unittest.TestCase):
         second = parse_airv_header(prepared[1440:1440 + AIRV_HEADER_BYTES])
         self.assertEqual(first.pts_us, 0)
         self.assertEqual(second.pts_us, 40000)
+        self.assertEqual((first.packet_seq, second.packet_seq), (0, 1))
 
     def test_video_fps_uses_pts_not_processing_burst(self):
         frame0 = b"abc"
@@ -335,6 +500,7 @@ class AirvProtocolTests(unittest.TestCase):
                 frame,
                 session_id=1,
                 stream_id=2,
+                packet_seq=seq,
                 frame_seq=seq,
                 frag_index=0,
                 frag_count=1,
@@ -359,6 +525,7 @@ class AirvProtocolTests(unittest.TestCase):
                 frame,
                 session_id=1,
                 stream_id=2,
+                packet_seq=seq,
                 frame_seq=seq,
                 frag_index=0,
                 frag_count=1,
@@ -395,6 +562,7 @@ class AirvProtocolTests(unittest.TestCase):
                 frame,
                 session_id=1,
                 stream_id=2,
+                packet_seq=seq,
                 frame_seq=seq,
                 frag_index=0,
                 frag_count=1,
