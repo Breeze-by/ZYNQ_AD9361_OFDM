@@ -474,13 +474,7 @@ python -m pip install av pillow
 
 如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；一次或两次连续 P 帧解码异常只显示 `Decode warning` 并继续喂后续帧，连续 3 次失败才重建解码器并等待下一帧 keyframe。
 
-AIRV 接收 GUI 还会限量输出 `VIDEO_DIAG` 分层诊断。正常短视频应依次看到
-`mode=AIRV`、`fragment ... frag_crc=OK` 和
-`frame_complete ... frame_crc=OK`。`wait_chunk` 表示接收端仍在等待当前固定
-wire chunk 的后续字节；`wait_magic`、`resync` 或 `bad_header` 则优先指向
-回传流偏移、连续性或 AIRV 头损坏。如果 fragment 和 frame CRC 均正常，但
-`Decoded` / `Displayed` 不增长，应继续查看 `VIDEO_PREVIEW`，重点检查
-PyAV/Pillow 环境或 H.264 解码状态。
+AIRV 接收 GUI 只保留少量关键 `VIDEO_DIAG`：模式识别、中途接入、magic 重同步、坏头和跨缺口恢复。逐分片 `fragment`、正常等待 `wait_chunk`、逐帧 `frame_complete/VIDEO_FRAME` 已关闭，坏分片和坏帧统一查看每两秒一条的 `VIDEO bad_frag_crc/bad_frame_crc` 以及最终 `VIDEO_DONE`，避免日志本身抢占 PC 处理时间。如果组帧计数增长但 `Decoded/Displayed` 不增长，应继续查看 `VIDEO_PREVIEW`，重点检查 PyAV/Pillow 环境或 H.264 解码状态。
 
 AIRV 是实时预览模式，允许在开头若干 S2MM block 丢失时从第一个实际收到的
 完整 AIRV chunk 中途接入。此时日志会打印
@@ -494,7 +488,7 @@ AIRV 流中间出现至少一个完整 wire chunk 的缺口时，接收器会在
 后续完整帧继续按序送入解码器；只有连续解码失败才等待 keyframe。`VIDEO` 中的 `stream_gap` 累计这类跳过的字节数。AIR0 不允许
 该行为。
 
-预览线程正常运行时，接收 GUI 每秒输出一条 `VIDEO_PREVIEW`，包含
+预览线程正常运行时，接收 GUI 每两秒最多输出一条 `VIDEO_PREVIEW`，包含
 `input/backlog/drops/decoded/rendered/decoder_errors/waiting_key/images/skipped/error`；
 AIRV idle finish 时还会输出 `VIDEO_PREVIEW_DONE`。其中 `decoded` 是 PyAV 解码
 出的图像累计数，`rendered` 是 Tk 实际显示数，两者可用于区分组帧、解码和 GUI
@@ -504,7 +498,6 @@ AIRV 接收日志示例：
 
 ```text
 VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1
-VIDEO_FRAME frame=42 bytes=3900 bad_frag_crc=1 bad_frame_crc=1 latency_ms=4.8
 VIDEO_DONE frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 fps=24.8 latency_ms=5.1 latency_avg_ms=4.2 latency_max_ms=8.7
 DONE VIDEO frame_rx=120 frame_show=120 frame_drop=0 frag_rx=280 frag_missing=0 bad_hdr=0 bad_meta=0 bad_frag_crc=0 bad_frame_crc=0 keyframe_rx=4 waiting_keyframe=0 fps=24.8 latency_ms=5.1 latency_avg_ms=4.2 latency_max_ms=8.7
 ```
@@ -728,12 +721,12 @@ RX_TRANSFER_LENGTH_BYTES       8192
 NET_DMA_STALL_TIMEOUT_US       20000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
-NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 8
+NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 2
 NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS 0
 NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS 0
-NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS 16
+NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS 8
 NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS 0
-NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 1
+NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 0
 NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_S2MM
 ```
 
@@ -741,7 +734,7 @@ RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。当前
 
 当前默认已经切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM`，启动日志应出现 `Loopback return source=S2MM RF path`。上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；如果后续再次怀疑 PC/PS 侧，可临时切回该模式，启动日志会显示 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块打印 `TXECHO return ... first=0x30524941 ...`。
 
-为定位 RF/S2MM 问题且避免 UART 过载，当前只对前 8 个 S2MM block 打印较完整的 `S2MM done/rx_head/rx_hdr/rx_payload_head/tx_head`，之后不按间隔打印大段 dump，也不因 `cmp=DIFF` 强制打印整块诊断。另有一行轻量 `S2MM diag ...` 摘要：前 16 个 block 固定打印，之后只在异常时打印。该摘要包含 AIR0/AIRV magic 搜索、最接近 magic 的候选、TX/RX CRC、首字、openofdm RX state history 和 watchdog event 计数。
+为避免 UART 打印拖慢 PS/lwIP/DMA 主循环，当前只对前 2 个 S2MM block 打印较完整的 `S2MM done/rx_head/rx_hdr/rx_payload_head/tx_head`，并只对前 8 个 block 打印一行 `S2MM diag ...` 摘要。后续普通 payload mismatch 不再逐块打印 `S2MM diag/S2MM pass corrupt`，其影响由 PC 的周期 `VIDEO` 和最终 `VIDEO_DONE` 汇总；结构无效仍打印 `S2MM reject`，DMA/RF timeout、retry、drop、error 和周期 `STAT` 仍保留。
 
 每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节
 S2MM 捕获窗口。简单模式 AXI DMA 只保留编程的窗口容量，没有独立的实际接收

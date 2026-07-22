@@ -413,7 +413,7 @@ class LoopbackReceiver:
             callback(event_name, payload)
 
     def _emit_airv_diag(self, callback, message: str, *, force: bool = False):
-        if self._airv_diag_count >= 64 or (not force and self._airv_diag_count >= 24):
+        if self._airv_diag_count >= 12 or (not force and self._airv_diag_count >= 4):
             return
         self._airv_diag_count += 1
         self._emit(callback, "video_diag", {"message": message})
@@ -769,13 +769,6 @@ class LoopbackReceiver:
     def _emit_airv_frames(self, frames, stats: ReceiverStats, callback):
         self._refresh_airv_stats(stats)
         for frame in frames:
-            self._emit_airv_diag(
-                callback,
-                f"frame_complete frame={frame.frame_seq} type={frame.frame_type} "
-                f"bytes={len(frame.payload)} frag_crc={'BAD' if frame.bad_fragment_crc else 'OK'} "
-                f"frame_crc={'BAD' if frame.bad_frame_crc else 'OK'}",
-                force=frame.bad_fragment_crc or frame.bad_frame_crc,
-            )
             self._emit(callback, "video_frame", {
                 "frame_seq": frame.frame_seq,
                 "frame_type": frame.frame_type,
@@ -908,15 +901,7 @@ class LoopbackReceiver:
             if self._airv_parse_offset + header.chunk_bytes > contiguous:
                 if self._try_skip_airv_gap(stats, callback, contiguous):
                     continue
-                if self._airv_wait_diag_offset != self._airv_parse_offset:
-                    self._airv_wait_diag_offset = self._airv_parse_offset
-                    self._emit_airv_diag(
-                        callback,
-                        f"wait_chunk parse_off={self._airv_parse_offset} "
-                        f"need_end={self._airv_parse_offset + header.chunk_bytes} "
-                        f"contiguous={contiguous} frame={header.frame_seq} "
-                        f"frag={header.frag_index}/{header.frag_count} chunk={header.chunk_bytes}",
-                    )
+                self._airv_wait_diag_offset = self._airv_parse_offset
                 return
             self._airv_wait_diag_offset = -1
 
@@ -928,14 +913,6 @@ class LoopbackReceiver:
                 return
 
             fragment_crc_ok = airv_crc32(payload) == header.fragment_crc32
-            self._emit_airv_diag(
-                callback,
-                f"fragment parse_off={self._airv_parse_offset} frame={header.frame_seq} "
-                f"frag={header.frag_index}/{header.frag_count} type={header.frame_type} "
-                f"frag_len={header.fragment_len} frame_size={header.frame_size} "
-                f"chunk={header.chunk_bytes} frag_crc={'OK' if fragment_crc_ok else 'BAD'}",
-                force=not fragment_crc_ok,
-            )
             frames = self._video.process_fragment(header, payload, fragment_crc_ok)
             self._emit_airv_frames(frames, stats, callback)
 
@@ -1289,13 +1266,7 @@ def run_cli(args) -> int:
         elif event_name == "saved":
             print(f"SAVED {payload['path']}")
         elif event_name == "video_frame":
-            if payload["bad_fragment_crc"] or payload["bad_frame_crc"]:
-                print(
-                    f"VIDEO_FRAME frame={payload['frame_seq']} bytes={payload['bytes']} "
-                    f"bad_frag_crc={int(payload['bad_fragment_crc'])} "
-                    f"bad_frame_crc={int(payload['bad_frame_crc'])} "
-                    f"latency_ms={payload['latency_ms']:.1f}"
-                )
+            pass
         elif event_name == "video_done":
             stats = payload["stats"]
             print(

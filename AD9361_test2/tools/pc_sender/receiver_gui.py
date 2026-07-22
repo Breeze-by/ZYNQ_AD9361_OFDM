@@ -699,7 +699,7 @@ class ReceiverGui:
         now = time.time()
         if (
             self.last_preview_summary_log_time == 0.0 or
-            (now - self.last_preview_summary_log_time) >= 1.0 or
+            (now - self.last_preview_summary_log_time) >= 2.0 or
             result.error
         ):
             self.last_preview_summary_log_time = now
@@ -794,7 +794,7 @@ class ReceiverGui:
             stats = payload["stats"]
             self._update_stats(stats)
             now = time.time()
-            if now - self.last_summary_log_time >= 0.5:
+            if now - self.last_summary_log_time >= 2.0:
                 self.last_summary_log_time = now
                 if stats.airv_mode:
                     self._append_log(
@@ -826,13 +826,6 @@ class ReceiverGui:
             stats = payload["stats"]
             self._update_stats(stats)
             self._handle_video_preview(payload)
-            if payload["bad_fragment_crc"] or payload["bad_frame_crc"]:
-                self._append_log(
-                    f"VIDEO_FRAME frame={payload['frame_seq']} bytes={payload['bytes']} "
-                    f"bad_frag_crc={int(payload['bad_fragment_crc'])} "
-                    f"bad_frame_crc={int(payload['bad_frame_crc'])} "
-                    f"latency_ms={payload['latency_ms']:.1f}"
-                )
             return
 
         if event_name == "video_done":

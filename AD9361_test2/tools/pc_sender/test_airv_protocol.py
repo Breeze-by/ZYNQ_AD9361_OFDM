@@ -57,8 +57,8 @@ class AirvProtocolTests(unittest.TestCase):
 
         messages = [payload["message"] for name, payload in events if name == "video_diag"]
         self.assertTrue(any("mode=AIRV" in message for message in messages))
-        self.assertTrue(any("fragment parse_off=0" in message for message in messages))
-        self.assertTrue(any("frame_complete frame=0" in message for message in messages))
+        self.assertFalse(any("fragment parse_off=" in message for message in messages))
+        self.assertFalse(any("frame_complete frame=" in message for message in messages))
 
     def test_receiver_can_late_attach_to_airv_after_initial_gap(self):
         packet = build_airv_packet(
