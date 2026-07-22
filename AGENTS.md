@@ -16,7 +16,7 @@
 ## 用户协作约定
 
 - 每次完成代码或文档修改后，必须 `git commit` 并 `git push` 到远程；不要让用户自己 push。提交前后都要用 `rtk git status --short` 确认工作区状态。
-- 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`Payload CRC32`、`AIR0 Packet Header` 等。
+- 用户主要使用 GUI 发送程序 `AD9361_test2/tools/pc_sender/sender_gui.py`，不要用 CLI 命令作为测试指令。需要用户跑测试时，直接给 GUI 中的字段设置，例如 `Mode`、`Test Bytes`、`Chunk Bytes`、`Window Size`、`Throughput Mode`、`Payload CRC32`、`RF Strict Match + Retry (max 3)`、`AIR0 Packet Header` 等。
 - 旧版额外封装和测试 pattern 选项已从 PC/PS/文档移除，以后不要再建议用户使用相关 GUI 字段或 CLI 参数。PC->PS 应用层包头后始终是普通 wire payload；PS/PL 不根据 payload 内容做额外交互。
 - 当前 AIRV 实时视频模式已支持接收 GUI 独立 `AIRV Preview` 窗口、后台 PyAV 解码和预览队列。AIR0 仍是精确文件/测试数据恢复模式；AIRV 是实时视频组帧/预览/统计模式，不保存精确文件，不做接收端 ACK、重传、FEC 或音频。PS/PL 仍不解析 AIR0/AIRV。
 - AIRV 接收器允许开头 S2MM block 丢失后从第一个完整 AIRV chunk 中途接入，日志打印 `VIDEO_DIAG late_attach initial_missing=...`；随后等待 H.264 keyframe 恢复预览。AIR0 仍要求 offset 0 起始连续，不能用该行为掩盖精确文件缺失。
@@ -97,8 +97,9 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - AIRV 预览依赖可选 `av` 和 `Pillow`。接收 GUI 会打开独立 `AIRV Preview` 窗口，默认 `1280x720`；后台线程解码，Tk 主线程约 30fps 刷新。预览输入队列最多缓存 240 个 assembled encoded frame，按 H.264 顺序送入解码器；队列满时才丢弃预览队列并等待下一帧 keyframe。`Preview Input`、`Preview Backlog`、`Preview Drops`、`Decoded`、`Displayed`、`Decoder Errors`、`Waiting Key` 是预览指标，其中 `Displayed` 表示实际渲染到 Tk 预览窗口的帧数；预览丢帧不代表 AIRV 传输丢包。
 - PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 3000。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
-- 当前 AD9361/PL 速率契约是 2R2T LVDS `40 MSPS`、DATA_CLK 约 `160 MHz`；`tx_fb_clock_delay=4`（寄存器读回 `0x40`，约 `1.2 ns`）。不要只在 SDK 改采样率而不同时检查 PL bridge 和 XDC。
+- 当前 AD9361/PL 速率契约是 2R2T LVDS `40 MSPS`、DATA_CLK 约 `160 MHz`；当前源码设置 `tx_fb_clock_delay=7`，启动时强制校验寄存器读回 `0x70`。不要只在 SDK 改采样率或 delay 而不同时检查 PL bridge、XDC 和板上读回日志。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
+- 发送 GUI 已提供 `RF Strict Match + Retry (max 3)`，默认关闭。reset 包通过 `NET_DATA_FLAG_RF_RETRY=0x2000` 把选择传给 PS。关闭时为 `deliver_no_retry`：S2MM 帧的长度、固定前缀和 AIR magic 合法即可回传，payload 与当前 TX block 不同只记 `S2MM pass corrupt ... action=deliver_no_retry`，交给 AIR0/AIRV 在 PC 端暴露错误；其他非法帧直接 `S2MM reject ... action=drop_no_retry`。开启时为 `strict_retry`：payload mismatch 等无效捕获不会回传，板端保留当前聚合块、重置 DMA/RX pipeline，并在等待/超时恢复后最多重发 3 次；日志重点看 `RF retry`、`RF drop` 和 `UDP RX reset ... rf_mode=...`。该开关是板端 RF 块级重发，不是 AIR0/AIRV 接收端 ACK、FEC 或分片级重传。
 - 发送 GUI 的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。判断文件是否完整，以发送端 `app_ack == total_size` 和接收端 `rx/high == file_size`、`gaps=0`、`crc=0`、`len=0` 为准。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
 - 当前已开启 PL->PS S2MM 调试和 UDP 回传，默认 `NET_LOOPBACK_RETURN_SOURCE=NET_LOOPBACK_RETURN_SOURCE_S2MM`：每次 MM2S 前 arm `8192` 字节 S2MM 捕获窗口，完成后扫描前 `2048` 字节 AIR0/AIRV magic，跳过 RX 前缀，按聚合块真实 `payload_len` 比较 RX payload 和 TX buffer；`tx_transfer` 只是 8 字节对齐后的 DMA 长度，尾部 padding 不参与 payload 比较。随后 PS 用 magic `0x304B424C` 的 loopback UDP 包把 payload 分片发回已注册的接收 GUI/CLI。当前 PL 数字回环正式使用 `NET_DMA_STALL_TIMEOUT_US = 20000`；64 KiB AIR0 测试证明前 8 块主循环观察耗时约 `8.1～10.1 ms`，旧 `6000 us` 会误杀，20 ms 下 65536 字节和最终 CRC 完整。
@@ -120,6 +121,7 @@ Max Retries             200
 Rate Limit KiB/s        400
 Throughput Mode         checked
 Payload CRC32           checked
+RF Strict Match + Retry unchecked
 AIR0 Packet Header      checked
 Verbose Packet Events   unchecked
 Progress ms             1000
@@ -143,6 +145,7 @@ Max Retries             200
 Rate Limit KiB/s        400
 Throughput Mode         checked
 Payload CRC32           checked
+RF Strict Match + Retry unchecked
 
 Receiver Raw Expected   0
 Receiver Idle Finish(s) 10

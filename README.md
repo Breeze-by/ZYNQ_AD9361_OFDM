@@ -102,8 +102,8 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 1. 根据 `APP_ENABLE_ICACHE` / `APP_ENABLE_DCACHE` 开关启用或关闭 cache。
 2. 初始化 UART，波特率 `115200`，确保 AD9361 初始化日志不会走 JTAG DCC。
 3. 初始化 GPIO、SPI 和 AD9361；任一步失败都会打印阶段名并停止启动。
-4. 将 2R2T LVDS 采样率配置为 `40 MSPS`（DATA_CLK 约 `160 MHz`），并读回
-   校验 TX clock/data delay 为 `0x40`（FB_CLK delay 4 taps，约 `1.2 ns`）。
+4. 将 2R2T LVDS 采样率配置为 `40 MSPS`（DATA_CLK 约 `160 MHz`），当前源码设置
+   `tx_fb_clock_delay=7`，并在启动时强制校验 TX clock/data delay 寄存器读回为 `0x70`。
 5. 初始化 SCU GIC。
 6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `3000` 字节 PSDU 先 re-arm 一次。
 7. 根据 `APP_RX_SOURCE` 初始化 `openofdm_rx/rx_intf`，并打印实际 RX 数据源。
@@ -168,7 +168,7 @@ typedef struct {
 ```text
 bit15      RESET flag
 bit14      NO_CRC flag
-bit13      reserved，当前置 0
+bit13      RF_RETRY flag
 bit12:0    session id
 ```
 
@@ -194,6 +194,7 @@ DATA header      16 bytes
 ACK packet       16 bytes
 RESET flag       0x8000
 NO_CRC flag      0x4000
+RF_RETRY flag    0x2000
 session mask     0x1FFF
 ```
 
@@ -212,6 +213,8 @@ ACK 状态：
 每次 PC 发送工具开始传输前，都会先发送 `RESET flag=1, payload_len=0, seq=0` 的控制包。板端只有在 DMA 空闲且无 fatal error 时接受 reset，随后清空序号、历史记录、聚合队列和统计，并切换到新的 13-bit session id。普通数据包必须带同一个 session id。
 
 `NO_CRC` 由 PC 工具的 Payload CRC32 开关决定。关闭 payload CRC 时，reset 包携带 `NO_CRC`，普通包的 `payload_crc32=0`；开启 `--payload-crc` 或 GUI 对应选项后，PC 对 wire payload 计算 CRC32，PS 接收后校验。GUI 默认开启 Payload CRC32，高负载测试时曾观察到少量 PC->PS payload CRC 错误，开启后坏包会被 PS 拒收并由发送端重传，最终 loopback 校验才可信。
+
+`RF_RETRY` 只在每次传输开始的 reset 包中选择本 session 的板端 RF 策略。发送 GUI 的 `RF Strict Match + Retry (max 3)` 默认关闭，对应启动日志 `rf_mode=deliver_no_retry`；勾选后 reset 包携带 `RF_RETRY`，对应 `rf_mode=strict_retry`。该 flag 不改变 PC->PS UDP 滑动窗口重传，也不是 AIR0/AIRV 接收端 ACK。
 
 ## UDP Loopback 回传协议
 
@@ -285,6 +288,8 @@ PL 设计者说明：前 8 字节是时间戳，后 8 字节包含速率和 payl
 OK ACK 使用累计确认语义。主机收到 `OK seq=N` 后，可认为当前未确认窗口中 `seq <= N` 的包均已被板端接收。为了降低 ACK 负载，板端默认启用 OK ACK 合并：每 `8` 个 OK 包或 `1000 us` flush 一次；非 OK ACK 会立即发送，并会先 flush 已挂起的 OK ACK。
 
 `PENDING` 表示前面还有缺口，发送端会优先重传当前窗口中最老的未确认包。`BUSY` 表示板端暂时没有聚合块空间，发送端会退避后重发。二者只影响速度，不改变 PS 到 PL 的数据顺序。
+
+PC->PS UDP 重传与板端 RF 重发是两层不同机制。GUI 的 `Max Retries` 限制 UDP 包因 timeout/BUSY/PENDING/错误 ACK 触发的主机重传；`RF Strict Match + Retry (max 3)` 则控制一个已经被 PS 接受并形成聚合块的数据是否在 RF/S2MM 失败后由板端重新送入 MM2S，最大值由代码中的 `NET_LOOPBACK_RF_RETRY_MAX=3` 固定。
 
 ## 聚合、DMA 和 openofdm 帧长
 
@@ -394,6 +399,8 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --target-rate-kib-s     主机侧限速，默认 400 KiB/s，0 表示不限速
 --payload-crc           启用应用层 payload CRC32；高负载/完整性测试推荐开启
 --no-payload-crc        关闭应用层 payload CRC32
+--rf-retry              启用板端 RF 严格匹配并最多重发 3 次；GUI 默认关闭
+--no-rf-retry           关闭板端 RF 重发，合法帧即使 payload 不同也回传诊断
 --air-protocol          启用 PC-only AIR0 payload header，默认开启
 --no-air-protocol       关闭 AIR0，发送旧版原始文件/测试字节流
 ```
@@ -406,7 +413,7 @@ AIR0 强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1440`
 64-byte AIR0 header + up to 1376-byte original file/test payload
 ```
 
-PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payload。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 当前不做 FEC、不做接收端 ACK、不做空口重传，只用于让接收端明确知道是否完整以及缺了哪些包。
+PS 和 PL 不解析 AIR0；对它们来说这 1440 字节仍然只是普通 payload。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 本身不做 FEC、接收端 ACK 或分片级重传，只用于让接收端明确知道是否完整以及缺了哪些包；发送 GUI 可另行开启板端 `RF Strict Match + Retry (max 3)`，让整个 PS 聚合块在 RF/S2MM 失败后重发。
 
 如需回到旧版纯字节流，对发送 GUI 取消勾选 `AIR0 Packet Header`，或 CLI 使用 `--no-air-protocol`。
 
@@ -499,6 +506,7 @@ Max Retries             200
 Rate Limit KiB/s        400
 Throughput Mode         checked
 Payload CRC32           checked
+RF Strict Match + Retry unchecked
 
 Receiver Raw Expected   0
 Receiver Idle Finish(s) 10
@@ -512,6 +520,7 @@ Receiver Idle Finish(s) 10
 模式                    Test Data
 Throughput Mode         开启
 Payload CRC32           开启
+RF Strict Match + Retry 关闭
 AIR0 Packet Header      开启
 Verbose Packet Events   关闭
 Chunk Bytes             1440
@@ -686,7 +695,7 @@ NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 1
 NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_S2MM
 ```
 
-RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。为了让发送端和接收端解耦，当前使用 `NET_DMA_STALL_TIMEOUT_US = 20000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA，释放当前聚合块并继续调度下一块。若 `TxDone=1`，说明本块已经送入 TX 侧，只丢弃本次回环捕获；若 `TxDone=0`，说明 TX 侧本身也卡住，会计一次 `dma_err`，但不进入 fatal error。这样接收端无信号不会把 PC 发送 GUI 拖到 `BUSY` 重试耗尽。
+RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。当前使用 `NET_DMA_STALL_TIMEOUT_US = 20000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA 和 RX pipeline。若 `TxDone=1`，说明本块已经送入 TX 侧；若 `TxDone=0`，说明 TX stream/tx_intf 侧也没有完成，并会计一次 `dma_err`。随后如何处理当前聚合块由本 session 的 RF 模式决定：默认 `deliver_no_retry` 释放该块并继续调度；`strict_retry` 保留该块并最多重新送入 MM2S 3 次，耗尽后打印 `RF drop` 再释放。两种模式都避免把后续 PC 输入永久卡在 `BUSY`。
 
 当前默认已经切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM`，启动日志应出现 `Loopback return source=S2MM RF path`。上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；如果后续再次怀疑 PC/PS 侧，可临时切回该模式，启动日志会显示 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块打印 `TXECHO return ... first=0x30524941 ...`。
 
@@ -701,6 +710,11 @@ S2MM 捕获窗口。简单模式 AXI DMA 只保留编程的窗口容量，没有
 `RX_LENGTH_INVALID` / `RX_LENGTH_MISMATCH`，且非法长度的帧不会回传。
 
 当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic。如果找到 AIR0，会打印 `S2MM air0 seq=... chunk=... file_off=... stream_off=... tx_stream_off=... desync=...`，并用 `packet_seq * chunk_bytes` 推导 UDP 回传的 `stream_offset`；如果找不到，会在 `S2MM diag` 中给出 `class=NO_AIR_MAGIC`、最接近 magic 的 `best_off/best_xor/best_bits`。这可以区分三类问题：payload 前缀不是固定 16 字节、RX 返回的是延迟旧帧、或者 PL/RF/RX 返回数据本身不是 AIR0/AIRV wire payload。
+
+S2MM 完成后的校验和动作取决于 RF 模式：
+
+- 默认 `deliver_no_retry`：长度、固定 16 字节前缀和 AIR0/AIRV magic 等帧结构合法时，即使 RX payload 与当前 TX block 存在字节差异，仍打印 `S2MM pass corrupt ... action=deliver_no_retry` 并把实际 RX 字节回传给 PC；AIR0/AIRV 的 CRC 和缺包统计负责暴露损坏。长度非法、magic 缺失、前缀偏移等结构无效帧打印 `S2MM reject ... action=drop_no_retry` 并丢弃当前块。
+- `strict_retry`：payload mismatch 也视为无效捕获，不向 PC 回传。若收到的可能是延迟旧帧，板端先只重新 arm S2MM 等待期望帧；等待超时或恢复路径再重置 DMA/RX pipeline，将保留的聚合块重新送入 MM2S。初次发送之外最多重发 3 次，日志打印 `RF retry reason=... attempt=.../3`；耗尽或 DMA reset 失败后打印 `RF drop`。
 
 MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_configure_tx_frame()` 写入最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 `OpenWifi_Tx_Rearm()` 放在 `net_configure_tx_frame()` 后面，否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
@@ -722,6 +736,10 @@ S2MM air0 seq=0 chunk=1440 file_off=0 stream_off=0 tx_stream_off=0 desync=no
 LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...
 DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... rx_state=0x... wd=... count=1
 DMA stall recovery reset_done=1
+RF retry reason=timeout id=... block=... attempt=1/3 payload=... stream_off=... total=...
+RF drop reason=timeout id=... block=... payload=... stream_off=... reset_done=... drops=...
+S2MM pass corrupt id=... block=... first_diff=... passes=... action=deliver_no_retry
+S2MM reject id=... block=... reason=... rejects=... action=drop_no_retry
 S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... err_dec=... errors=1
 ```
 
@@ -731,11 +749,11 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 - 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
 - 所有 `S2MM diag`、`S2MM payload_magic` 和 `S2MM air0` 行。
 - 所有 `LB UDP sent` 行。
-- 同一轮的 `STAT rate` / `STAT state` 行。
+- 同一轮的 `UDP RX reset ... rf_mode=...`、`RF retry`、`RF drop`、`S2MM pass corrupt/reject`、`STAT rate` / `STAT state` 行。
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
 - 如果出现 `cmp=DIFF`，提供紧随其后的 `S2MM rx_head` 和 `S2MM tx_head`。
 
-如果只看到 `S2MM start` 后出现 `DMA stall timeout`，说明真实空口 RX 没有在 watchdog 时间内形成完整 S2MM 包，发送侧会丢弃本次回环捕获并继续下一块。重点看 `txdone/rxdone`：`txdone=1 rxdone=0` 偏向 RX/解调/TLAST 问题；`txdone=0 rxdone=0` 偏向 TX stream/tx_intf/openofdm_tx 没有消费完本块。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。
+如果只看到 `S2MM start` 后出现 `DMA stall timeout`，说明真实空口 RX 没有在 watchdog 时间内形成完整 S2MM 包。重点看 `txdone/rxdone`：`txdone=1 rxdone=0` 偏向 RX/解调/TLAST 问题；`txdone=0 rxdone=0` 偏向 TX stream/tx_intf/openofdm_tx 没有消费完本块。再根据 reset 日志中的 `rf_mode` 判断后续：`deliver_no_retry` 会丢弃当前块并继续，`strict_retry` 应继续出现 `RF retry`，最多 3 次后才 `RF drop`。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。
 
 ## 构建和运行
 
