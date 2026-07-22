@@ -115,6 +115,7 @@ class SenderGui:
         self.verbose_var = tk.BooleanVar(value=False)
         self.throughput_mode_var = tk.BooleanVar(value=True)
         self.payload_crc_var = tk.BooleanVar(value=True)
+        self.rf_retry_var = tk.BooleanVar(value=False)
         self.air_protocol_var = tk.BooleanVar(value=True)
 
         self.status_text_var = tk.StringVar(value="Idle")
@@ -255,6 +256,11 @@ class SenderGui:
             command=self._update_throughput_mode).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Checkbutton(
+            net_box,
+            text="RF Strict Match + Retry (max 3)",
+            variable=self.rf_retry_var,
+        ).pack(anchor=tk.W, pady=(8, 0))
         ttk.Checkbutton(
             net_box,
             text="AIR0 Packet Header",
@@ -414,7 +420,11 @@ class SenderGui:
                 self.progress_interval_var.set("1000")
 
     def _format_start_mode(self, config: SenderConfig) -> str:
-        return f"payload_mode={config.transfer_protocol} nominal_wire_chunk={config.chunk_size}"
+        rf_mode = "strict_retry" if config.rf_retry else "deliver_no_retry"
+        return (
+            f"payload_mode={config.transfer_protocol} "
+            f"nominal_wire_chunk={config.chunk_size} rf_mode={rf_mode}"
+        )
 
     def _append_log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
@@ -474,6 +484,7 @@ class SenderGui:
                 "verbose_events": verbose_events,
                 "throughput_mode": throughput_mode,
                 "validate_payload_crc": bool(self.payload_crc_var.get()),
+                "rf_retry": bool(self.rf_retry_var.get()),
             }
             if params["mode"] == "file" and not params["file_path"]:
                 raise ValueError("Select a file first")
@@ -523,6 +534,7 @@ class SenderGui:
                 verbose_events=params["verbose_events"],
                 throughput_mode=params["throughput_mode"],
                 validate_payload_crc=params["validate_payload_crc"],
+                rf_retry=params["rf_retry"],
                 air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
                 transfer_protocol=transfer_protocol,
                 airv_frame_interval_us=(

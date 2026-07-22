@@ -59,6 +59,7 @@ LOOPBACK_HEADER_SIZE = struct.calcsize(LOOPBACK_FORMAT)
 
 DATA_FLAG_RESET = 0x8000
 DATA_FLAG_NO_CRC = 0x4000
+DATA_FLAG_RF_RETRY = 0x2000
 DATA_SESSION_MASK = 0x1FFF
 LOOPBACK_FLAG_LAST_CHUNK = 0x0001
 
@@ -94,6 +95,7 @@ class SenderConfig:
     verbose_events: bool = False
     throughput_mode: bool = False
     validate_payload_crc: bool = False
+    rf_retry: bool = False
     air_protocol: bool = True
     transfer_protocol: str = TRANSFER_PROTOCOL_AIR0
     airv_frame_interval_us: int = 33333
@@ -183,6 +185,10 @@ def parse_args():
     parser.add_argument("--no-payload-crc", dest="validate_payload_crc",
         action="store_false",
         help="disable PC-generated and PS-validated application payload CRC32 for this transfer")
+    parser.add_argument("--rf-retry", dest="rf_retry", action="store_true", default=False,
+        help="enable strict RF payload matching and up to three firmware retransmissions")
+    parser.add_argument("--no-rf-retry", dest="rf_retry", action="store_false",
+        help="deliver recognized frames without RF retransmission (default)")
     parser.add_argument("--air-protocol", dest="air_protocol", action="store_true", default=True,
         help="wrap payload chunks in a PC-only AIR0 header for loss/error accounting")
     parser.add_argument("--no-air-protocol", dest="air_protocol", action="store_false",
@@ -431,10 +437,16 @@ def build_packet(seq: int, payload: bytes, config: Optional[SenderConfig] = None
     return header + wire_payload
 
 
-def build_reset_packet(session_id: int, validate_payload_crc: bool = False) -> bytes:
+def build_reset_packet(
+    session_id: int,
+    validate_payload_crc: bool = False,
+    rf_retry: bool = False,
+) -> bytes:
     flags = DATA_FLAG_RESET
     if not validate_payload_crc:
         flags |= DATA_FLAG_NO_CRC
+    if rf_retry:
+        flags |= DATA_FLAG_RF_RETRY
 
     return struct.pack(
         DATA_HEADER_FORMAT,
@@ -658,6 +670,7 @@ class UdpSender:
             verbose_events=self.config.verbose_events,
             throughput_mode=self.config.throughput_mode,
             validate_payload_crc=validate_payload_crc,
+            rf_retry=self.config.rf_retry,
             air_protocol=(protocol == TRANSFER_PROTOCOL_AIR0),
             transfer_protocol=protocol,
             airv_frame_interval_us=self.config.airv_frame_interval_us,
@@ -681,7 +694,8 @@ class UdpSender:
         session_id = random.randint(1, DATA_SESSION_MASK)
         with self._config_lock:
             validate_payload_crc = self.config.validate_payload_crc
-        packet = build_reset_packet(session_id, validate_payload_crc)
+            rf_retry = self.config.rf_retry
+        packet = build_reset_packet(session_id, validate_payload_crc, rf_retry)
 
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.settimeout(reset_timeout_s)
@@ -1402,6 +1416,7 @@ def run_cli(args) -> int:
         verbose_events=False if args.throughput_mode else args.verbose_events,
         throughput_mode=args.throughput_mode,
         validate_payload_crc=args.validate_payload_crc,
+        rf_retry=args.rf_retry,
         air_protocol=(transfer_protocol == TRANSFER_PROTOCOL_AIR0),
         transfer_protocol=transfer_protocol,
         airv_frame_interval_us=airv_frame_interval_us,

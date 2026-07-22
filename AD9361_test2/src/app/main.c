@@ -53,7 +53,7 @@
 #define RX_INTF_S2MM_INTR_DELAY       (30U * 10U)
 #define RX_INTF_RF_VALID_DELAY_ENABLE (1U << 4)
 #define RX_INTF_DIGITAL_LOOPBACK_ENABLE (1U << 8)
-#define AD9361_TX_CLOCK_DATA_DELAY_EXPECTED 0x40U
+#define AD9361_TX_CLOCK_DATA_DELAY_EXPECTED 0x70U
 
 static unsigned char mac_ethernet_address[] = {
     0x02, 0x00, 0x00, 0x00, 0x00, 0x01

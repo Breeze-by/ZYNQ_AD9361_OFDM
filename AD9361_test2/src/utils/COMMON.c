@@ -8,24 +8,49 @@
 #include "platform.h"
 #include "radio_set.h"
 
+/*
+ * AD9361/openwifi waveform contract for this board.
+ *
+ * The physical AD9361 reference clock is 26 MHz. The PL bridge is fixed to
+ * 2R2T LVDS at 40 MSPS, which gives a 160 MHz DATA_CLK. Keep those three
+ * values aligned; changing only one of them breaks the custom PL unpacker.
+ */
+#define OPENWIFI_REFERENCE_CLK_HZ  26000000UL
+#define OPENWIFI_CENTER_FREQ_HZ    2000000000ULL
+#define OPENWIFI_SAMPLE_RATE_HZ    40000000U
+#define OPENWIFI_RX_BW_HZ          25215513U
+#define OPENWIFI_TX_BW_HZ          25215414U
+
+/*
+ * Initial SMA-loopback values for an external 10 dB attenuator.
+ * If no frame is detected, reduce on-chip TX attenuation one step at a time:
+ * 60 -> 50 -> 40 -> 30 dB. Never use 0 dB for a direct cable connection.
+ */
+#define OPENWIFI_TX_ATT_MDB        30000U
+#define OPENWIFI_RX_GAIN_DB        20
+#define OPENWIFI_RX_GAIN_MODE      RF_GAIN_MGC
+
 struct ad9361_rf_phy *ad9361_phy;
 struct ad9361_rf_phy *ad9361_phy_b;
 uint64_t rfout;
 uint32_t val_out;
 uint32_t idelay;
 uint32_t qdelay;
-uint32_t sample_rate = AD9361_SAMPLE_RATE_HZ;
-uint64_t tx_lo_freq = 2400e6;
-uint64_t rx_lo_freq = 2400e6;
-uint32_t bandwidth = AD9361_RF_BANDWIDTH_HZ;
-int32_t gain = 10;
-uint32_t txatt = 10000;
+uint32_t sample_rate = OPENWIFI_SAMPLE_RATE_HZ;
+uint64_t tx_lo_freq = OPENWIFI_CENTER_FREQ_HZ;
+uint64_t rx_lo_freq = OPENWIFI_CENTER_FREQ_HZ;
+/* Legacy global retained for source compatibility; it represents RX BW. */
+uint32_t bandwidth = OPENWIFI_RX_BW_HZ;
+int32_t gain = OPENWIFI_RX_GAIN_DB;
+uint32_t txatt = OPENWIFI_TX_ATT_MDB;
 uint32_t regr = REG_PRODUCT_ID;
+
+static const uint32_t tx_bandwidth = OPENWIFI_TX_BW_HZ;
 
 AD9361_InitParam default_init_param = {
     .dev_sel = ID_AD9361,
     .id_no = 0,
-    .reference_clk_rate = 26000000UL,
+    .reference_clk_rate = OPENWIFI_REFERENCE_CLK_HZ,
     .two_rx_two_tx_mode_enable = 1,
     .one_rx_one_tx_mode_use_rx_num = 1,
     .one_rx_one_tx_mode_use_tx_num = 1,
@@ -49,21 +74,21 @@ AD9361_InitParam default_init_param = {
     .qec_tracking_slow_mode_enable = 0,
     .ensm_enable_pin_pulse_mode_enable = 0,
     .ensm_enable_txnrx_control_enable = 0,
-    .rx_synthesizer_frequency_hz = 2400000000ULL,
-    .tx_synthesizer_frequency_hz = 2400000000ULL,
+    .rx_synthesizer_frequency_hz = OPENWIFI_CENTER_FREQ_HZ,
+    .tx_synthesizer_frequency_hz = OPENWIFI_CENTER_FREQ_HZ,
     .rx_path_clock_frequencies = { 1280000000U, 320000000U, 160000000U, 80000000U, 40000000U, 40000000U },
-    .tx_path_clock_frequencies = { 1280000000U, 160000000U, 160000000U, 80000000U, 40000000U, 40000000U },
-    .rf_rx_bandwidth_hz = 20000000U,
-    .rf_tx_bandwidth_hz = 20000000U,
+    .tx_path_clock_frequencies = { 1280000000U, 320000000U, 160000000U, 80000000U, 40000000U, 40000000U },
+    .rf_rx_bandwidth_hz = OPENWIFI_RX_BW_HZ,
+    .rf_tx_bandwidth_hz = OPENWIFI_TX_BW_HZ,
     .rx_rf_port_input_select = 0,
     .tx_rf_port_input_select = 0,
-    .tx_attenuation_mdB = 20000,
+    .tx_attenuation_mdB = OPENWIFI_TX_ATT_MDB,
     .update_tx_gain_in_alert_enable = 0,
     .xo_disable_use_ext_refclk_enable = 0,
     .dcxo_coarse_and_fine_tune = { 8U, 5920U },
     .clk_output_mode_select = ADC_CLK_DIV_16,
-    .gc_rx1_mode = 0,
-    .gc_rx2_mode = 0,
+    .gc_rx1_mode = OPENWIFI_RX_GAIN_MODE,
+    .gc_rx2_mode = OPENWIFI_RX_GAIN_MODE,
     .gc_adc_large_overload_thresh = 58,
     .gc_adc_ovr_sample_size = 4,
     .gc_adc_small_overload_thresh = 47,
@@ -180,9 +205,9 @@ AD9361_InitParam default_init_param = {
     .full_duplex_swap_bits_enable = 0,
     .delay_rx_data = 0,
     .rx_data_clock_delay = 0,
-    .rx_data_delay = 4,
+    .rx_data_delay = 5,
     /* 4 taps = about 1.2 ns; this matches the TX timing constraint model. */
-    .tx_fb_clock_delay = 4,
+    .tx_fb_clock_delay = 7,
     .tx_data_delay = 0,
     .lvds_bias_mV = 150,
     .lvds_rx_onchip_termination_enable = 1,
@@ -225,37 +250,41 @@ AD9361_InitParam default_init_param = {
 AD9361_RXFIRConfig rx_fir_config = {
     .rx = 3,
     .rx_gain = -6,
-    .rx_dec = 2,
+    .rx_dec = 1,
     .rx_coef = {
-        -4, 0, 8, 0, -14, 0, 23, 0, -36, 0, 52, 0, -75, 0, 104, 0,
-        -140, 0, 186, 0, -243, 0, 314, 0, -400, 0, 505, 0, -634, 0, 793, 0,
-        -993, 0, 1247, 0, -1585, 0, 2056, 0, -2773, 0, 4022, 0, -6862, 0,
-        20830, 32767, 20830, 0, -6862, 0, 4022, 0, -2773, 0, 2056, 0,
-        -1585, 0, 1247, 0, -993, 0, 793, 0, -634, 0, 505, 0, -400, 0,
-        314, 0, -243, 0, 186, 0, -140, 0, 104, 0, -75, 0, 52, 0,
-        -36, 0, 23, 0, -14, 0, 8, 0, -4, 0
+        56, 70, -148, -500, -434, 169, 436, -208,
+        -674, 137, 956, -14, -1325, -214, 1799, 598,
+        -2437, -1255, 3389, 2507, -5127, -5623, 10560, 29674,
+        29674, 10560, -5623, -5127, 2507, 3389, -1255, -2437,
+        598, 1799, -214, -1325, -14, 956, 137, -674,
+        -208, 436, 169, -434, -500, -148, 70, 56
     },
-    .rx_coef_size = 96,
-    .rx_path_clks = { 0, 0, 0, 0, 0, 0 },
-    .rx_bandwidth = 0
+    .rx_coef_size = 48,
+    .rx_path_clks = {
+        1280000000U, 320000000U, 160000000U,
+        80000000U, 40000000U, 40000000U
+    },
+    .rx_bandwidth = OPENWIFI_RX_BW_HZ
 };
 
 AD9361_TXFIRConfig tx_fir_config = {
     .tx = 3,
-    .tx_gain = 0,
-    .tx_int = 2,
+    .tx_gain = -6,
+    .tx_int = 1,
     .tx_coef = {
-        -4, 0, 8, 0, -14, 0, 23, 0, -36, 0, 52, 0, -75, 0, 104, 0,
-        -140, 0, 186, 0, -243, 0, 314, 0, -400, 0, 505, 0, -634, 0, 793, 0,
-        -993, 0, 1247, 0, -1585, 0, 2056, 0, -2773, 0, 4022, 0, -6862, 0,
-        20830, 32767, 20830, 0, -6862, 0, 4022, 0, -2773, 0, 2056, 0,
-        -1585, 0, 1247, 0, -993, 0, 793, 0, -634, 0, 505, 0, -400, 0,
-        314, 0, -243, 0, 186, 0, -140, 0, 104, 0, -75, 0, 52, 0,
-        -36, 0, 23, 0, -14, 0, 8, 0, -4, 0
+        41, 31, -187, -496, -395, 183, 412, -201,
+        -619, 148, 886, -38, -1232, -166, 1680, 513,
+        -2284, -1107, 3197, 2238, -4904, -5068, 10562, 28812,
+        28812, 10562, -5068, -4904, 2238, 3197, -1107, -2284,
+        513, 1680, -166, -1232, -38, 886, 148, -619,
+        -201, 412, 183, -395, -496, -187, 31, 41
     },
-    .tx_coef_size = 96,
-    .tx_path_clks = { 0, 0, 0, 0, 0, 0 },
-    .tx_bandwidth = 0
+    .tx_coef_size = 48,
+    .tx_path_clks = {
+        1280000000U, 320000000U, 160000000U,
+        80000000U, 40000000U, 40000000U
+    },
+    .tx_bandwidth = OPENWIFI_TX_BW_HZ
 };
 
 void gpio_initial(void)
@@ -321,18 +350,39 @@ static int32_t ad9361_config_result(const char *step, int32_t status)
     return status;
 }
 
+static uint32_t ad9361_abs_diff_u32(uint32_t a, uint32_t b)
+{
+    return (a > b) ? (a - b) : (b - a);
+}
+
 int32_t ad9361_config(struct ad9361_rf_phy *phy)
 {
     int32_t val;
+    int32_t rx1_gain_db;
+    int32_t rx2_gain_db;
+    int32_t rx_delay_reg;
+    int32_t tx_delay_reg;
+    uint8_t rx1_gain_mode;
+    uint8_t rx2_gain_mode;
     uint32_t tx_sampling_freq_hz;
     uint32_t rx_sampling_freq_hz;
-    uint32_t tx_rate_error_hz;
-    uint32_t rx_rate_error_hz;
+    uint32_t tx_bandwidth_hz;
+    uint32_t rx_bandwidth_hz;
+    uint32_t tx1_attenuation_mdb;
+    uint32_t tx2_attenuation_mdb;
+    uint32_t rx_path_clks[6];
+    uint32_t tx_path_clks[6];
+    uint64_t tx_lo_readback_hz;
+    uint64_t rx_lo_readback_hz;
 
     if ((phy == NULL) || (phy->spi == NULL)) {
         printf("AD9361 config failed: invalid phy\r\n");
         return -EINVAL;
     }
+
+    val = ad9361_config_result("fir_disable",
+        ad9361_set_trx_fir_en_dis(phy, 0));
+    if (val != 0) return val;
 
     val = ad9361_config_result("tx_fir",
         ad9361_set_tx_fir_config(phy, tx_fir_config));
@@ -341,30 +391,46 @@ int32_t ad9361_config(struct ad9361_rf_phy *phy)
         ad9361_set_rx_fir_config(phy, rx_fir_config));
     if (val != 0) return val;
 
-    /* This API programs both RX and TX clock chains to the same sample rate. */
-    val = ad9361_config_result("sample_rate",
+    /*
+     * In this no-OS driver either API recalculates both RX and TX clock chains.
+     * Call both explicitly so the intended contract is visible and then verify
+     * both readbacks below.
+     */
+    val = ad9361_config_result("tx_sample_rate",
         ad9361_set_tx_sampling_freq(phy, sample_rate));
     if (val != 0) return val;
-    val = ad9361_config_result("tx_lo", ad9361_set_tx_lo_freq(phy, tx_lo_freq));
+    val = ad9361_config_result("rx_sample_rate",
+        ad9361_set_rx_sampling_freq(phy, sample_rate));
     if (val != 0) return val;
-    val = ad9361_config_result("rx_lo", ad9361_set_rx_lo_freq(phy, rx_lo_freq));
-    if (val != 0) return val;
+
     val = ad9361_config_result("rx_bandwidth",
         ad9361_set_rx_rf_bandwidth(phy, bandwidth));
     if (val != 0) return val;
     val = ad9361_config_result("tx_bandwidth",
-        ad9361_set_tx_rf_bandwidth(phy, bandwidth));
+        ad9361_set_tx_rf_bandwidth(phy, tx_bandwidth));
     if (val != 0) return val;
-    val = ad9361_config_result("rx1_gain", ad9361_set_rx_rf_gain(phy, 0, gain));
+
+    val = ad9361_config_result("tx_lo",
+        ad9361_set_tx_lo_freq(phy, tx_lo_freq));
     if (val != 0) return val;
-    val = ad9361_config_result("rx2_gain", ad9361_set_rx_rf_gain(phy, 1, gain));
+    val = ad9361_config_result("rx_lo",
+        ad9361_set_rx_lo_freq(phy, rx_lo_freq));
     if (val != 0) return val;
+
+    /* Use deterministic manual gain during the direct-cable bring-up. */
     val = ad9361_config_result("rx1_gain_mode",
-        ad9361_set_rx_gain_control_mode(phy, 0, RF_GAIN_FASTATTACK_AGC));
+        ad9361_set_rx_gain_control_mode(phy, 0, OPENWIFI_RX_GAIN_MODE));
     if (val != 0) return val;
     val = ad9361_config_result("rx2_gain_mode",
-        ad9361_set_rx_gain_control_mode(phy, 1, RF_GAIN_FASTATTACK_AGC));
+        ad9361_set_rx_gain_control_mode(phy, 1, OPENWIFI_RX_GAIN_MODE));
     if (val != 0) return val;
+    val = ad9361_config_result("rx1_gain",
+        ad9361_set_rx_rf_gain(phy, 0, gain));
+    if (val != 0) return val;
+    val = ad9361_config_result("rx2_gain",
+        ad9361_set_rx_rf_gain(phy, 1, gain));
+    if (val != 0) return val;
+
     val = ad9361_config_result("tx1_attenuation",
         ad9361_set_tx_attenuation(phy, 0, txatt));
     if (val != 0) return val;
@@ -372,6 +438,10 @@ int32_t ad9361_config(struct ad9361_rf_phy *phy)
         ad9361_set_tx_attenuation(phy, 1, txatt));
     if (val != 0) return val;
 
+    /*
+     * Preserve the board-specific RF switch and port routing. At 2.412 GHz
+     * this board selects TX port 1 and RX port 1.
+     */
     if (tx_lo_freq >= 70000000ULL && tx_lo_freq < 3000000000ULL) {
         gpio_set_value(TX_BAND_SEL, 0);
         val = ad9361_config_result("tx_rf_port",
@@ -407,6 +477,10 @@ int32_t ad9361_config(struct ad9361_rf_phy *phy)
     }
     if (val != 0) return val;
 
+    val = ad9361_config_result("fir_enable",
+        ad9361_set_trx_fir_en_dis(phy, 1));
+    if (val != 0) return val;
+
     val = ad9361_spi_read(phy->spi, regr);
     if (val < 0) {
         return ad9361_config_result("product_id_read", val);
@@ -423,23 +497,93 @@ int32_t ad9361_config(struct ad9361_rf_phy *phy)
     val = ad9361_config_result("get_rx_sample_rate",
         ad9361_get_rx_sampling_freq(phy, &rx_sampling_freq_hz));
     if (val != 0) return val;
-    tx_rate_error_hz = (tx_sampling_freq_hz > sample_rate) ?
-        (tx_sampling_freq_hz - sample_rate) : (sample_rate - tx_sampling_freq_hz);
-    rx_rate_error_hz = (rx_sampling_freq_hz > sample_rate) ?
-        (rx_sampling_freq_hz - sample_rate) : (sample_rate - rx_sampling_freq_hz);
-    if ((tx_rate_error_hz > AD9361_SAMPLE_RATE_TOLERANCE_HZ) ||
-        (rx_rate_error_hz > AD9361_SAMPLE_RATE_TOLERANCE_HZ)) {
+    val = ad9361_config_result("get_tx_bandwidth",
+        ad9361_get_tx_rf_bandwidth(phy, &tx_bandwidth_hz));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx_bandwidth",
+        ad9361_get_rx_rf_bandwidth(phy, &rx_bandwidth_hz));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_tx_lo",
+        ad9361_get_tx_lo_freq(phy, &tx_lo_readback_hz));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx_lo",
+        ad9361_get_rx_lo_freq(phy, &rx_lo_readback_hz));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx1_gain_mode",
+        ad9361_get_rx_gain_control_mode(phy, 0, &rx1_gain_mode));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx2_gain_mode",
+        ad9361_get_rx_gain_control_mode(phy, 1, &rx2_gain_mode));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx1_gain",
+        ad9361_get_rx_rf_gain(phy, 0, &rx1_gain_db));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_rx2_gain",
+        ad9361_get_rx_rf_gain(phy, 1, &rx2_gain_db));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_tx1_attenuation",
+        ad9361_get_tx_attenuation(phy, 0, &tx1_attenuation_mdb));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_tx2_attenuation",
+        ad9361_get_tx_attenuation(phy, 1, &tx2_attenuation_mdb));
+    if (val != 0) return val;
+    val = ad9361_config_result("get_path_clocks",
+        ad9361_get_trx_path_clks(phy, rx_path_clks, tx_path_clks));
+    if (val != 0) return val;
+
+    rx_delay_reg = ad9361_spi_read(phy->spi, REG_RX_CLOCK_DATA_DELAY);
+    if (rx_delay_reg < 0) {
+        return ad9361_config_result("rx_clock_data_delay_read", rx_delay_reg);
+    }
+    tx_delay_reg = ad9361_spi_read(phy->spi, REG_TX_CLOCK_DATA_DELAY);
+    if (tx_delay_reg < 0) {
+        return ad9361_config_result("tx_clock_data_delay_read", tx_delay_reg);
+    }
+
+    if ((ad9361_abs_diff_u32(tx_sampling_freq_hz, sample_rate) >
+            AD9361_SAMPLE_RATE_TOLERANCE_HZ) ||
+        (ad9361_abs_diff_u32(rx_sampling_freq_hz, sample_rate) >
+            AD9361_SAMPLE_RATE_TOLERANCE_HZ)) {
         printf("AD9361 config failed: sample rate tx=%lu rx=%lu expected=%lu\r\n",
             (unsigned long)tx_sampling_freq_hz,
             (unsigned long)rx_sampling_freq_hz,
             (unsigned long)sample_rate);
         return -EINVAL;
     }
+    if ((phy->bypass_rx_fir != 0) || (phy->bypass_tx_fir != 0)) {
+        printf("AD9361 config failed: FIR not enabled rx_bypass=%u tx_bypass=%u\r\n",
+            (unsigned int)phy->bypass_rx_fir,
+            (unsigned int)phy->bypass_tx_fir);
+        return -EINVAL;
+    }
 
-    printf("AD9361 configured: sample_rate=%luHz bandwidth=%luHz tx_lo=%luMHz rx_lo=%luMHz\r\n",
-        (unsigned long)tx_sampling_freq_hz,
-        (unsigned long)bandwidth,
-        (unsigned long)(tx_lo_freq / 1000000ULL),
-        (unsigned long)(rx_lo_freq / 1000000ULL));
+    printf("AD9361 configured: ref=%luHz mode=2R2T-LVDS rx_fs=%luHz tx_fs=%luHz\r\n",
+        (unsigned long)OPENWIFI_REFERENCE_CLK_HZ,
+        (unsigned long)rx_sampling_freq_hz,
+        (unsigned long)tx_sampling_freq_hz);
+    printf("AD9361 RF: rx_lo=%luHz tx_lo=%luHz rx_bw=%luHz tx_bw=%luHz\r\n",
+        (unsigned long)rx_lo_readback_hz,
+        (unsigned long)tx_lo_readback_hz,
+        (unsigned long)rx_bandwidth_hz,
+        (unsigned long)tx_bandwidth_hz);
+    printf("AD9361 gain: rx1_mode=%u rx1=%lddB rx2_mode=%u rx2=%lddB tx1_att=%lumdB tx2_att=%lumdB\r\n",
+        (unsigned int)rx1_gain_mode, (long)rx1_gain_db,
+        (unsigned int)rx2_gain_mode, (long)rx2_gain_db,
+        (unsigned long)tx1_attenuation_mdb,
+        (unsigned long)tx2_attenuation_mdb);
+    printf("AD9361 FIR: rx=on tx=on taps=48 dec=1 int=1 gain=-6dB\r\n");
+    printf("AD9361 clocks RX: %lu %lu %lu %lu %lu %lu\r\n",
+        (unsigned long)rx_path_clks[0], (unsigned long)rx_path_clks[1],
+        (unsigned long)rx_path_clks[2], (unsigned long)rx_path_clks[3],
+        (unsigned long)rx_path_clks[4], (unsigned long)rx_path_clks[5]);
+    printf("AD9361 clocks TX: %lu %lu %lu %lu %lu %lu\r\n",
+        (unsigned long)tx_path_clks[0], (unsigned long)tx_path_clks[1],
+        (unsigned long)tx_path_clks[2], (unsigned long)tx_path_clks[3],
+        (unsigned long)tx_path_clks[4], (unsigned long)tx_path_clks[5]);
+    printf("AD9361 digital delay: rx=0x%02lX tx=0x%02lX\r\n",
+        (unsigned long)((uint32_t)rx_delay_reg & 0xFFU),
+        (unsigned long)((uint32_t)tx_delay_reg & 0xFFU));
+
     return 0;
 }
+
