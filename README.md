@@ -402,6 +402,8 @@ GUI：
 python AD9361_test2/tools/pc_sender/sender_gui.py
 ```
 
+发送 GUI 的 Source、Network and Sender、Metrics 已使用紧凑双列布局；下方 Charts 与 Event Log 位于可上下拖动的纵向分隔区。普通窗口和最大化窗口都会保留图表、日志的可见空间，需要重点查看其中一项时可拖动分隔条调整高度。
+
 常用参数：
 
 ```text

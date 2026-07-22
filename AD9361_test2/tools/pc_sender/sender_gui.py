@@ -179,60 +179,62 @@ class SenderGui:
         self._build_config_panel(left_config)
         self._build_metrics_panel(right_metrics)
 
-        mid_frame = ttk.Frame(root_frame)
-        mid_frame.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
-        self._build_chart_panel(mid_frame)
-
-        bottom_frame = ttk.Frame(root_frame)
-        bottom_frame.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
-        self._build_log_panel(bottom_frame)
+        lower_split = ttk.Panedwindow(root_frame, orient=tk.VERTICAL)
+        lower_split.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        chart_host = ttk.Frame(lower_split)
+        log_host = ttk.Frame(lower_split)
+        lower_split.add(chart_host, weight=2)
+        lower_split.add(log_host, weight=3)
+        self._build_chart_panel(chart_host)
+        self._build_log_panel(log_host)
 
     def _build_config_panel(self, parent):
-        source_box = ttk.LabelFrame(parent, text="Source", padding=12)
+        source_box = ttk.LabelFrame(parent, text="Source", padding=8)
         source_box.pack(fill=tk.X)
+        source_box.columnconfigure(1, weight=1)
 
-        protocol_row = ttk.Frame(source_box)
-        protocol_row.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(protocol_row, text="Transfer Mode", width=12).pack(side=tk.LEFT)
+        ttk.Label(source_box, text="Transfer Mode", width=12).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 4)
+        )
         self.protocol_combo = ttk.Combobox(
-            protocol_row,
+            source_box,
             textvariable=self.transfer_protocol_var,
             values=(TRANSFER_PROTOCOL_AIR0, TRANSFER_PROTOCOL_AIRV, TRANSFER_PROTOCOL_RAW),
             state="readonly",
-            width=20,
+            width=16,
         )
-        self.protocol_combo.pack(side=tk.LEFT)
+        self.protocol_combo.grid(row=0, column=1, sticky=tk.W, pady=(0, 4))
         self.protocol_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_mode_widgets())
 
         mode_frame = ttk.Frame(source_box)
-        mode_frame.pack(fill=tk.X)
+        mode_frame.grid(row=0, column=2, columnspan=2, sticky=tk.W, padx=(12, 0), pady=(0, 4))
         ttk.Radiobutton(mode_frame, text="File", value="file", variable=self.mode_var,
             command=self._update_mode_widgets).pack(side=tk.LEFT)
         ttk.Radiobutton(mode_frame, text="Test Data", value="test", variable=self.mode_var,
             command=self._update_mode_widgets).pack(side=tk.LEFT, padx=(12, 0))
 
-        file_row = ttk.Frame(source_box)
-        file_row.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(file_row, text="Path", width=12).pack(side=tk.LEFT)
-        self.file_entry = ttk.Entry(file_row, textvariable=self.file_path_var)
-        self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(file_row, text="Browse", command=self._browse_file).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(source_box, text="Path", width=12).grid(row=1, column=0, sticky=tk.W, pady=(0, 4))
+        self.file_entry = ttk.Entry(source_box, textvariable=self.file_path_var)
+        self.file_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(0, 4))
+        ttk.Button(source_box, text="Browse", command=self._browse_file).grid(
+            row=1, column=3, sticky=tk.E, padx=(8, 0), pady=(0, 4)
+        )
 
-        info_row = ttk.Frame(source_box)
-        info_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(info_row, text="Info", width=12).pack(side=tk.LEFT)
-        ttk.Label(info_row, textvariable=self.file_info_var).pack(side=tk.LEFT)
+        ttk.Label(source_box, text="Info", width=12).grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(source_box, textvariable=self.file_info_var, width=24, anchor=tk.W).grid(
+            row=2, column=1, sticky="ew"
+        )
 
-        test_row = ttk.Frame(source_box)
-        test_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(test_row, text="Test Bytes", width=12).pack(side=tk.LEFT)
-        self.test_entry = ttk.Entry(test_row, textvariable=self.test_size_var, width=16)
-        self.test_entry.pack(side=tk.LEFT)
-        ttk.Button(test_row, text="64 MiB", command=lambda: self._set_test_size_mib(64)).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(test_row, text="256 MiB", command=lambda: self._set_test_size_mib(256)).pack(side=tk.LEFT, padx=(8, 0))
+        test_buttons = ttk.Frame(source_box)
+        test_buttons.grid(row=2, column=2, columnspan=2, sticky=tk.E, padx=(12, 0))
+        ttk.Label(test_buttons, text="Test Bytes").pack(side=tk.LEFT)
+        self.test_entry = ttk.Entry(test_buttons, textvariable=self.test_size_var, width=13)
+        self.test_entry.pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(test_buttons, text="64 MiB", command=lambda: self._set_test_size_mib(64)).pack(side=tk.LEFT)
+        ttk.Button(test_buttons, text="256 MiB", command=lambda: self._set_test_size_mib(256)).pack(side=tk.LEFT, padx=(6, 0))
 
-        net_box = ttk.LabelFrame(parent, text="Network and Sender", padding=12)
-        net_box.pack(fill=tk.X, pady=(12, 0))
+        net_box = ttk.LabelFrame(parent, text="Network and Sender", padding=8)
+        net_box.pack(fill=tk.X, pady=(8, 0))
 
         fields = [
             ("Target IP", self.ip_var),
@@ -246,38 +248,48 @@ class SenderGui:
             ("Progress ms", self.progress_interval_var),
         ]
 
-        for row_index, (label_text, variable) in enumerate(fields):
-            row = ttk.Frame(net_box)
-            row.pack(fill=tk.X, pady=(0, 8) if row_index < len(fields) - 1 else (0, 0))
-            ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
-            ttk.Entry(row, textvariable=variable, width=18).pack(side=tk.LEFT)
+        net_box.columnconfigure(1, weight=1)
+        net_box.columnconfigure(3, weight=1)
+        for field_index, (label_text, variable) in enumerate(fields):
+            row_index = field_index // 2
+            column_index = (field_index % 2) * 2
+            ttk.Label(net_box, text=label_text, width=16).grid(
+                row=row_index, column=column_index, sticky=tk.W, pady=(0, 4)
+            )
+            ttk.Entry(net_box, textvariable=variable, width=18).grid(
+                row=row_index,
+                column=column_index + 1,
+                sticky="ew",
+                padx=(0, 12) if column_index == 0 else (0, 0),
+                pady=(0, 4),
+            )
 
-        ttk.Checkbutton(net_box, text="Throughput Mode", variable=self.throughput_mode_var,
-            command=self._update_throughput_mode).pack(anchor=tk.W, pady=(8, 0))
-        ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).pack(anchor=tk.W, pady=(8, 0))
-        ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).pack(anchor=tk.W, pady=(8, 0))
-        ttk.Checkbutton(
-            net_box,
-            text="RF Strict Match + Retry (max 3)",
-            variable=self.rf_retry_var,
-        ).pack(anchor=tk.W, pady=(8, 0))
+        option_row = (len(fields) + 1) // 2
         ttk.Checkbutton(
             net_box,
             text="AIR0 Packet Header",
             variable=self.air_protocol_var,
             command=self._update_air0_compat,
-        ).pack(anchor=tk.W, pady=(8, 0))
-        ttk.Label(
+        ).grid(row=option_row - 1, column=2, columnspan=2, sticky=tk.W)
+        ttk.Checkbutton(net_box, text="Throughput Mode", variable=self.throughput_mode_var,
+            command=self._update_throughput_mode).grid(row=option_row, column=0, columnspan=2, sticky=tk.W)
+        ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).grid(
+            row=option_row, column=2, columnspan=2, sticky=tk.W
+        )
+        ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).grid(
+            row=option_row + 1, column=0, columnspan=2, sticky=tk.W
+        )
+        ttk.Checkbutton(
             net_box,
-            text="Throughput mode disables packet logs and uses at least 1000 ms progress updates.",
-            foreground="#555555",
-        ).pack(anchor=tk.W, pady=(2, 0))
+            text="RF Strict Match + Retry (max 3)",
+            variable=self.rf_retry_var,
+        ).grid(row=option_row + 1, column=2, columnspan=2, sticky=tk.W)
 
-        action_box = ttk.LabelFrame(parent, text="Control", padding=12)
-        action_box.pack(fill=tk.X, pady=(12, 0))
+        action_box = ttk.Frame(parent, padding=(8, 4))
+        action_box.pack(fill=tk.X, pady=(6, 0))
 
         button_row = ttk.Frame(action_box)
-        button_row.pack(fill=tk.X)
+        button_row.pack(side=tk.LEFT)
         self.send_button = ttk.Button(button_row, text="Start", command=self._start_send)
         self.send_button.pack(side=tk.LEFT)
         self.stop_button = ttk.Button(button_row, text="Stop", command=self._stop_send, state=tk.DISABLED)
@@ -285,11 +297,11 @@ class SenderGui:
         ttk.Button(button_row, text="Clear Log", command=self._clear_log).pack(side=tk.LEFT, padx=(8, 0))
 
         self.progress_bar = ttk.Progressbar(action_box, variable=self.progress_var, maximum=100.0)
-        self.progress_bar.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(action_box, textvariable=self.progress_text_var).pack(anchor=tk.W, pady=(6, 0))
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(12, 8))
+        ttk.Label(action_box, textvariable=self.progress_text_var, width=18).pack(side=tk.RIGHT)
 
     def _build_metrics_panel(self, parent):
-        status_box = ttk.LabelFrame(parent, text="Metrics", padding=12)
+        status_box = ttk.LabelFrame(parent, text="Metrics", padding=8)
         status_box.pack(fill=tk.BOTH, expand=True)
 
         metrics = [
@@ -314,11 +326,27 @@ class SenderGui:
             ("Empty Polls", self.empty_poll_var),
         ]
 
-        for label_text, variable in metrics:
-            row = ttk.Frame(status_box)
-            row.pack(fill=tk.X, pady=4)
-            ttk.Label(row, text=label_text, width=19).pack(side=tk.LEFT)
-            ttk.Label(row, textvariable=variable, font=("Consolas", 10)).pack(side=tk.LEFT)
+        status_box.columnconfigure(1, weight=1)
+        status_box.columnconfigure(3, weight=1)
+        for metric_index, (label_text, variable) in enumerate(metrics):
+            row_index = metric_index // 2
+            column_index = (metric_index % 2) * 2
+            ttk.Label(status_box, text=label_text, width=17).grid(
+                row=row_index, column=column_index, sticky=tk.W, pady=1
+            )
+            ttk.Label(
+                status_box,
+                textvariable=variable,
+                font=("Consolas", 9),
+                width=18,
+                anchor=tk.W,
+            ).grid(
+                row=row_index,
+                column=column_index + 1,
+                sticky="ew",
+                padx=(0, 8) if column_index == 0 else (0, 0),
+                pady=1,
+            )
 
     def _build_chart_panel(self, parent):
         chart_box = ttk.LabelFrame(parent, text="Charts", padding=12)
@@ -341,7 +369,7 @@ class SenderGui:
             chart_grid.rowconfigure(0, weight=1)
             ttk.Label(frame, text=title_text).pack(anchor=tk.W)
             unit = "KiB/s" if index < 2 else "ms"
-            chart = Sparkline(frame, height=190, bg="white", line_color=color, unit=unit)
+            chart = Sparkline(frame, height=100, bg="white", line_color=color, unit=unit)
             chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
             charts.append(chart)
 
@@ -351,7 +379,7 @@ class SenderGui:
         log_box = ttk.LabelFrame(parent, text="Event Log", padding=12)
         log_box.pack(fill=tk.BOTH, expand=True)
 
-        self.log_text = tk.Text(log_box, height=16, wrap="none")
+        self.log_text = tk.Text(log_box, height=6, wrap="none")
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         scroll_y = ttk.Scrollbar(log_box, orient=tk.VERTICAL, command=self.log_text.yview)
