@@ -125,11 +125,18 @@ class ReceiverGui:
 
         self._build_config(left)
         self._build_metrics(right)
-        self._build_charts(root_frame)
-        self._build_log(root_frame)
+
+        lower_split = ttk.Panedwindow(root_frame, orient=tk.VERTICAL)
+        lower_split.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        chart_host = ttk.Frame(lower_split)
+        log_host = ttk.Frame(lower_split)
+        lower_split.add(chart_host, weight=2)
+        lower_split.add(log_host, weight=3)
+        self._build_charts(chart_host)
+        self._build_log(log_host)
 
     def _build_config(self, parent):
-        net_box = ttk.LabelFrame(parent, text="Network", padding=12)
+        net_box = ttk.LabelFrame(parent, text="Network", padding=8)
         net_box.pack(fill=tk.X)
 
         fields = [
@@ -141,55 +148,73 @@ class ReceiverGui:
             ("Board Port", self.board_port_var),
             ("Socket Buffer", self.socket_buffer_var),
         ]
-        for label_text, variable in fields:
-            row = ttk.Frame(net_box)
-            row.pack(fill=tk.X, pady=(0, 8))
-            ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
-            ttk.Entry(row, textvariable=variable, width=20).pack(side=tk.LEFT)
+        net_box.columnconfigure(1, weight=1)
+        net_box.columnconfigure(3, weight=1)
+        for field_index, (label_text, variable) in enumerate(fields):
+            row_index = field_index // 2
+            column_index = (field_index % 2) * 2
+            ttk.Label(net_box, text=label_text, width=14).grid(
+                row=row_index, column=column_index, sticky=tk.W, pady=(0, 4)
+            )
+            ttk.Entry(net_box, textvariable=variable, width=18).grid(
+                row=row_index,
+                column=column_index + 1,
+                sticky="ew",
+                padx=(0, 12) if column_index == 0 else (0, 0),
+                pady=(0, 4),
+            )
 
         ttk.Checkbutton(
             net_box,
             text="Configure Board IP by broadcast",
             variable=self.configure_board_ip_var,
-        ).pack(anchor=tk.W)
-        ttk.Checkbutton(net_box, text="Register RX target", variable=self.register_var).pack(anchor=tk.W)
+        ).grid(row=4, column=0, columnspan=2, sticky=tk.W)
+        ttk.Checkbutton(
+            net_box,
+            text="Register RX target",
+            variable=self.register_var,
+        ).grid(row=4, column=2, columnspan=2, sticky=tk.W)
         ttk.Label(
             net_box,
             text="With two NICs, Bind IP must be the Zynq-facing PC address (not 0.0.0.0).",
             foreground="#555555",
-        ).pack(anchor=tk.W, pady=(2, 0))
+        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(2, 0))
 
-        output_box = ttk.LabelFrame(parent, text="Output", padding=12)
-        output_box.pack(fill=tk.X, pady=(12, 0))
+        output_box = ttk.LabelFrame(parent, text="Output", padding=8)
+        output_box.pack(fill=tk.X, pady=(8, 0))
+        output_box.columnconfigure(1, weight=1)
+        output_box.columnconfigure(3, weight=1)
 
-        row = ttk.Frame(output_box)
-        row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(row, text="Directory", width=14).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=self.output_dir_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(row, text="Browse", command=self._browse_output_dir).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(output_box, text="Directory", width=14).grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
+        ttk.Entry(output_box, textvariable=self.output_dir_var).grid(
+            row=0, column=1, columnspan=2, sticky="ew", padx=(0, 8), pady=(0, 6)
+        )
+        ttk.Button(output_box, text="Browse", command=self._browse_output_dir).grid(
+            row=0, column=3, sticky=tk.E, pady=(0, 6)
+        )
 
-        row = ttk.Frame(output_box)
-        row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(row, text="File Name", width=14).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=self.output_name_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        output_fields = [
+            ("File Name", self.output_name_var),
+            ("Raw Expected", self.expected_bytes_var),
+            ("Idle Finish(s)", self.idle_finish_var),
+            ("Progress ms", self.progress_ms_var),
+        ]
+        for field_index, (label_text, variable) in enumerate(output_fields):
+            row_index = 1 + field_index // 2
+            column_index = (field_index % 2) * 2
+            ttk.Label(output_box, text=label_text, width=14).grid(
+                row=row_index, column=column_index, sticky=tk.W, pady=(0, 6)
+            )
+            ttk.Entry(output_box, textvariable=variable, width=18).grid(
+                row=row_index,
+                column=column_index + 1,
+                sticky="ew",
+                padx=(0, 12) if column_index == 0 else (0, 0),
+                pady=(0, 6),
+            )
 
-        row = ttk.Frame(output_box)
-        row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(row, text="Raw Expected", width=14).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=self.expected_bytes_var, width=20).pack(side=tk.LEFT)
-
-        row = ttk.Frame(output_box)
-        row.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(row, text="Idle Finish(s)", width=14).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=self.idle_finish_var, width=20).pack(side=tk.LEFT)
-
-        row = ttk.Frame(output_box)
-        row.pack(fill=tk.X)
-        ttk.Label(row, text="Progress ms", width=14).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=self.progress_ms_var, width=20).pack(side=tk.LEFT)
-
-        action_box = ttk.LabelFrame(parent, text="Control", padding=12)
-        action_box.pack(fill=tk.X, pady=(12, 0))
+        action_box = ttk.LabelFrame(parent, text="Control", padding=8)
+        action_box.pack(fill=tk.X, pady=(8, 0))
         self.start_button = ttk.Button(action_box, text="Start", command=self._start_receiver)
         self.start_button.pack(side=tk.LEFT)
         self.stop_button = ttk.Button(action_box, text="Stop", command=self._stop_receiver, state=tk.DISABLED)
@@ -198,7 +223,7 @@ class ReceiverGui:
         ttk.Button(action_box, text="Clear Log", command=self._clear_log).pack(side=tk.LEFT, padx=(8, 0))
 
     def _build_metrics(self, parent):
-        metrics_box = ttk.LabelFrame(parent, text="Metrics", padding=12)
+        metrics_box = ttk.LabelFrame(parent, text="Metrics", padding=8)
         metrics_box.pack(fill=tk.BOTH, expand=True)
 
         metrics = [
@@ -230,16 +255,31 @@ class ReceiverGui:
             ("File CRC", self.file_crc_var),
             ("Saved", self.output_path_var),
         ]
-        for label_text, variable in metrics:
-            row = ttk.Frame(metrics_box)
-            row.pack(fill=tk.X, pady=4)
-            ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
-            ttk.Label(row, textvariable=variable, font=("Consolas", 10),
-                wraplength=300).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        metrics_box.columnconfigure(1, weight=1)
+        metrics_box.columnconfigure(3, weight=1)
+        for metric_index, (label_text, variable) in enumerate(metrics):
+            row_index = metric_index // 2
+            column_index = (metric_index % 2) * 2
+            ttk.Label(metrics_box, text=label_text, width=14).grid(
+                row=row_index, column=column_index, sticky=tk.W, pady=1
+            )
+            ttk.Label(
+                metrics_box,
+                textvariable=variable,
+                font=("Consolas", 9),
+                width=18,
+                anchor=tk.W,
+            ).grid(
+                row=row_index,
+                column=column_index + 1,
+                sticky="ew",
+                padx=(0, 8) if column_index == 0 else (0, 0),
+                pady=1,
+            )
 
     def _build_charts(self, parent):
         chart_box = ttk.LabelFrame(parent, text="Charts", padding=12)
-        chart_box.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        chart_box.pack(fill=tk.BOTH, expand=True)
 
         grid = ttk.Frame(chart_box)
         grid.pack(fill=tk.BOTH, expand=True)
@@ -250,20 +290,20 @@ class ReceiverGui:
         rate_frame = ttk.Frame(grid)
         rate_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         ttk.Label(rate_frame, text="RX KiB/s").pack(anchor=tk.W)
-        self.rate_chart = Sparkline(rate_frame, height=150, line_color="#2E7D32", unit="KiB/s")
+        self.rate_chart = Sparkline(rate_frame, height=100, line_color="#2E7D32", unit="KiB/s")
         self.rate_chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
 
         packet_frame = ttk.Frame(grid)
         packet_frame.grid(row=0, column=1, sticky="nsew")
         ttk.Label(packet_frame, text="Packets/s").pack(anchor=tk.W)
-        self.packet_chart = Sparkline(packet_frame, height=150, line_color="#1976D2", unit="pkt/s")
+        self.packet_chart = Sparkline(packet_frame, height=100, line_color="#1976D2", unit="pkt/s")
         self.packet_chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
 
     def _build_log(self, parent):
         log_box = ttk.LabelFrame(parent, text="Event Log", padding=12)
-        log_box.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        log_box.pack(fill=tk.BOTH, expand=True)
 
-        self.log_text = tk.Text(log_box, height=12, wrap="none")
+        self.log_text = tk.Text(log_box, height=6, wrap="none")
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y = ttk.Scrollbar(log_box, orient=tk.VERTICAL, command=self.log_text.yview)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)

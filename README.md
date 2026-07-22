@@ -92,7 +92,8 @@ AD9361_test2/tools/pc_sender/receiver_core.py
 AD9361_test2/tools/pc_sender/recv_data.py
     接收 CLI 入口。
 AD9361_test2/tools/pc_sender/receiver_gui.py
-    接收 Tkinter GUI 入口。
+    接收 Tkinter GUI 入口；参数和指标使用紧凑双列布局，Charts/Event Log
+    使用可拖动的纵向分隔区，AIRV Preview 为独立窗口。
 ```
 
 ## 板端启动流程
@@ -550,6 +551,8 @@ Test Bytes              64 MiB 或 256 MiB
 发送 GUI 里的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。只要发送端最终 `app_ack` 等于总字节数，接收端最终 `rx/high` 等于原文件大小且 `gaps=0 crc=0 len=0`，说明当前这次恢复文件是连续完整的。`Recoverable Errors` 中常见的是板端 payload CRC 拒收后重传成功；如果该计数持续升高，可以降低 `Window Size` 或设置 `Rate Limit KiB/s` 继续压低主机发包压力。
 
 ## PC 接收工具
+
+接收 GUI 主窗口的 Network/Output 参数和 Metrics 使用双列紧凑布局；下方 Charts 与 Event Log 之间的横向分隔条可以上下拖动。需要重点看串口/接收日志时，可向上拖动分隔条扩大 Event Log；AIRV 图像继续显示在独立 `AIRV Preview` 窗口中，不占主窗口日志空间。
 
 接收 GUI 入口：
 
