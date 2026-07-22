@@ -57,6 +57,9 @@ class ReceiverGui:
         self.bind_port_var = tk.StringVar(value=str(DEFAULT_RECEIVER_PORT))
         self.board_ip_var = tk.StringVar(value=DEFAULT_BOARD_IP)
         self.board_port_var = tk.StringVar(value=str(DEFAULT_BOARD_PORT))
+        self.configure_board_ip_var = tk.BooleanVar(value=True)
+        self.board_netmask_var = tk.StringVar(value="255.255.255.0")
+        self.board_gateway_var = tk.StringVar(value="0.0.0.0")
         self.register_var = tk.BooleanVar(value=True)
         self.socket_buffer_var = tk.StringVar(value=str(DEFAULT_SOCKET_BUFFER_BYTES))
         self.output_dir_var = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
@@ -133,6 +136,8 @@ class ReceiverGui:
             ("Bind IP", self.bind_ip_var),
             ("Bind Port", self.bind_port_var),
             ("Board IP", self.board_ip_var),
+            ("Board Netmask", self.board_netmask_var),
+            ("Board Gateway", self.board_gateway_var),
             ("Board Port", self.board_port_var),
             ("Socket Buffer", self.socket_buffer_var),
         ]
@@ -142,7 +147,17 @@ class ReceiverGui:
             ttk.Label(row, text=label_text, width=14).pack(side=tk.LEFT)
             ttk.Entry(row, textvariable=variable, width=20).pack(side=tk.LEFT)
 
+        ttk.Checkbutton(
+            net_box,
+            text="Configure Board IP by broadcast",
+            variable=self.configure_board_ip_var,
+        ).pack(anchor=tk.W)
         ttk.Checkbutton(net_box, text="Register RX target", variable=self.register_var).pack(anchor=tk.W)
+        ttk.Label(
+            net_box,
+            text="With two NICs, Bind IP must be the Zynq-facing PC address (not 0.0.0.0).",
+            foreground="#555555",
+        ).pack(anchor=tk.W, pady=(2, 0))
 
         output_box = ttk.LabelFrame(parent, text="Output", padding=12)
         output_box.pack(fill=tk.X, pady=(12, 0))
@@ -334,6 +349,9 @@ class ReceiverGui:
             bind_port=int(self.bind_port_var.get().strip()),
             board_ip=self.board_ip_var.get().strip(),
             board_port=int(self.board_port_var.get().strip()),
+            configure_board_ip=bool(self.configure_board_ip_var.get()),
+            board_netmask=self.board_netmask_var.get().strip(),
+            board_gateway=self.board_gateway_var.get().strip(),
             register_with_board=bool(self.register_var.get()),
             socket_buffer_bytes=int(self.socket_buffer_var.get().strip()),
             output_dir=self.output_dir_var.get().strip(),
@@ -366,6 +384,7 @@ class ReceiverGui:
             self._set_preview_message("Waiting for AIRV frames", clear_image=True)
         self._append_log(
             f"Start bind={config.bind_ip}:{config.bind_port} board={config.board_ip}:{config.board_port} "
+            f"ipcfg={config.configure_board_ip} mask={config.board_netmask} gateway={config.board_gateway} "
             f"register={config.register_with_board} raw_expected={config.expected_bytes} output={config.output_dir}"
         )
         self.receiver_thread = threading.Thread(target=self._worker_run, daemon=True)
@@ -690,6 +709,28 @@ class ReceiverGui:
 
         if event_name == "register_attempt":
             self.register_var_text.set(f"attempt {payload['attempt']}")
+            return
+
+        if event_name == "ip_config_attempt":
+            self.register_var_text.set(f"IPCFG {payload['attempt']}")
+            return
+
+        if event_name == "ip_configured":
+            self._append_log(
+                f"IPCFG applied board={payload['board_ip']} mask={payload['netmask']} "
+                f"gateway={payload['gateway']}"
+            )
+            return
+
+        if event_name == "ip_config_skipped":
+            self._append_log(f"IPCFG skipped: {payload['reason']}; trying RXCFG")
+            return
+
+        if event_name == "ip_config_unconfirmed":
+            self._append_log(
+                f"IPCFG ACK not seen after {payload['attempts']} attempts; trying RXCFG to "
+                f"{payload['board_ip']}"
+            )
             return
 
         if event_name == "registered":

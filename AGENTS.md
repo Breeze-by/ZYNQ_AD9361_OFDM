@@ -23,6 +23,7 @@
 - AIRV 流中间出现完整 chunk 级缺口时，接收器会在下一段通过 chunk 对齐和 AIRV magic 校验后打印 `VIDEO_DIAG gap_skip ...`、丢弃跨缺口未完成帧并等待 keyframe；`VIDEO stream_gap=...` 累计跳过字节。AIR0 不跳过流中缺口。
 - AIRV 接收 GUI 每秒输出 `VIDEO_PREVIEW input/backlog/drops/decoded/rendered/decoder_errors/waiting_key/images/skipped/error`，结束时输出 `VIDEO_PREVIEW_DONE`；用它区分组帧成功后是 PyAV 解码未出图，还是 Tk 未渲染。
 - 当前 SDK 默认 `APP_RX_SOURCE=APP_RX_SOURCE_AD9361`，走真实 AD9361 TX -> SMA -> AD9361 RX 链路；PL 数字回环保留为 `APP_RX_SOURCE_DIGITAL_LOOPBACK` 诊断选项。启动日志必须打印当前 RX source。板级调试继续分阶段做；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
+- 板端每次上电仍以 `192.168.1.50/24` 启动，接收 GUI 支持在 RXCFG 前通过全局广播发送 `IPCFG`，把本次运行的板端 IP/掩码/网关切换到另一网段；配置不写 flash，重启恢复 `192.168.1.50`。双网卡电脑必须把接收 GUI 的 `Bind IP` 明确填成直连 Zynq 的 PC 网卡地址，不能用 `0.0.0.0`，否则无法保证广播从正确网卡发出。新电脑使用 `Bind IP=192.168.2.101`、`Board IP=192.168.2.50`、`Board Netmask=255.255.255.0`、`Board Gateway=0.0.0.0`，勾选 `Configure Board IP by broadcast` 和 `Register RX target`；发送 GUI `Target IP=192.168.2.50`。旧电脑仍可使用 `192.168.1.101 -> 192.168.1.50`，无需改板端默认代码。
 - 当前默认走真实 `NET_LOOPBACK_RETURN_SOURCE_S2MM` RF/S2MM 回传路径，不再是 `TX_BUFFER` 诊断模式。S2MM 前 8 个 block 会打印较完整 dump，前 16 个 block 和后续异常 block 会打印一行 `S2MM diag ...` 摘要。需要用户反馈时，优先要 `RXCFG loopback peer`、`UDP RX reset`、`S2MM diag`、`STAT rate/state`、`DMA stall timeout/recovery`、`S2MM error`、`MM2S error`；如果前 8 包内还有详细日志，也要复制 `S2MM start/done`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`S2MM payload_magic`、`S2MM air0`、`LB UDP sent`。如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、AIR0 的 `PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...`、`DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=...`，以及 AIRV 的 `VIDEO frame_rx=... frame_show=... frame_drop=... frag_rx=... frag_missing=... bad_hdr=... bad_meta=... bad_frag_crc=... bad_frame_crc=... keyframe_rx=... waiting_keyframe=... fps=... latency_ms=...`、`VIDEO_FRAME ...`、`VIDEO_DONE ...`、`DONE VIDEO ...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
@@ -32,7 +33,7 @@
 - 开发环境：`Xilinx SDK 2018.3`
 - 目标平台：`Zynq-7000 + AD9361`
 - 主链路：PC UDP -> PS lwIP RAW UDP -> DDR 聚合块 -> AXI DMA MM2S -> PL `tx_intf/openofdm_tx` -> AD9361 TX -> SMA 线直连 -> AD9361 RX -> PL OFDM RX -> AXI DMA S2MM -> PS UDP 回传
-- 默认网络：`192.168.1.50:5001`
+- 上电默认网络：`192.168.1.50:5001`；可由接收 GUI IPCFG 临时切换到与直连 PC 网卡相同的 `/24` 网段
 - 串口：`115200`
 
 ## 常看文件
@@ -66,7 +67,7 @@ AD9361_test2/tools/pc_sender/sender_gui.py
     Tkinter GUI。
 
 AD9361_test2/tools/pc_sender/receiver_core.py
-    PC 接收核心；RXCFG 注册回传目标、loopback 分片接收、CRC 检查、文件恢复。
+    PC 接收核心；IPCFG 运行时板端改址、RXCFG 注册回传目标、loopback 分片接收、CRC 检查、文件恢复。
 
 AD9361_test2/tools/pc_sender/recv_data.py
     接收 CLI 入口。

@@ -2,6 +2,7 @@
 import argparse
 import bisect
 import binascii
+import ipaddress
 import os
 import random
 import socket
@@ -36,6 +37,7 @@ from sender_core import (
     LOOPBACK_FORMAT,
     LOOPBACK_HEADER_SIZE,
     LOOPBACK_MAGIC,
+    build_board_ip_config_packet,
     build_receiver_config_packet,
 )
 
@@ -54,6 +56,9 @@ class ReceiverConfig:
     bind_port: int = DEFAULT_RECEIVER_PORT
     board_ip: str = DEFAULT_BOARD_IP
     board_port: int = DEFAULT_BOARD_PORT
+    configure_board_ip: bool = False
+    board_netmask: str = "255.255.255.0"
+    board_gateway: str = "0.0.0.0"
     register_with_board: bool = True
     socket_buffer_bytes: int = DEFAULT_SOCKET_BUFFER_BYTES
     output_dir: str = DEFAULT_OUTPUT_DIR
@@ -77,6 +82,8 @@ class ReceiverStats:
     unknown_packets: int = 0
     register_attempts: int = 0
     register_ok: bool = False
+    ip_config_attempts: int = 0
+    ip_config_ok: bool = False
     last_block_id: int = 0
     last_stream_offset: int = 0
     last_chunk_offset: int = 0
@@ -134,6 +141,10 @@ def parse_args():
         help="local UDP port for loopback packets")
     parser.add_argument("--board-ip", default=DEFAULT_BOARD_IP, help="Zynq board IP")
     parser.add_argument("--board-port", type=int, default=DEFAULT_BOARD_PORT, help="Zynq UDP port")
+    parser.add_argument("--configure-board-ip", action="store_true",
+        help="broadcast IPCFG on the explicitly bound adapter before RXCFG registration")
+    parser.add_argument("--board-netmask", default="255.255.255.0", help="runtime Zynq netmask")
+    parser.add_argument("--board-gateway", default="0.0.0.0", help="runtime Zynq gateway; 0.0.0.0 is normal for a direct cable")
     parser.add_argument("--no-register", action="store_true",
         help="listen only; do not send RXCFG registration to the board")
     parser.add_argument("--socket-buffer-bytes", type=int, default=DEFAULT_SOCKET_BUFFER_BYTES,
@@ -485,6 +496,77 @@ class LoopbackReceiver:
             sock.settimeout(previous_timeout)
 
         raise RuntimeError("board did not ACK receiver registration")
+
+    def _configure_board_ip(self, sock: socket.socket, stats: ReceiverStats, callback):
+        if not self.config.configure_board_ip:
+            return
+        if self.config.bind_ip == "0.0.0.0":
+            self._emit(callback, "ip_config_skipped", {
+                "reason": "Bind IP must be the explicit PC address of the Zynq-facing adapter",
+            })
+            return
+
+        local_ip = ipaddress.IPv4Address(self.config.bind_ip)
+        board_network = ipaddress.IPv4Network(
+            f"{self.config.board_ip}/{self.config.board_netmask}",
+            strict=False,
+        )
+        if local_ip not in board_network:
+            raise RuntimeError(
+                f"Bind IP {local_ip} and Board IP {self.config.board_ip} are not in "
+                f"the same {board_network.netmask} subnet"
+            )
+
+        seq = random.randint(1, 0xFFFFFFFF)
+        packet = build_board_ip_config_packet(
+            seq,
+            self.config.board_ip,
+            self.config.board_netmask,
+            self.config.board_gateway,
+        )
+        destination = ("255.255.255.255", self.config.board_port)
+        previous_timeout = sock.gettimeout()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.35)
+        try:
+            for attempt in range(4):
+                stats.ip_config_attempts += 1
+                sock.sendto(packet, destination)
+                self._emit(callback, "ip_config_attempt", {
+                    "attempt": attempt + 1,
+                    "bind_ip": self.config.bind_ip,
+                    "board_ip": self.config.board_ip,
+                    "netmask": self.config.board_netmask,
+                    "gateway": self.config.board_gateway,
+                })
+                deadline = time.time() + 0.35
+                while time.time() < deadline:
+                    try:
+                        data, _addr = sock.recvfrom(4096)
+                    except socket.timeout:
+                        break
+                    packet_type, parsed = parse_udp_packet(data)
+                    if packet_type != "ack" or parsed["seq"] != seq:
+                        continue
+                    if parsed["status"] == ACK_STATUS_OK:
+                        stats.ip_config_ok = True
+                        self._emit(callback, "ip_configured", {
+                            "board_ip": self.config.board_ip,
+                            "netmask": self.config.board_netmask,
+                            "gateway": self.config.board_gateway,
+                        })
+                        return
+                    status_name = ACK_STATUS_NAMES.get(
+                        parsed["status"], f"UNKNOWN_{parsed['status']}"
+                    )
+                    raise RuntimeError(f"board rejected IPCFG with {status_name}")
+        finally:
+            sock.settimeout(previous_timeout)
+
+        self._emit(callback, "ip_config_unconfirmed", {
+            "board_ip": self.config.board_ip,
+            "attempts": stats.ip_config_attempts,
+        })
 
     def _update_air_missing(self, stats: ReceiverStats):
         if stats.air_total_packets > 0:
@@ -1075,6 +1157,7 @@ class LoopbackReceiver:
                     "output_dir": self.config.output_dir,
                     "expected_bytes": self.config.expected_bytes,
                 })
+                self._configure_board_ip(sock, stats, callback)
                 self._register_with_board(sock, stats, callback)
 
                 while not self._stop_requested:
@@ -1133,6 +1216,9 @@ def run_cli(args) -> int:
         bind_port=args.bind_port,
         board_ip=args.board_ip,
         board_port=args.board_port,
+        configure_board_ip=args.configure_board_ip,
+        board_netmask=args.board_netmask,
+        board_gateway=args.board_gateway,
         register_with_board=not args.no_register,
         socket_buffer_bytes=args.socket_buffer_bytes,
         output_dir=args.output_dir,
@@ -1147,6 +1233,18 @@ def run_cli(args) -> int:
             print(
                 f"listening {payload['bind_ip']}:{payload['bind_port']} "
                 f"output={payload['output_dir']} raw_expected={payload['expected_bytes']}"
+            )
+        elif event_name == "ip_configured":
+            print(
+                f"IPCFG board={payload['board_ip']} mask={payload['netmask']} "
+                f"gateway={payload['gateway']}"
+            )
+        elif event_name == "ip_config_skipped":
+            print(f"IPCFG skipped: {payload['reason']}")
+        elif event_name == "ip_config_unconfirmed":
+            print(
+                f"IPCFG unconfirmed board={payload['board_ip']} "
+                f"attempts={payload['attempts']}; trying RXCFG"
             )
         elif event_name == "registered":
             print(

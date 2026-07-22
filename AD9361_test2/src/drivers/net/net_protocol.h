@@ -35,6 +35,15 @@ typedef struct {
     uint32_t meta1;
 } net_loopback_packet_header_t;
 
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;
+    uint8_t ip_addr[4];
+    uint8_t netmask[4];
+    uint8_t gateway[4];
+    uint32_t reserved;
+} net_ipcfg_packet_t;
+
 uint32_t Net_Protocol_Crc32(const uint8_t *data, uint32_t length);
 uint32_t Net_Protocol_Align8(uint32_t length);
 

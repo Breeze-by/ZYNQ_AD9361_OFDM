@@ -2,6 +2,7 @@
 
 #include "AXI_DMA.h"
 #include "PS_UART.h"
+#include "net_init.h"
 #include "net_protocol.h"
 #include "net_stats.h"
 
@@ -1866,6 +1867,7 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     const ip_addr_t *addr, u16_t port)
 {
     net_data_header_t header;
+    net_ipcfg_packet_t ipcfg;
     uint32_t actual_crc;
     uint32_t accepted_payload_len;
     uint16_t packet_flags;
@@ -1896,6 +1898,74 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         UART_Printf("UDP drop reason=header_copy len=%lu\r\n", (unsigned long)p->tot_len);
         NetStats_OnBadLength();
         net_send_immediate_ack(addr, port, 0U, NET_ACK_STATUS_BAD_LENGTH, 0U);
+        pbuf_free(p);
+        return;
+    }
+
+    if (header.magic == NET_IPCFG_MAGIC) {
+        if (((uint32_t)p->tot_len != (uint32_t)sizeof(ipcfg)) ||
+            (pbuf_copy_partial(p, &ipcfg, sizeof(ipcfg), 0U) != sizeof(ipcfg)) ||
+            (ipcfg.reserved != 0U)) {
+            UART_Printf("IPCFG drop seq=%lu reason=bad_length pkt=%lu expected=%lu\r\n",
+                (unsigned long)header.seq,
+                (unsigned long)p->tot_len,
+                (unsigned long)sizeof(ipcfg));
+            NetStats_OnBadLength();
+            net_send_immediate_ack(addr, port, header.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        if ((dma_busy != 0) || (loopback_rx_busy != 0) ||
+            (net_count_nonfree_blocks() != 0U)) {
+            UART_Printf("IPCFG busy seq=%lu q=%lu dma=%d s2mm=%d\r\n",
+                (unsigned long)ipcfg.seq,
+                (unsigned long)net_count_nonfree_blocks(),
+                dma_busy,
+                loopback_rx_busy);
+            NetStats_OnBusy();
+            net_send_immediate_ack(addr, port, ipcfg.seq, NET_ACK_STATUS_BUSY, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        if ((((uint8_t)ip4_addr1(addr) & ipcfg.netmask[0]) !=
+                (ipcfg.ip_addr[0] & ipcfg.netmask[0])) ||
+            (((uint8_t)ip4_addr2(addr) & ipcfg.netmask[1]) !=
+                (ipcfg.ip_addr[1] & ipcfg.netmask[1])) ||
+            (((uint8_t)ip4_addr3(addr) & ipcfg.netmask[2]) !=
+                (ipcfg.ip_addr[2] & ipcfg.netmask[2])) ||
+            (((uint8_t)ip4_addr4(addr) & ipcfg.netmask[3]) !=
+                (ipcfg.ip_addr[3] & ipcfg.netmask[3]))) {
+            UART_Printf("IPCFG drop seq=%lu reason=source_subnet source=%s\r\n",
+                (unsigned long)ipcfg.seq,
+                ip4addr_ntoa(addr));
+            NetStats_OnBadLength();
+            net_send_immediate_ack(addr, port, ipcfg.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        net_flush_pending_ok_ack();
+        if (Net_ApplyIpv4Config(ipcfg.ip_addr, ipcfg.netmask, ipcfg.gateway) != 0) {
+            UART_Printf("IPCFG drop seq=%lu reason=invalid_config ip=%u.%u.%u.%u\r\n",
+                (unsigned long)ipcfg.seq,
+                (unsigned)ipcfg.ip_addr[0],
+                (unsigned)ipcfg.ip_addr[1],
+                (unsigned)ipcfg.ip_addr[2],
+                (unsigned)ipcfg.ip_addr[3]);
+            NetStats_OnBadLength();
+            net_send_immediate_ack(addr, port, ipcfg.seq, NET_ACK_STATUS_BAD_LENGTH, 0U);
+            pbuf_free(p);
+            return;
+        }
+
+        loopback_return_peer_valid = 0;
+        loopback_return_peer_locked = 0;
+        UART_Printf("IPCFG ready seq=%lu requested_by_port=%u\r\n",
+            (unsigned long)ipcfg.seq,
+            (unsigned)port);
+        net_send_ack(addr, port, ipcfg.seq, NET_ACK_STATUS_OK, 0U);
         pbuf_free(p);
         return;
     }

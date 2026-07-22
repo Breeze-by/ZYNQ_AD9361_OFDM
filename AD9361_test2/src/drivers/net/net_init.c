@@ -13,6 +13,44 @@
 static struct netif server_netif;
 static int ethernet_ready;
 
+static uint32_t net_ipv4_octets_to_host(const uint8_t octets[4])
+{
+    return ((uint32_t)octets[0] << 24) |
+        ((uint32_t)octets[1] << 16) |
+        ((uint32_t)octets[2] << 8) |
+        (uint32_t)octets[3];
+}
+
+static int net_ipv4_config_valid(const uint8_t ip_addr[4],
+    const uint8_t netmask[4], const uint8_t gateway[4])
+{
+    uint32_t ip_value = net_ipv4_octets_to_host(ip_addr);
+    uint32_t mask_value = net_ipv4_octets_to_host(netmask);
+    uint32_t gateway_value = net_ipv4_octets_to_host(gateway);
+    uint32_t host_mask;
+
+    if ((ip_addr[0] == 0U) || (ip_addr[0] == 127U) || (ip_addr[0] >= 224U) ||
+        (mask_value == 0U)) {
+        return 0;
+    }
+
+    host_mask = ~mask_value;
+    if ((host_mask & (host_mask + 1U)) != 0U) {
+        return 0;
+    }
+    if (((ip_value & host_mask) == 0U) ||
+        ((ip_value & host_mask) == host_mask)) {
+        return 0;
+    }
+
+    if ((gateway_value != 0U) &&
+        ((gateway_value & mask_value) != (ip_value & mask_value))) {
+        return 0;
+    }
+
+    return 1;
+}
+
 static void print_ip_settings(const struct netif *netif)
 {
     UART_Printf("IP  : %s\r\n", ip4addr_ntoa(netif_ip4_addr(netif)));
@@ -52,6 +90,30 @@ int Net_Init(const unsigned char *mac_address)
         ETH_IP_ADDR0, ETH_IP_ADDR1, ETH_IP_ADDR2, ETH_IP_ADDR3);
 
     ethernet_ready = 1;
+    return 0;
+}
+
+int Net_ApplyIpv4Config(const uint8_t ip_addr[4], const uint8_t netmask[4],
+    const uint8_t gateway[4])
+{
+    ip_addr_t ipaddr;
+    ip_addr_t mask;
+    ip_addr_t gw;
+
+    if ((ethernet_ready == 0) ||
+        (net_ipv4_config_valid(ip_addr, netmask, gateway) == 0)) {
+        return -1;
+    }
+
+    IP_ADDR4(&ipaddr, ip_addr[0], ip_addr[1], ip_addr[2], ip_addr[3]);
+    IP_ADDR4(&mask, netmask[0], netmask[1], netmask[2], netmask[3]);
+    IP_ADDR4(&gw, gateway[0], gateway[1], gateway[2], gateway[3]);
+    netif_set_addr(&server_netif, &ipaddr, &mask, &gw);
+    etharp_gratuitous(&server_netif);
+
+    UART_Printf("IPCFG applied IP=%s\r\n", ip4addr_ntoa(netif_ip4_addr(&server_netif)));
+    UART_Printf("IPCFG applied MASK=%s\r\n", ip4addr_ntoa(netif_ip4_netmask(&server_netif)));
+    UART_Printf("IPCFG applied GW=%s\r\n", ip4addr_ntoa(netif_ip4_gw(&server_netif)));
     return 0;
 }
 

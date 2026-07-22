@@ -59,7 +59,7 @@ AD9361_test2/src/app/main.c
     UART、GIC、AXI DMA、lwIP，然后进入网络轮询主循环。
 
 AD9361_test2/src/app/app_config.h
-    RX 数据源、cache 开关、DMA buffer 地址和长度、静态 IPv4 配置。
+    RX 数据源、cache 开关、DMA buffer 地址和长度、上电默认 IPv4 配置。
 
 AD9361_test2/src/drivers/net/net_config.h
     UDP 端口、协议 magic/flag、ACK 状态、聚合块、ACK 合并、轮询预算。
@@ -68,7 +68,7 @@ AD9361_test2/src/drivers/net/net_protocol.h/.c
     PC<->PS 应用层包头、ACK 包结构、CRC32、8 字节对齐。
 
 AD9361_test2/src/drivers/net/net_init.c
-    lwIP/GEM 初始化、静态 IP、`xemacif_input()` 输入轮询。
+    lwIP/GEM 初始化、上电默认 IP、IPCFG 运行时改址、`xemacif_input()` 输入轮询。
 
 AD9361_test2/src/drivers/net/net_rx.c
     UDP RX 回调、session reset、严格按序接收、ACK、聚合块提交、
@@ -108,7 +108,7 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `3000` 字节 PSDU 先 re-arm 一次。
 7. 根据 `APP_RX_SOURCE` 初始化 `openofdm_rx/rx_intf`，并打印实际 RX 数据源。
 8. 初始化 AXI DMA 和高电平敏感的 MM2S/S2MM 中断。
-9. 初始化 lwIP/GEM，使用静态 IPv4。
+9. 初始化 lwIP/GEM，使用上电默认 IPv4，并允许空闲时通过 IPCFG 临时改址。
 10. 绑定 UDP `5001`，初始化 DDR 聚合缓冲并进入主循环：
 
 ```c
@@ -132,7 +132,18 @@ Gateway  192.168.1.1
 UDP port 5001
 ```
 
-直连测试时，PC 网卡配置到同一网段，例如 `192.168.1.10/24`。板端正常启动后应能从 PC `ping 192.168.1.50`。
+以上是每次上电后的默认地址。为了兼容不同直连网段，接收 GUI 可以在注册回传目标前发送全局 UDP 广播 `IPCFG`，调用板端 `netif_set_addr()` 临时修改 IP、掩码和网关。该设置只在本次上电有效，不写 flash；板子复位后仍回到 `192.168.1.50/24`，所以原来的电脑和已有 ELF 使用习惯不受影响。
+
+板端只在 DMA、S2MM 和聚合队列均空闲时接受 IPCFG。接收 GUI 必须先绑定到直连 Zynq 的 PC 网卡地址，再向 `255.255.255.255:5001` 发送配置；板端切换地址后从新地址 ACK，然后 GUI 再向新地址发送普通 RXCFG。双网卡电脑不要使用 `Bind IP=0.0.0.0` 做 IPCFG，否则 Windows 可能从连接互联网的另一张网卡发送广播。
+
+两台电脑的推荐配置：
+
+```text
+原电脑：PC/Zynq 网卡 192.168.1.101/24 -> Board IP 192.168.1.50
+新电脑：PC/Zynq 网卡 192.168.2.101/24 -> Board IP 192.168.2.50
+```
+
+新电脑接收 GUI 启动并看到 `IPCFG applied ...`、`RX target registered ...` 后，应能 `ping 192.168.2.50`；随后发送 GUI 的 `Target IP` 也必须使用 `192.168.2.50`。
 
 正常网络启动日志应包含：
 
@@ -190,8 +201,10 @@ typedef struct {
 DATA magic       0x4E455430
 ACK magic        0x41434B30
 RXCFG magic      0x52435830
+IPCFG magic      0x49504330
 DATA header      16 bytes
 ACK packet       16 bytes
+IPCFG packet     24 bytes
 RESET flag       0x8000
 NO_CRC flag      0x4000
 RF_RETRY flag    0x2000
@@ -216,9 +229,11 @@ ACK 状态：
 
 `RF_RETRY` 只在每次传输开始的 reset 包中选择本 session 的板端 RF 策略。发送 GUI 的 `RF Strict Match + Retry (max 3)` 默认关闭，对应启动日志 `rf_mode=deliver_no_retry`；勾选后 reset 包携带 `RF_RETRY`，对应 `rf_mode=strict_retry`。该 flag 不改变 PC->PS UDP 滑动窗口重传，也不是 AIR0/AIRV 接收端 ACK。
 
+IPCFG 是独立的 24 字节控制包，包含 `magic/seq/ip_addr/netmask/gateway/reserved`。PC 和 PS 都按 4 个原始网络地址字节传输 IPv4 字段，避免主机字节序歧义。板端拒绝非法/广播/网络地址、非连续掩码、跨网段非零网关、请求源不在目标网段以及传输期间的改址请求。直连板卡推荐 `gateway=0.0.0.0`。
+
 ## UDP Loopback 回传协议
 
-接收工具启动后会先用本机接收 socket 向板端 `192.168.1.50:5001` 发送一个 16 字节 `RXCFG` 控制包。该包与普通 `net_data_header_t` 形状相同，只是 `magic=0x52435830`、`payload_len=0`。板端收到后记录该 UDP 包的源 IP/源端口作为 PL loopback 回传目标，返回 `ACK OK`，并打印 `RXCFG loopback peer port=...`。
+如果启用了运行时板端改址，接收工具先广播 IPCFG；收到 ACK 或完成有限次数尝试后，再用本机接收 socket 向 GUI 中的 `Board IP:Board Port` 发送一个 16 字节 `RXCFG` 控制包。RXCFG 与普通 `net_data_header_t` 形状相同，只是 `magic=0x52435830`、`payload_len=0`。板端收到后记录该 UDP 包的源 IP/源端口作为 PL loopback 回传目标，返回 `ACK OK`，并打印 `RXCFG loopback peer port=...`。
 
 注册成功后，即使发送端随后发 `RESET`，板端也会继续把 PL loopback 回传发给已注册的接收端；不会被发送端源端口覆盖。这样支持单电脑场景，也支持一台电脑只跑发送 GUI、另一台电脑只跑接收 GUI 的场景。如果接收工具没有注册，板端仍保留兼容行为：把回传发给最近一次发送/RESET 数据包的源 IP/端口。
 
@@ -551,10 +566,13 @@ python AD9361_test2/tools/pc_sender/recv_data.py --board-ip 192.168.1.50 --bind-
 常用 GUI 字段：
 
 ```text
-Bind IP             本机监听 IP。通常填 0.0.0.0
+Bind IP             本机监听 IP；双网卡 IPCFG 必须填直连 Zynq 的网卡 IP，不能填 0.0.0.0
 Bind Port           本机接收 loopback UDP 端口。默认 15002
-Board IP            板端 IP。默认 192.168.1.50
+Board IP            板端本次运行 IP；上电默认 192.168.1.50
+Board Netmask       板端本次运行掩码，默认 255.255.255.0
+Board Gateway       直连时填 0.0.0.0
 Board Port          板端 UDP 端口。默认 5001
+Configure Board IP  勾选后在 RXCFG 前广播 IPCFG；切换网段时使用
 Register RX target  勾选后发送 RXCFG，把本机注册为回传目标
 Socket Buffer       本机 UDP 接收缓冲，默认 16777216
 Output Directory    恢复文件保存目录。默认 output
@@ -563,7 +581,26 @@ Raw Expected        仅 raw 模式使用的期望连续字节数；AIR0 模式�
 Idle Finish(s)      数据不完整时，收到最后一个回传分片后空闲多久判定结束
 ```
 
-单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。双电脑测试时，在接收电脑先启动 `receiver_gui.py` 并注册；发送电脑只运行 `sender_gui.py`，目标 IP 仍填板端 `192.168.1.50`。
+单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。两台 PC 分别承担发送和接收时，在接收电脑先完成 IPCFG/RXCFG；发送电脑的 `Target IP` 必须与接收 GUI 的 `Board IP` 一致。
+
+新电脑双网卡直连 Zynq 的完整 GUI 设置：
+
+```text
+Receiver Bind IP                     192.168.2.101
+Receiver Bind Port                   15002
+Receiver Board IP                    192.168.2.50
+Receiver Board Netmask               255.255.255.0
+Receiver Board Gateway               0.0.0.0
+Receiver Configure Board IP          checked
+Receiver Register RX target          checked
+Receiver Raw Expected                0
+Receiver Idle Finish(s)              10
+
+Sender Target IP                     192.168.2.50
+Sender Target Port                   5001
+```
+
+启动顺序必须是板卡上电并运行新版 ELF，再启动接收 GUI。接收 GUI 预期依次输出 `IPCFG applied board=192.168.2.50 ...` 和 `RX target registered at board 192.168.2.50:5001 ...`；板端串口预期输出 `IPCFG applied IP=192.168.2.50`、`IPCFG ready ...`、`RXCFG loopback peer ...`。确认这些日志后再启动发送 GUI。若 IPCFG 日志没有出现，首先检查 `Bind IP` 是否误填 `0.0.0.0`、网口2是否确实为 `192.168.2.101/24`，以及 Windows 防火墙是否允许该 Python 程序使用专用网络 UDP。
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
@@ -768,7 +805,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 6. 使用 `System_wrapper_hw_platform_0/System_wrapper.bit` 配置 FPGA。
 7. 下载并运行 `AD9361_test2.elf`。
 8. 打开串口，波特率 `115200`。
-9. 从 PC `ping 192.168.1.50`。
+9. 从 PC ping 当前板端地址：默认是 `192.168.1.50`，IPCFG 成功后使用 GUI 中配置的新地址。
 10. 使用 CLI 或 GUI 发送数据。
 
 SDK 工程当前 Debug 配置使用 Cortex-A9 hard-float flags：

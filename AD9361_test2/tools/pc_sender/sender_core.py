@@ -2,6 +2,7 @@
 import argparse
 import binascii
 import errno
+import ipaddress
 import random
 import shutil
 import socket
@@ -31,6 +32,7 @@ DATA_MAGIC = 0x4E455430
 ACK_MAGIC = 0x41434B30
 LOOPBACK_MAGIC = 0x304B424C
 RXCFG_MAGIC = 0x52435830
+IPCFG_MAGIC = 0x49504330
 
 ACK_STATUS_OK = 0
 ACK_STATUS_BAD_MAGIC = 1
@@ -53,9 +55,11 @@ ACK_STATUS_NAMES = {
 DATA_HEADER_FORMAT = "<IIHHI"
 ACK_FORMAT = "<IIHHI"
 LOOPBACK_FORMAT = "<IIIHHHHIIIII"
+IPCFG_FORMAT = "<II4s4s4sI"
 DATA_HEADER_SIZE = struct.calcsize(DATA_HEADER_FORMAT)
 ACK_SIZE = struct.calcsize(ACK_FORMAT)
 LOOPBACK_HEADER_SIZE = struct.calcsize(LOOPBACK_FORMAT)
+IPCFG_PACKET_SIZE = struct.calcsize(IPCFG_FORMAT)
 
 DATA_FLAG_RESET = 0x8000
 DATA_FLAG_NO_CRC = 0x4000
@@ -465,6 +469,31 @@ def build_receiver_config_packet(seq: int = 0) -> bytes:
         seq,
         0,
         0,
+        0,
+    )
+
+
+def build_board_ip_config_packet(
+    seq: int,
+    board_ip: str,
+    netmask: str = "255.255.255.0",
+    gateway: str = "0.0.0.0",
+) -> bytes:
+    ip_value = ipaddress.IPv4Address(board_ip)
+    gateway_value = ipaddress.IPv4Address(gateway)
+    network = ipaddress.IPv4Network(f"{board_ip}/{netmask}", strict=False)
+    if ip_value in (network.network_address, network.broadcast_address):
+        raise ValueError("Board IP cannot be the subnet network or broadcast address")
+    if gateway_value != ipaddress.IPv4Address("0.0.0.0") and gateway_value not in network:
+        raise ValueError("Board Gateway must be 0.0.0.0 or inside the board subnet")
+
+    return struct.pack(
+        IPCFG_FORMAT,
+        IPCFG_MAGIC,
+        seq & 0xFFFFFFFF,
+        ip_value.packed,
+        network.netmask.packed,
+        gateway_value.packed,
         0,
     )
 
