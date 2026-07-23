@@ -86,6 +86,11 @@ static uint32_t rx_reject_magic_shift_count;
 static uint32_t rx_reject_header_count;
 static uint32_t rx_reject_reported_count;
 static XTime rx_reject_report_start_time;
+static int rx_valid_seq_seen;
+static uint32_t rx_valid_last_magic;
+static uint32_t rx_valid_last_seq;
+static uint32_t rx_valid_seq_gap_count;
+static uint32_t rx_valid_seq_back_count;
 static int rx_valid_log_pending;
 static uint32_t rx_valid_log_id;
 static uint32_t rx_valid_log_magic;
@@ -112,8 +117,11 @@ static int loopback_rx_busy;
 #define NET_AIR0_VERSION_OFFSET 4U
 #define NET_AIR0_HEADER_LEN_OFFSET 5U
 #define NET_AIR0_PACKET_SEQ_OFFSET 16U
+#define NET_AIR0_TOTAL_PACKETS_OFFSET 20U
 #define NET_AIR0_FILE_OFFSET_OFFSET 24U
+#define NET_AIR0_PAYLOAD_LEN_OFFSET 32U
 #define NET_AIR0_CHUNK_BYTES_OFFSET 34U
+#define NET_AIR0_HEADER_CRC_OFFSET 60U
 #define NET_AIRV_VERSION 2U
 #define NET_AIRV_VERSION_OFFSET 4U
 #define NET_AIRV_HEADER_LEN_OFFSET 5U
@@ -459,6 +467,11 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc,
     rx_reject_header_count = 0U;
     rx_reject_reported_count = 0U;
     rx_reject_report_start_time = 0U;
+    rx_valid_seq_seen = 0;
+    rx_valid_last_magic = 0U;
+    rx_valid_last_seq = 0U;
+    rx_valid_seq_gap_count = 0U;
+    rx_valid_seq_back_count = 0U;
     rx_valid_log_pending = 0;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;
@@ -751,9 +764,14 @@ static int net_air0_stream_offset_from_payload(const uint8_t *payload,
     uint16_t *chunk_bytes, uint64_t *file_offset)
 {
     uint32_t seq;
+    uint32_t total_packets;
+    uint32_t stored_header_crc;
+    uint32_t calculated_header_crc;
+    uint16_t air_payload_len;
     uint16_t chunk;
     uint64_t offset;
     uint64_t raw_stream_offset;
+    uint8_t header_copy[NET_AIR_HEADER_BYTES];
 
     if ((payload == NULL) || (stream_offset == NULL) || (packet_seq == NULL) ||
         (chunk_bytes == NULL) || (file_offset == NULL) ||
@@ -769,10 +787,25 @@ static int net_air0_stream_offset_from_payload(const uint8_t *payload,
         return 0;
     }
 
+    stored_header_crc = net_load_le32(&payload[NET_AIR0_HEADER_CRC_OFFSET]);
+    memcpy(header_copy, payload, NET_AIR_HEADER_BYTES);
+    header_copy[NET_AIR0_HEADER_CRC_OFFSET + 0U] = 0U;
+    header_copy[NET_AIR0_HEADER_CRC_OFFSET + 1U] = 0U;
+    header_copy[NET_AIR0_HEADER_CRC_OFFSET + 2U] = 0U;
+    header_copy[NET_AIR0_HEADER_CRC_OFFSET + 3U] = 0U;
+    calculated_header_crc = Net_Protocol_Crc32(header_copy, NET_AIR_HEADER_BYTES);
+    if (calculated_header_crc != stored_header_crc) {
+        return 0;
+    }
+
     seq = net_load_le32(&payload[NET_AIR0_PACKET_SEQ_OFFSET]);
+    total_packets = net_load_le32(&payload[NET_AIR0_TOTAL_PACKETS_OFFSET]);
+    air_payload_len = net_load_le16(&payload[NET_AIR0_PAYLOAD_LEN_OFFSET]);
     chunk = net_load_le16(&payload[NET_AIR0_CHUNK_BYTES_OFFSET]);
     offset = net_load_le64(&payload[NET_AIR0_FILE_OFFSET_OFFSET]);
-    if (chunk < NET_AIR_HEADER_BYTES) {
+    if ((total_packets == 0U) || (seq >= total_packets) ||
+        (chunk < NET_AIR_HEADER_BYTES) ||
+        (air_payload_len > (uint16_t)(chunk - NET_AIR_HEADER_BYTES))) {
         return 0;
     }
 
@@ -1399,14 +1432,18 @@ static void net_loopback_print_rx_status(void)
     rx_reject_report_start_time = now_time;
     UART_Printf(
         "S2MM RX stat captures=%lu valid=%lu reject=%lu "
-        "len=%lu no_magic=%lu shift=%lu header=%lu\r\n",
+        "len=%lu no_magic=%lu shift=%lu header=%lu "
+        "last_seq=%lu seq_gap=%lu seq_back=%lu\r\n",
         (unsigned long)loopback_rx_done_count,
         (unsigned long)rx_frame_valid_count,
         (unsigned long)rx_frame_reject_count,
         (unsigned long)rx_reject_length_count,
         (unsigned long)rx_reject_no_magic_count,
         (unsigned long)rx_reject_magic_shift_count,
-        (unsigned long)rx_reject_header_count);
+        (unsigned long)rx_reject_header_count,
+        (unsigned long)rx_valid_last_seq,
+        (unsigned long)rx_valid_seq_gap_count,
+        (unsigned long)rx_valid_seq_back_count);
 #endif
 }
 
@@ -1799,6 +1836,23 @@ static void net_loopback_poll_s2mm(void)
         return_len = rx_payload_available_len;
     }
     rx_frame_valid_count += 1U;
+    {
+        uint32_t current_seq = (payload_magic == NET_AIR0_MAGIC) ?
+            air0_packet_seq : airv_packet_seq;
+
+        if ((rx_valid_seq_seen != 0) && (rx_valid_last_magic == payload_magic)) {
+            uint32_t expected_seq = rx_valid_last_seq + 1U;
+
+            if ((int32_t)(current_seq - expected_seq) > 0) {
+                rx_valid_seq_gap_count += current_seq - expected_seq;
+            } else if ((int32_t)(current_seq - rx_valid_last_seq) <= 0) {
+                rx_valid_seq_back_count += 1U;
+            }
+        }
+        rx_valid_seq_seen = 1;
+        rx_valid_last_magic = payload_magic;
+        rx_valid_last_seq = current_seq;
+    }
     if (rx_frame_valid_count <= NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES) {
         rx_valid_log_pending = 1;
         rx_valid_log_id = loopback_rx_transfer_id;
@@ -2321,6 +2375,11 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     rx_reject_header_count = 0U;
     rx_reject_reported_count = 0U;
     rx_reject_report_start_time = 0U;
+    rx_valid_seq_seen = 0;
+    rx_valid_last_magic = 0U;
+    rx_valid_last_seq = 0U;
+    rx_valid_seq_gap_count = 0U;
+    rx_valid_seq_back_count = 0U;
     rx_valid_log_pending = 0;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;

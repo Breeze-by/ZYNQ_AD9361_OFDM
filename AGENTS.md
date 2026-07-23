@@ -96,14 +96,14 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
-- 当前 `NET_AGG_BLOCK_BYTES = 3000`，不是旧文档里的 64 KiB。DDR 中每个聚合 slot 的有效 payload 是 3000 字节，但 `NET_AGG_BLOCK_STRIDE_BYTES = 3008`，队列深度为 697；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
+- 当前 `NET_AGG_BLOCK_BYTES = 1440`，使默认一个 AIR0/AIRV wire chunk 对应一个 OFDM PSDU，避免 2880 字节长帧一次损坏两个 AIR 包。DDR 中每个 slot 的有效 payload 是 1440 字节，`NET_AGG_BLOCK_STRIDE_BYTES = 1472`，队列深度为 1424；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
 - 默认 `Chunk Bytes = 1440` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1440`，其中 `64` 字节是 PC-only AIR0 头，最多 `1376` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后每包 wire payload 为原始文件/测试 payload。
 - AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV v2 头、最多 `1376` 字节 encoded video fragment 和零填充。v2 在偏移 58 增加全局 `packet_seq`，PS 校验头 CRC 后用 `packet_seq * chunk_bytes` 恢复延迟 RF 帧的 UDP `stream_offset`；必须同时使用新版 ELF 和新版 PC 工具。发送端选择 MP4 时会自动在同目录查找同名 `.h264/.264`；已有 sidecar 时直接复用，不再对 MP4 做耗时 `ffprobe`，日志显示 `fps_source=sidecar_fallback` 并按 30fps 写入 PTS；找不到 sidecar时用最多 2 秒的 `ffprobe` 探测帧率并调用 `ffmpeg` 生成同名 `.h264`。新生成文件固定约每秒一个 IDR、无 B 帧、带 AUD、重复 SPS/PPS；旧 sidecar 的 GOP 不受保证，需要统一恢复上限时删除后重新生成。不要再要求用户手工准备 H.264 裸流。
 - AIRV 接收组帧器按递增 `frame_seq` 输出，保留最多 3 帧乱序深度；缺片只丢所属帧并继续释放后续完整帧，坏 fragment/frame CRC 的完整帧仍交给 PyAV，允许局部马赛克。预览解码连续 1～2 次 P 帧异常继续尝试，连续 3 次才重置等待 IDR。不要把单帧缺失改回立即等待 keyframe。
 - AIRV 接收日志里的 `fps` 是按 AIRV `pts_us` 估算的源帧率，不是 Python 处理瞬时速度；`latency_ms` 是接收端本帧首片到组齐的最近一次可报告耗时，最终日志会保留上一条非零值以避免 idle finish 后显示 `0.0` 误导，`latency_avg_ms` / `latency_max_ms` 是组帧平均/最大耗时，不是严格端到端空口时延。
 - AIRV 预览依赖可选 `av` 和 `Pillow`。接收 GUI 会打开独立 `AIRV Preview` 窗口，默认 `1280x720`；后台线程解码，Tk 主线程约 30fps 刷新。预览输入队列最多缓存 240 个 assembled encoded frame，按 H.264 顺序送入解码器；队列满时才丢弃预览队列并等待下一帧 keyframe。`Preview Input`、`Preview Backlog`、`Preview Drops`、`Decoded`、`Displayed`、`Decoder Errors`、`Waiting Key` 是预览指标，其中 `Displayed` 表示实际渲染到 Tk 预览窗口的帧数；预览丢帧不代表 AIRV 传输丢包。
-- PS 侧 `NET_MAX_PAYLOAD_BYTES = 3000`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 3000。
-- 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐，64 MiB/window 16 压测曾暴露出相邻 3000 字节 slot 共享 cache line 后的偶发回传差异。
+- PS 侧 `NET_MAX_PAYLOAD_BYTES = 1440`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 1440。
+- 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐；旧 3000 字节 slot 的压测曾暴露相邻 slot 共享 cache line 后的偶发回传差异。
 - 当前 AD9361/PL 速率契约是 2R2T LVDS `40 MSPS`、DATA_CLK 约 `160 MHz`；当前源码设置 `tx_fb_clock_delay=7`，启动时强制校验寄存器读回 `0x70`。不要只在 SDK 改采样率或 delay 而不同时检查 PL bridge、XDC 和板上读回日志。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
 - 发送 GUI 的 `RF Strict Match + Retry (max 3)` 仍保留但默认关闭。独立 TX/RX 调度无法在两块板之间把接收帧对应到发射板当前 TX block，也没有反向 RF ACK，因此双板和通用模式测试必须保持该项关闭；合法 AIR0/AIRV 帧按自身头部序号回传，错误由 PC 接收端统计。后续若要恢复跨板 RF 重传，需要另行设计接收板到发射板的反馈协议，不能复用旧的本地 block compare。
@@ -113,7 +113,7 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - `S2MM valid` 的 `wait_us` 表示 arm S2MM 到主循环观察到 `RxDone` 的时间，其中包含主循环调度延迟；独立 RX 空口静默不受 MM2S 的 20 ms watchdog 约束。
 - 上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；该模式仅作为以后排查 PC/PS 侧时的临时开关，平时不要保持启用。
 - S2MM 收到的帧不一定对应本机当前 MM2S 聚合块；纯接收板没有 TX block 是正常情况。AIR0 和 AIRV v2 都用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`；紧凑 `S2MM valid` 会报告类型、序号、偏移和长度，无效结构仅进入低频累计 `S2MM RX stat`。
-- 为降低 115200 UART 对 PS/lwIP/DMA 主循环的影响，当前默认不再打印前若干任意 S2MM 捕获的详细 dump，也不逐帧打印结构 reject。首 2 个真正通过 AIR0/AIRV 校验的捕获在下一次 S2MM 已 arm 后打印紧凑 `S2MM valid`；无效捕获每 2 秒最多汇总一行 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header`。无效路径不计算仅供详细诊断使用的近似 magic、payload CRC 和 watchdog dump。DMA/RF 错误与周期 STAT 仍保留，周期 STAT 也必须放在 S2MM 重装之后打印。
+- 为降低 115200 UART 对 PS/lwIP/DMA 主循环的影响，当前默认不再打印前若干任意 S2MM 捕获的详细 dump，也不逐帧打印结构 reject。首 2 个真正通过 AIR0/AIRV 头 CRC 校验的捕获在下一次 S2MM 已 arm 后打印紧凑 `S2MM valid`；无效捕获每 10 秒最多汇总一行 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header/last_seq/seq_gap/seq_back`。无效路径不计算仅供详细诊断使用的近似 magic、payload CRC 和 watchdog dump。DMA/RF 错误与周期 STAT 仍保留，周期 STAT 也必须放在 S2MM 重装之后打印。
 - MM2S 启动前必须先 `OpenWifi_Tx_Rearm(payload_len)`，再调用 `net_configure_tx_frame()` 写最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 re-arm 放在配置之后；否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
 ## 当前推荐 GUI 测试设置

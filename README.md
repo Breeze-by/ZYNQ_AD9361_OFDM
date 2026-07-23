@@ -106,7 +106,7 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 4. 将 2R2T LVDS 采样率配置为 `40 MSPS`（DATA_CLK 约 `160 MHz`），当前源码设置
    `tx_fb_clock_delay=7`，并在启动时强制校验 TX clock/data delay 寄存器读回为 `0x70`。
 5. 初始化 SCU GIC。
-6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `3000` 字节 PSDU 先 re-arm 一次。
+6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `1440` 字节 PSDU 先 re-arm 一次。
 7. 根据 `APP_RX_SOURCE` 初始化 `openofdm_rx/rx_intf`，并打印实际 RX 数据源。
 8. 初始化 AXI DMA 和高电平敏感的 MM2S/S2MM 中断。
 9. 初始化 lwIP/GEM，使用上电默认 IPv4，并允许空闲时通过 IPCFG 临时改址。
@@ -155,7 +155,7 @@ IP  : 192.168.1.50
 MASK: 255.255.255.0
 GW  : 192.168.1.1
 UDP : listen on port 5001
-UDP RX ready, agg_blocks=697 block_bytes=3000 stride=3008 total_bytes=2097152 max_payload=3000 rec_window<=64 ack=on_accept
+UDP RX ready, agg_blocks=1424 block_bytes=1440 stride=1472 total_bytes=2097152 max_payload=1440 rec_window<=64 ack=on_accept
 Loopback UDP return ready, magic=0x304B424C chunk_bytes=1200
 ```
 
@@ -316,26 +316,26 @@ TX_BUFFER_BASE                 0x01200000
 TX_BUFFER_WORD_COUNT           262144
 TX buffer size                 2097152 bytes
 
-NET_OFDM_TARGET_PSDU_BYTES     3000
+NET_OFDM_TARGET_PSDU_BYTES     1440
 NET_OFDM_MAX_DMA_WORDS         1022
 NET_OFDM_MAX_PSDU_BYTES        8176 bytes
 NET_DMA_CACHE_LINE_BYTES       64
-NET_AGG_BLOCK_BYTES            3000
-NET_AGG_BLOCK_STRIDE_BYTES     3008
-NET_AGG_BLOCK_COUNT            697
-NET_DMA_QUEUE_CAPACITY         697
-NET_AGG_MIN_FLUSH_BYTES        1500
+NET_AGG_BLOCK_BYTES            1440
+NET_AGG_BLOCK_STRIDE_BYTES     1472
+NET_AGG_BLOCK_COUNT            1424
+NET_DMA_QUEUE_CAPACITY         1424
+NET_AGG_MIN_FLUSH_BYTES        720
 NET_AGG_FLUSH_TIMEOUT_US       15000
 NET_AGG_IDLE_FLUSH_TIMEOUT_US  100000
-NET_MAX_PAYLOAD_BYTES          3000
+NET_MAX_PAYLOAD_BYTES          1440
 ```
 
-每个聚合块的有效 payload 容量仍是 `3000` 字节，但 DDR slot stride 是 `3008` 字节。`3008` 是 64 字节 cache line 对齐后的槽跨度，用来避免相邻 DMA slot 共享同一条 cache line。DDR 中实际参与聚合队列管理的容量是 `697 * 3008 = 2096576` 字节，略小于 `2 MiB` TX buffer，余下尾部不用作聚合块。
+每个聚合块的有效 payload 容量是 `1440` 字节，正好容纳默认一个 AIR0/AIRV wire chunk；不再把两个包合成约 2880 字节的长 OFDM 帧。这样一次空口帧损坏最多影响一个 AIR 包，而且每个 RF 帧开头都有独立头部。DDR slot stride 是 64 字节对齐后的 `1472` 字节，队列共 `1424` 个 slot，实际占用 `2096128` 字节。
 
 聚合块提交条件：
 
-- 下一个 payload 放不进当前 `3000` 字节块时，先提交当前块；
-- 当前块已达到 `3000` 字节；
+- 下一个 payload 放不进当前 `1440` 字节块时，先提交当前块；
+- 当前块已达到 `1440` 字节；
 - 当前块至少达到 `1500` 字节，且填充耗时达到 `15000 us`；
 - 当前块空闲达到 `100000 us`。
 
@@ -361,7 +361,7 @@ AIR0 enabled:
   最多 1376 bytes 是原始文件/测试 payload
 ```
 
-如果修改 PC chunk 大小，需要满足 PS 侧 `payload_len <= 3000`。开启 AIR0 时，chunk 必须大于 64 字节，实际业务 payload 为 `chunk_size - 64`。为避免普通 1500 MTU 下 IP 分片，推荐继续使用默认 `1440`。
+如果修改 PC chunk 大小，需要满足 PS 侧 `payload_len <= 1440`。开启 AIR0 时，chunk 必须大于 64 字节，实际业务 payload 为 `chunk_size - 64`。默认并推荐继续使用 `1440`，使一个 PC wire chunk 对应一个 OFDM PSDU，并避免普通 1500 MTU 下 IP 分片。
 
 ## Cache 和 DMA 一致性
 
@@ -640,7 +640,7 @@ Verbose Packet Events            unchecked
 Progress ms                      1000
 ```
 
-先启动接收 GUI。接收板串口必须先出现 `RXCFG loopback peer ... rx_mode=independent`；此时即使没有空口信号也不应出现 DMA stall timeout。再启动发送 GUI。发射板应出现 `UDP RX reset ... tx_mode=independent rx_registered=0`，不应出现 S2MM arm 或因本地 RX 静默产生的 RF drop。接收板收到合法空口帧后，首两帧应出现 `S2MM valid ... type=AIR0`；噪声伪帧只会每 2 秒汇总为一行 `S2MM RX stat`。接收 GUI 最终目标是 `rx=16384 crc=0 len=0 gaps=0`。第一轮测试需要同时保存发射板串口、接收板串口、发送 GUI 日志和接收 GUI 日志。
+先启动接收 GUI。接收板串口必须先出现 `RXCFG loopback peer ... rx_mode=independent`；此时即使没有空口信号也不应出现 DMA stall timeout。再启动发送 GUI。发射板应出现 `UDP RX reset ... tx_mode=independent rx_registered=0`，不应出现 S2MM arm 或因本地 RX 静默产生的 RF drop。接收板收到合法空口帧后，首两帧应出现 `S2MM valid ... type=AIR0`；噪声伪帧每 10 秒最多汇总一行 `S2MM RX stat`。接收 GUI 最终目标是 `rx=16384 crc=0 len=0 gaps=0`。第一轮测试需要同时保存发射板串口、接收板串口、发送 GUI 日志和接收 GUI 日志。
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
@@ -770,7 +770,7 @@ NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS 0
 NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS 0
 NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 0
 NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES 2
-NET_LOOPBACK_S2MM_REJECT_REPORT_INTERVAL_US 2000000
+NET_LOOPBACK_S2MM_REJECT_REPORT_INTERVAL_US 10000000
 NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_S2MM
 ```
 
@@ -778,7 +778,7 @@ RXCFG 注册接收目标后，S2MM 独立连续 arm。空口安静时它可以�
 
 当前默认已经切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM`，启动日志应出现 `Loopback return source=S2MM RF path`。上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；如果后续再次怀疑 PC/PS 侧，可临时切回该模式，启动日志会显示 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块打印 `TXECHO return ... first=0x30524941 ...`。
 
-为避免 115200 UART 阻塞 PS/lwIP/DMA 主循环，普通无效捕获不再逐帧打印 `S2MM reject`，而是每 2 秒最多输出一行累计 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header`。首 2 个真正通过 AIR0/AIRV 头校验的帧输出紧凑 `S2MM valid`；这些状态行和周期 `STAT` 都在下一次 S2MM 已 arm 后才打印。无效捕获路径也不再计算仅供详细 dump 使用的近似 magic、payload CRC 和 watchdog 寄存器，从而尽快重装接收。DMA/RF timeout、retry、drop、error 等异常日志仍保留。
+为避免 115200 UART 阻塞 PS/lwIP/DMA 主循环，普通无效捕获不再逐帧打印 `S2MM reject`，而是每 10 秒最多输出一行累计 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header/last_seq/seq_gap/seq_back`。首 2 个真正通过 AIR0/AIRV 头 CRC 校验的帧输出紧凑 `S2MM valid`；这些状态行和周期 `STAT` 都在下一次 S2MM 已 arm 后才打印。无效捕获路径也不再计算仅供详细 dump 使用的近似 magic、payload CRC 和 watchdog 寄存器，从而尽快重装接收。DMA/RF timeout、retry、drop、error 等异常日志仍保留。
 
 接收目标通过 RXCFG 注册后，PS 会独立 arm 一个 `8192` 字节 S2MM 捕获窗口；
 它不依赖本板是否存在 MM2S 发送块，因而同一份 ELF 可用于单板自发自收和双板
@@ -788,7 +788,7 @@ RXCFG 注册接收目标后，S2MM 独立连续 arm。空口安静时它可以�
 和 UDP 回传都被限制在该可信长度内，窗口尾部未写入的旧数据不再参与处理。
 头部长度非法的帧不会回传，并累计到 `S2MM RX stat` 的 `len`。
 
-当前 TX/RX 已解耦，S2MM 收到的帧不要求对应本机 MM2S 聚合块。PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic；AIR0 与 AIRV v2 都会校验必要头字段，并用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`。首两帧的 `S2MM valid` 报告类型、全局序号、偏移和长度；AIRV v2 头 CRC/关键字段非法、magic 缺失或前缀偏移等情况只进入 `S2MM RX stat` 分类累计，不再做逐帧详细 dump。
+当前 TX/RX 已解耦，S2MM 收到的帧不要求对应本机 MM2S 聚合块。PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic；AIR0 与 AIRV v2 都校验完整 64 字节头 CRC 和必要字段，再用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`。首两帧的 `S2MM valid` 报告类型、全局序号、偏移和长度；头 CRC/关键字段非法、magic 缺失或前缀偏移等情况只进入 `S2MM RX stat` 分类累计，不再做逐帧详细 dump。
 
 S2MM 完成后的校验和动作取决于 RF 模式：
 
@@ -800,7 +800,7 @@ MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_con
 正常运行时的关键日志：
 
 ```text
-S2MM independent RX ready, arm_after=RXCFG ... valid_log_first=2 reject_report_us=2000000 ...
+S2MM independent RX ready, arm_after=RXCFG ... valid_log_first=2 reject_report_us=10000000 ...
 RXCFG loopback peer port=... rx_mode=independent
 S2MM valid id=... type=AIR0 seq=... stream_off=... payload=... wait_us=... valid=... rejects=... udp_bytes=...
 S2MM valid id=... type=AIRV seq=... stream_off=... payload=... wait_us=... valid=... rejects=... udp_bytes=...
