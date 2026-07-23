@@ -29,7 +29,7 @@
 - 当前 SDK 默认 `APP_RX_SOURCE=APP_RX_SOURCE_AD9361`，走真实 AD9361 TX -> SMA -> AD9361 RX 链路；PL 数字回环保留为 `APP_RX_SOURCE_DIGITAL_LOOPBACK` 诊断选项。启动日志必须打印当前 RX source。板级调试继续分阶段做；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
 - PS DMA 已改为单/双板通用的独立调度：显式 RXCFG 注册后持续 arm/re-arm S2MM，接收不依赖本机 TX block；MM2S 完成后独立释放 TX block，不等待本地 S2MM。没有 RXCFG 的纯发射板不 arm S2MM；只有 RXCFG、没有本机发送数据的纯接收板也能回传合法 AIR0/AIRV 帧。同一份 ELF 支持单板同时收发和两板分别收发。
 - 板端每次上电仍以 `192.168.1.50/24` 启动；接收和发送 GUI 都能通过全局广播发送 `IPCFG`，把各自直连板卡的 IP/掩码/网关临时切换到另一网段，配置不写 flash，重启恢复 `192.168.1.50`。双网卡电脑做 IPCFG 时必须把 GUI 的 Bind IP 明确填成直连 Zynq 的 PC 网卡地址，不能用 `0.0.0.0`。新电脑接收 GUI 使用 `Bind IP=192.168.2.101`、`Board IP=192.168.2.50` 并勾选 IPCFG 和 RXCFG；只运行发送 GUI 时使用 `PC Bind IP=192.168.2.101`、`Target IP=192.168.2.50`、`Board Netmask=255.255.255.0`、`Board Gateway=0.0.0.0` 并勾选 `Configure Board IP by broadcast`。旧电脑仍可使用 `192.168.1.101 -> 192.168.1.50`，无需改板端默认代码。
-- 当前默认走真实 `NET_LOOPBACK_RETURN_SOURCE_S2MM` RF/S2MM 回传路径，不再是 `TX_BUFFER` 诊断模式。S2MM 只对前 2 个 block 打印较完整 dump、前 8 个 block 打印一行摘要；后续普通 mismatch 不逐块打印。需要用户反馈时，优先要 `RXCFG loopback peer`、`UDP RX reset`、`S2MM diag`、`STAT rate/state`、`DMA stall timeout/recovery`、`S2MM error`、`MM2S error`；前 2 块内的详细日志复制 `S2MM start/done`、`S2MM rx_head`、`S2MM tx_head`、`S2MM rx_hdr`、`S2MM payload_magic`、`S2MM air0`、`S2MM airv`、`LB UDP sent`。如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、AIR0 的 `PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...`、`DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=...`，以及 AIRV 的周期 `VIDEO ...`、`VIDEO_PREVIEW ...`、最终 `VIDEO_DONE`、`VIDEO_PREVIEW_DONE`、`DONE VIDEO ...` 行。
+- 当前默认走真实 `NET_LOOPBACK_RETURN_SOURCE_S2MM` RF/S2MM 回传路径，不再是 `TX_BUFFER` 诊断模式。需要用户反馈时，优先要接收板的 `RXCFG loopback peer`、`S2MM valid`、`S2MM RX stat`、`S2MM error`，发送板的 `UDP RX reset`、`STAT rate/state`、`DMA stall timeout/recovery`、`MM2S error`。如果涉及 PC 端回传验证，还要让用户复制接收 GUI 日志里的 `RX target registered ...`、AIR0 的 `PROGRESS rx=... crc=... len=... gaps=... air=... air_rx=... pending_air=... bad_hdr=... bad_payload=... bad_meta=... dup=... got_last=...`、`INCOMPLETE ... missing_seq=... bad_payload_seq=... bad_meta_seq=...`、`DONE ... gaps=... air=... air_rx=... miss=... file_crc=... file_id=... file_size=... total_packets=... got_last=... saved=... missing_seq=... bad_payload_seq=...`，以及 AIRV 的周期 `VIDEO ...`、`VIDEO_PREVIEW ...`、最终 `VIDEO_DONE`、`VIDEO_PREVIEW_DONE`、`DONE VIDEO ...` 行。
 - 回答用户测试步骤时，用中文、直接、具体；避免给一长串命令让用户自行转换。
 
 ## 当前工程定位
@@ -110,10 +110,10 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - 发送 GUI 的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。判断文件是否完整，以发送端 `app_ack == total_size` 和接收端 `rx/high == file_size`、`gaps=0`、`crc=0`、`len=0` 为准。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
 - 当前已开启 PL->PS S2MM 调试和 UDP 回传，默认 `NET_LOOPBACK_RETURN_SOURCE=NET_LOOPBACK_RETURN_SOURCE_S2MM`：RXCFG 后独立 arm `8192` 字节 S2MM 捕获窗口，完成后扫描前 `2048` 字节 AIR0/AIRV magic，跳过 RX 前缀，并用 AIR0/AIRV v2 全局包序号恢复 `stream_offset` 后回传。RF 静默时 S2MM 可以无限等待，不再使用 20 ms TX watchdog误判；`NET_DMA_STALL_TIMEOUT_US = 20000` 只监控 MM2S。单板存在当前 TX block 时保留 compare 诊断，但 frame validity 不依赖 TX block。
-- 成功完成的 `S2MM diag` / `S2MM done` 包含 `wait_us`，表示 arm S2MM 到主循环观察到 `RxDone` 的时间，其中包含 UART/lwIP/UDP 处理导致的主循环观察延迟；完成分支优先于 watchdog，因此偶发 `wait_us > 20000` 且 `cmp=OK` 不表示硬件超时。
+- `S2MM valid` 的 `wait_us` 表示 arm S2MM 到主循环观察到 `RxDone` 的时间，其中包含主循环调度延迟；独立 RX 空口静默不受 MM2S 的 20 ms watchdog 约束。
 - 上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；该模式仅作为以后排查 PC/PS 侧时的临时开关，平时不要保持启用。
-- S2MM 收到的帧不一定对应本机当前 MM2S 聚合块；纯接收板没有 TX block 时正常类别是 `class=RX_INDEPENDENT`、`cmp=NA`。PS 侧 `S2MM diag` 还会输出 `NO_AIR_MAGIC|AIR_MAGIC_SHIFT|AIR_MAGIC_PAYLOAD_DIFF|AIRV_HEADER_INVALID` 等类别、`best_off/best_xor/best_bits`、`rx0/rx_payload0/tx0`、`rx_crc/tx_crc`、`rx_state` 和 `wd` 计数；AIR0 和 AIRV v2 都用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`。
-- 为降低 UART 对 PS/lwIP/DMA 主循环的影响，当前默认 `NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS=2`、`NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS=0`、`NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS=0`，同时 `NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS=8`、`NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS=0`、`NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS=0`。只保留前 2 块详细 dump、前 8 块摘要；后续普通 payload mismatch 不逐块打印，结构 reject、DMA/RF 错误和周期 STAT 仍保留。
+- S2MM 收到的帧不一定对应本机当前 MM2S 聚合块；纯接收板没有 TX block 是正常情况。AIR0 和 AIRV v2 都用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`；紧凑 `S2MM valid` 会报告类型、序号、偏移和长度，无效结构仅进入低频累计 `S2MM RX stat`。
+- 为降低 115200 UART 对 PS/lwIP/DMA 主循环的影响，当前默认不再打印前若干任意 S2MM 捕获的详细 dump，也不逐帧打印结构 reject。首 2 个真正通过 AIR0/AIRV 校验的捕获在下一次 S2MM 已 arm 后打印紧凑 `S2MM valid`；无效捕获每 2 秒最多汇总一行 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header`。无效路径不计算仅供详细诊断使用的近似 magic、payload CRC 和 watchdog dump。DMA/RF 错误与周期 STAT 仍保留，周期 STAT 也必须放在 S2MM 重装之后打印。
 - MM2S 启动前必须先 `OpenWifi_Tx_Rearm(payload_len)`，再调用 `net_configure_tx_frame()` 写最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 re-arm 放在配置之后；否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
 ## 当前推荐 GUI 测试设置
@@ -137,9 +137,9 @@ Receiver Raw Expected   0
 Receiver Idle Finish(s) 10
 ```
 
-这一组用于小数据量回环确认。AIR0 模式下接收端会从 AIR0 头读取 `file_size`、`total_packets` 和 `file_crc32`，`Raw Expected` 保持 `0`，不要再要求用户预填文件大小。先启动接收 GUI 并等待 `RX target registered ...`，再启动发送 GUI。预期板端串口出现 `RXCFG loopback peer`、`Loopback UDP return ready`、`S2MM done ... cmp=OK`、`LB UDP sent ...`，接收 GUI `DONE` 行中 `rx=16384` 且 `crc=0 len=0 gaps=0`。
+这一组用于小数据量回环确认。AIR0 模式下接收端会从 AIR0 头读取 `file_size`、`total_packets` 和 `file_crc32`，`Raw Expected` 保持 `0`，不要再要求用户预填文件大小。先启动接收 GUI并等待 `RX target registered ...`，再启动发送 GUI。预期接收板串口出现 `RXCFG loopback peer` 和 `S2MM valid ... type=AIR0`，接收 GUI `DONE` 行中 `rx=16384` 且 `crc=0 len=0 gaps=0`。
 
-双板第一轮独立调度验证使用同样的 `Test Bytes=16384`、`Chunk Bytes=1440`、`Window Size=1`，但先把 `Rate Limit KiB/s=100`，且必须关闭 `RF Strict Match + Retry`。接收板只运行接收 GUI 并先确认 `RXCFG ... rx_mode=independent`、`S2MM arm ... mode=independent`；发射板只运行发送 GUI，预期 reset 日志 `tx_mode=independent rx_registered=0`，不应再因未连接本地 RX 出现逐块 DMA stall/RF drop。接收板正常帧日志类别为 `RX_INDEPENDENT`、`cmp=NA`。让用户同时回传两块板串口和两个 GUI 日志。
+双板第一轮独立调度验证使用同样的 `Test Bytes=16384`、`Chunk Bytes=1440`、`Window Size=1`，但先把 `Rate Limit KiB/s=50`，且必须关闭 `RF Strict Match + Retry`。发送 GUI 的 `Start send` 行必须显示 `rate_limit=50KiB/s`；发射板只运行发送 GUI，预期 reset 日志 `tx_mode=independent rx_registered=0`，不应再因未连接本地 RX 出现逐块 DMA stall/RF drop。接收板先确认 `RXCFG ... rx_mode=independent`，合法帧看 `S2MM valid`，噪声伪帧看低频 `S2MM RX stat`。让用户同时回传两块板串口和两个 GUI 日志。
 
 ## 当前推荐 AIRV GUI 测试设置
 

@@ -478,7 +478,7 @@ AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模�
 python -m pip install av pillow
 ```
 
-如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、板端是否有 `LB UDP sent`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；一次或两次连续 P 帧解码异常只显示 `Decode warning` 并继续喂后续帧，连续 3 次失败才重建解码器并等待下一帧 keyframe。
+如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、接收板是否有 `S2MM valid ... type=AIRV`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；一次或两次连续 P 帧解码异常只显示 `Decode warning` 并继续喂后续帧，连续 3 次失败才重建解码器并等待下一帧 keyframe。
 
 AIRV 接收 GUI 只保留少量关键 `VIDEO_DIAG`：模式识别、中途接入、magic 重同步、坏头和跨缺口恢复。逐分片 `fragment`、正常等待 `wait_chunk`、逐帧 `frame_complete/VIDEO_FRAME` 已关闭，坏分片和坏帧统一查看每两秒一条的 `VIDEO bad_frag_crc/bad_frame_crc` 以及最终 `VIDEO_DONE`，避免日志本身抢占 PC 处理时间。如果组帧计数增长但 `Decoded/Displayed` 不增长，应继续查看 `VIDEO_PREVIEW`，重点检查 PyAV/Pillow 环境或 H.264 解码状态。
 
@@ -631,7 +631,7 @@ PC Bind IP                       192.168.2.101
 Configure Board IP by broadcast  checked
 Chunk Bytes                      1440
 Window Size                      1
-Rate Limit KiB/s                 100
+Rate Limit KiB/s                 50
 Throughput Mode                  checked
 Payload CRC32                    checked
 RF Strict Match + Retry          unchecked
@@ -640,7 +640,7 @@ Verbose Packet Events            unchecked
 Progress ms                      1000
 ```
 
-先启动接收 GUI。接收板串口必须先出现 `RXCFG loopback peer ... rx_mode=independent` 和 `S2MM arm id=1 mode=independent`；此时即使没有空口信号也不应出现 DMA stall timeout。再启动发送 GUI。发射板应出现 `UDP RX reset ... tx_mode=independent rx_registered=0`，不应出现 S2MM arm 或因本地 RX 静默产生的 RF drop。接收板收到空口帧后应出现 `S2MM diag ... class=RX_INDEPENDENT ... cmp=NA`、`S2MM air0 ...` 和 `LB UDP sent ...`，接收 GUI 最终目标是 `rx=16384 crc=0 len=0 gaps=0`。第一轮测试需要同时保存发射板串口、接收板串口、发送 GUI 日志和接收 GUI 日志。
+先启动接收 GUI。接收板串口必须先出现 `RXCFG loopback peer ... rx_mode=independent`；此时即使没有空口信号也不应出现 DMA stall timeout。再启动发送 GUI。发射板应出现 `UDP RX reset ... tx_mode=independent rx_registered=0`，不应出现 S2MM arm 或因本地 RX 静默产生的 RF drop。接收板收到合法空口帧后，首两帧应出现 `S2MM valid ... type=AIR0`；噪声伪帧只会每 2 秒汇总为一行 `S2MM RX stat`。接收 GUI 最终目标是 `rx=16384 crc=0 len=0 gaps=0`。第一轮测试需要同时保存发射板串口、接收板串口、发送 GUI 日志和接收 GUI 日志。
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 
@@ -749,9 +749,9 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 精确恢复测试表明前 8 个块的主循环观察耗时约 `8.1～10.1 ms`，旧 `6000 us`
 阈值会误判正常 S2MM 为 stall；改为 `20000 us` 后所有块 `cmp=OK`，文件
 `65536/65536` 字节、48/48 AIR0 包和最终 CRC 全部正确。
-成功完成的 `S2MM diag` 和 `S2MM done` 会输出 `wait_us`，表示从 arm S2MM
-到主循环观察到 `RxDone` 的耗时。该值包含主循环处理 UART、lwIP 和 UDP 回传
-造成的观察延迟；只要进入完成分支，就不会再按 watchdog 判为超时。
+成功通过 AIR0/AIRV 校验的首两帧会在 `S2MM valid` 中输出 `wait_us`，表示从
+arm S2MM 到主循环观察到 `RxDone` 的耗时。独立 RX 可以在空口静默时一直等待，
+不会按 MM2S watchdog 判为超时。
 
 当前代码已开启 AD9361 RF 回环后的 S2MM 接收调试和 UDP 回传：
 
@@ -763,75 +763,63 @@ RX_TRANSFER_LENGTH_BYTES       8192
 NET_DMA_STALL_TIMEOUT_US       20000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
-NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 2
+NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 0
 NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS 0
 NET_LOOPBACK_S2MM_LOG_DIFF_ALWAYS 0
-NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS 8
+NET_LOOPBACK_S2MM_SUMMARY_FIRST_BLOCKS 0
 NET_LOOPBACK_S2MM_SUMMARY_INTERVAL_BLOCKS 0
 NET_LOOPBACK_S2MM_SUMMARY_DIFF_ALWAYS 0
+NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES 2
+NET_LOOPBACK_S2MM_REJECT_REPORT_INTERVAL_US 2000000
 NET_LOOPBACK_RETURN_SOURCE     NET_LOOPBACK_RETURN_SOURCE_S2MM
 ```
 
-RX 端可能没有解出合法帧，S2MM 也可能一直等不到 TLAST。当前使用 `NET_DMA_STALL_TIMEOUT_US = 20000` 的 watchdog：如果 MM2S/S2MM 在超时内没有完成，板端会打印 `DMA stall timeout ...`，重置 AXI DMA 和 RX pipeline。若 `TxDone=1`，说明本块已经送入 TX 侧；若 `TxDone=0`，说明 TX stream/tx_intf 侧也没有完成，并会计一次 `dma_err`。随后如何处理当前聚合块由本 session 的 RF 模式决定：默认 `deliver_no_retry` 释放该块并继续调度；`strict_retry` 保留该块并最多重新送入 MM2S 3 次，耗尽后打印 `RF drop` 再释放。两种模式都避免把后续 PC 输入永久卡在 `BUSY`。
+RXCFG 注册接收目标后，S2MM 独立连续 arm。空口安静时它可以无限等待，不再把“没有收到 RF 帧”误判成 20 ms DMA stall；`NET_DMA_STALL_TIMEOUT_US` 只约束仍在进行的 MM2S 发送。PL/OpenOFDM 在噪声下可能产生伪帧/TLAST，因此 capture id 持续增加本身不代表软件重发或 DMA 冲突。
 
 当前默认已经切回 `NET_LOOPBACK_RETURN_SOURCE_S2MM`，启动日志应出现 `Loopback return source=S2MM RF path`。上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断模式已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；如果后续再次怀疑 PC/PS 侧，可临时切回该模式，启动日志会显示 `Loopback return source=TX_BUFFER diagnostic, MM2S/S2MM bypassed`，每块打印 `TXECHO return ... first=0x30524941 ...`。
 
-为避免 UART 打印拖慢 PS/lwIP/DMA 主循环，当前只对前 2 个 S2MM block 打印较完整的 `S2MM done/rx_head/rx_hdr/rx_payload_head/tx_head`，并只对前 8 个 block 打印一行 `S2MM diag ...` 摘要。后续普通 payload mismatch 不再逐块打印 `S2MM diag/S2MM pass corrupt`，其影响由 PC 的周期 `VIDEO` 和最终 `VIDEO_DONE` 汇总；结构无效仍打印 `S2MM reject`，DMA/RF timeout、retry、drop、error 和周期 `STAT` 仍保留。
+为避免 115200 UART 阻塞 PS/lwIP/DMA 主循环，普通无效捕获不再逐帧打印 `S2MM reject`，而是每 2 秒最多输出一行累计 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header`。首 2 个真正通过 AIR0/AIRV 头校验的帧输出紧凑 `S2MM valid`；这些状态行和周期 `STAT` 都在下一次 S2MM 已 arm 后才打印。无效捕获路径也不再计算仅供详细 dump 使用的近似 magic、payload CRC 和 watchdog 寄存器，从而尽快重装接收。DMA/RF timeout、retry、drop、error 等异常日志仍保留。
 
-每次 PS 准备通过 MM2S 把一个聚合块送入 PL 前，会先 arm 一个 `8192` 字节
-S2MM 捕获窗口。简单模式 AXI DMA 只保留编程的窗口容量，没有独立的实际接收
+接收目标通过 RXCFG 注册后，PS 会独立 arm 一个 `8192` 字节 S2MM 捕获窗口；
+它不依赖本板是否存在 MM2S 发送块，因而同一份 ELF 可用于单板自发自收和双板
+单向收发。简单模式 AXI DMA 只保留编程的窗口容量，没有独立的实际接收
 字节数；因此 S2MM 完成后，PS 会从 16 字节 PL 头中的 OFDM length 字段推导
 真实 payload 长度，并校验它不超过 OFDM/捕获窗口上限。magic 扫描、CRC、比较
 和 UDP 回传都被限制在该可信长度内，窗口尾部未写入的旧数据不再参与处理。
-若头部长度非法或与当前 TX block 不同，摘要分别显示
-`RX_LENGTH_INVALID` / `RX_LENGTH_MISMATCH`，且非法长度的帧不会回传。
+头部长度非法的帧不会回传，并累计到 `S2MM RX stat` 的 `len`。
 
-当前 TX/RX 已解耦，S2MM 收到的帧可能是 RX 侧 FIFO 中延迟堆积的旧帧，不一定对应当前刚启动的 MM2S 聚合块。为定位这种错配，PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic。AIR0 与 AIRV v2 都会校验必要头字段，并用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`；详细日志分别打印 `S2MM air0 ... desync=...` 和 `S2MM airv packet=... chunk=... stream_off=... tx_stream_off=... desync=...`。AIRV v2 头 CRC 或关键字段非法时摘要为 `class=AIRV_HEADER_INVALID`；找不到 magic 时为 `class=NO_AIR_MAGIC`，并给出最接近 magic 的 `best_off/best_xor/best_bits`。
+当前 TX/RX 已解耦，S2MM 收到的帧不要求对应本机 MM2S 聚合块。PS 会在 S2MM buffer 前 `2048` 字节内扫描 AIR0/AIRV magic；AIR0 与 AIRV v2 都会校验必要头字段，并用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`。首两帧的 `S2MM valid` 报告类型、全局序号、偏移和长度；AIRV v2 头 CRC/关键字段非法、magic 缺失或前缀偏移等情况只进入 `S2MM RX stat` 分类累计，不再做逐帧详细 dump。
 
 S2MM 完成后的校验和动作取决于 RF 模式：
 
-- 默认 `deliver_no_retry`：长度、固定 16 字节前缀和 AIR0/AIRV magic 等帧结构合法时，即使 RX payload 与当前 TX block 存在字节差异，仍打印 `S2MM pass corrupt ... action=deliver_no_retry` 并把实际 RX 字节回传给 PC；AIR0/AIRV 的 CRC 和缺包统计负责暴露损坏。长度非法、magic 缺失、前缀偏移等结构无效帧打印 `S2MM reject ... action=drop_no_retry` 并丢弃当前块。
-- `strict_retry`：payload mismatch 也视为无效捕获，不向 PC 回传。若收到的可能是延迟旧帧，板端先只重新 arm S2MM 等待期望帧；等待超时或恢复路径再重置 DMA/RX pipeline，将保留的聚合块重新送入 MM2S。初次发送之外最多重发 3 次，日志打印 `RF retry reason=... attempt=.../3`；耗尽或 DMA reset 失败后打印 `RF drop`。
+- 默认 `deliver_no_retry`：长度、固定 16 字节前缀和 AIR0/AIRV magic 等帧结构合法时，即使 RX payload 与本机当前 TX block 存在字节差异，仍把实际 RX 字节回传给 PC；AIR0/AIRV 的 CRC 和缺包统计负责暴露损坏。长度非法、magic 缺失、前缀偏移等结构无效帧丢弃并计入 `S2MM RX stat`，不逐帧打印。
+- `strict_retry`：只适合保留本机 TX block 对照能力的单板诊断；双板之间没有反向 RF ACK，也无法让接收板控制发射板重发，因此双板测试必须关闭该项。
 
 MM2S 启动前的顺序是先 `OpenWifi_Tx_Rearm(payload_len)`，再由 `net_configure_tx_frame()` 写入最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 `OpenWifi_Tx_Rearm()` 放在 `net_configure_tx_frame()` 后面，否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
-关键日志：
+正常运行时的关键日志：
 
 ```text
-S2MM loopback debug ready, rx_base=0x01400000 rx_bytes=8192 ...
-S2MM start id=1 block=0 capture=8192 tx_transfer=2880 tx_payload=2880
-S2MM wait id=1 capture=8192 tx_transfer=2880 waited_ms=1000 txdone=... rxdone=... tx_irq=... rx_irq=... rx_sr=...
-S2MM diag id=1 class=NO_AIR_MAGIC cap=8192 tx_payload=1440 tx_transfer=1440 prefix=16 len_guess=... len_valid=1 magic=no off=0 word=0x00000000 best_off=... best_magic=... best_xor=... best_bits=... rx0=... rx_payload0=... tx0=0x30524941 rx_crc=... tx_crc=... cmp=DIFF diff=0 rx_state=... wd=...
-S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=OK done=1
-S2MM done id=1 capture=8192 tx_transfer=2880 rx_prefix=16 cmp_len=2880 irq=0x... sr=0x... rx_crc=0x... tx_crc=0x... cmp=DIFF first_diff=...
-S2MM rx_head ...
-S2MM rx_hdr ts=... meta0=... meta1=... len_field=... payload_guess=... rate_guess=... tx_payload=... tx_transfer=... match=...
-S2MM rx_payload_head ...
-S2MM tx_head ...
-S2MM payload_magic offset=16 magic=0x30524941 expected_prefix=16
-S2MM air0 seq=0 chunk=1440 file_off=0 stream_off=0 tx_stream_off=0 desync=no
-S2MM airv packet=0 chunk=1440 stream_off=0 tx_stream_off=0 desync=no
-LB UDP sent block=1 stream_off=0 payload=2880 packets=3 total_bytes=2880 peer_port=...
+S2MM independent RX ready, arm_after=RXCFG ... valid_log_first=2 reject_report_us=2000000 ...
+RXCFG loopback peer port=... rx_mode=independent
+S2MM valid id=... type=AIR0 seq=... stream_off=... payload=... wait_us=... valid=... rejects=... udp_bytes=...
+S2MM valid id=... type=AIRV seq=... stream_off=... payload=... wait_us=... valid=... rejects=... udp_bytes=...
+S2MM RX stat captures=... valid=... reject=... len=... no_magic=... shift=... header=...
 DMA stall timeout id=3 block=0 waited_us=6001 txdone=0 rxdone=0 tx_irq=0x... rx_irq=0x... tx_sr=0x... rx_sr=0x... tx_cr=0x... rx_cr=0x... tx_buflen=... rx_buflen=... rx_state=0x... wd=... count=1
 DMA stall recovery reset_done=1
 RF retry reason=timeout id=... block=... attempt=1/3 payload=... stream_off=... total=...
 RF drop reason=timeout id=... block=... payload=... stream_off=... reset_done=... drops=...
-S2MM pass corrupt id=... block=... first_diff=... passes=... action=deliver_no_retry
-S2MM reject id=... block=... reason=... rejects=... action=drop_no_retry
 S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... err_dec=... errors=1
 ```
 
 反馈板级测试结果时，优先提供：
 
-- 启动后的 `S2MM loopback debug ready` 行。
-- 发送 16 KiB 或更小测试数据后的所有 `S2MM start/wait/done/error` 行。
-- 所有 `S2MM diag`、`S2MM payload_magic`、`S2MM air0` 和 `S2MM airv` 行。
-- 所有 `LB UDP sent` 行。
-- 同一轮的 `UDP RX reset ... rf_mode=...`、`RF retry`、`RF drop`、`S2MM pass corrupt/reject`、`STAT rate` / `STAT state` 行。
+- 启动后的 `S2MM independent RX ready` 和 `RXCFG loopback peer` 行。
+- 同一轮所有 `S2MM valid`、`S2MM RX stat` 和 `S2MM error` 行。
+- 发送板的 `UDP RX reset ... tx_mode=independent`、`MM2S error`、`DMA stall timeout/recovery`、`STAT rate` / `STAT state` 行。
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
-- 如果出现 `cmp=DIFF`，提供紧随其后的 `S2MM rx_head` 和 `S2MM tx_head`。
 
-如果只看到 `S2MM start` 后出现 `DMA stall timeout`，说明真实空口 RX 没有在 watchdog 时间内形成完整 S2MM 包。重点看 `txdone/rxdone`：`txdone=1 rxdone=0` 偏向 RX/解调/TLAST 问题；`txdone=0 rxdone=0` 偏向 TX stream/tx_intf/openofdm_tx 没有消费完本块。再根据 reset 日志中的 `rf_mode` 判断后续：`deliver_no_retry` 会丢弃当前块并继续，`strict_retry` 应继续出现 `RF retry`，最多 3 次后才 `RF drop`。如果出现 `S2MM error`，先根据 `irq` 判断 DMA 错误类型，再检查长度、TLAST 和 AXI-Stream 握手。
+如果发送板出现 `DMA stall timeout`，它现在表示 MM2S/TX stream 没有在 20 ms 内完成，不再表示接收板没有收到空口帧。接收板没有合法帧时看 `S2MM RX stat`：`captures/reject` 持续增加说明 PL 正在输出伪解码帧，`captures` 不增加则表示 S2MM 仍在等待 TLAST；若出现 `S2MM error`，再根据 `irq/sr` 检查 DMA、长度、TLAST 和 AXI-Stream 握手。
 
 ## 构建和运行
 

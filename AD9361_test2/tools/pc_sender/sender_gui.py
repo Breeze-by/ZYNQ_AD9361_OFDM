@@ -687,6 +687,7 @@ class SenderGui:
                 f"Start send target={config.ip}:{config.port} bytes={payload_len} "
                 f"bind={config.bind_ip} ipcfg={config.configure_board_ip} "
                 f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
+                f"rate_limit={config.target_rate_kib_s:g}KiB/s "
                 f"{self._format_start_mode(config)} "
                 f"payload_crc={config.validate_payload_crc} air0={config.air_protocol} "
             )

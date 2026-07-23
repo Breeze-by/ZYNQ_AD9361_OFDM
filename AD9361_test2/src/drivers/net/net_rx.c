@@ -79,6 +79,20 @@ static uint32_t rf_retry_drop_count;
 static uint32_t rf_drop_count;
 static uint32_t rx_frame_reject_count;
 static uint32_t rx_payload_diff_pass_count;
+static uint32_t rx_frame_valid_count;
+static uint32_t rx_reject_length_count;
+static uint32_t rx_reject_no_magic_count;
+static uint32_t rx_reject_magic_shift_count;
+static uint32_t rx_reject_header_count;
+static uint32_t rx_reject_reported_count;
+static XTime rx_reject_report_start_time;
+static int rx_valid_log_pending;
+static uint32_t rx_valid_log_id;
+static uint32_t rx_valid_log_magic;
+static uint32_t rx_valid_log_seq;
+static uint32_t rx_valid_log_stream_offset;
+static uint32_t rx_valid_log_payload_len;
+static uint32_t rx_valid_log_wait_us;
 static XTime dma_start_time;
 static XTime loopback_rx_start_time;
 static int loopback_rx_busy;
@@ -130,6 +144,7 @@ static int net_should_report_packet_log(void);
 static void net_start_dma_transfer(void);
 static int net_loopback_start_s2mm(void);
 static void net_loopback_ensure_s2mm(void);
+static void net_loopback_print_rx_status(void);
 static void net_handle_dma_stall_timeout(uint64_t waited_us);
 static void net_recover_dma_and_drop_current_block(void);
 
@@ -437,6 +452,14 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc,
     rf_drop_count = 0U;
     rx_frame_reject_count = 0U;
     rx_payload_diff_pass_count = 0U;
+    rx_frame_valid_count = 0U;
+    rx_reject_length_count = 0U;
+    rx_reject_no_magic_count = 0U;
+    rx_reject_magic_shift_count = 0U;
+    rx_reject_header_count = 0U;
+    rx_reject_reported_count = 0U;
+    rx_reject_report_start_time = 0U;
+    rx_valid_log_pending = 0;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;
     loopback_rx_busy = 0;
@@ -1333,6 +1356,60 @@ static void net_loopback_ensure_s2mm(void)
 #endif
 }
 
+/*
+ * UART output is deliberately emitted only after the next S2MM capture has
+ * been armed. At 115200 baud even one diagnostic line can occupy several
+ * milliseconds, which used to leave the receiver unarmed between RF frames.
+ */
+static void net_loopback_print_rx_status(void)
+{
+#if NET_LOOPBACK_S2MM_DEBUG_ENABLE
+    XTime now_time;
+    uint64_t elapsed_us;
+
+    if (rx_valid_log_pending != 0) {
+        rx_valid_log_pending = 0;
+        UART_Printf(
+            "S2MM valid id=%lu type=%s seq=%lu stream_off=%lu payload=%lu "
+            "wait_us=%lu valid=%lu rejects=%lu udp_bytes=%lu\r\n",
+            (unsigned long)rx_valid_log_id,
+            (rx_valid_log_magic == NET_AIR0_MAGIC) ? "AIR0" : "AIRV",
+            (unsigned long)rx_valid_log_seq,
+            (unsigned long)rx_valid_log_stream_offset,
+            (unsigned long)rx_valid_log_payload_len,
+            (unsigned long)rx_valid_log_wait_us,
+            (unsigned long)rx_frame_valid_count,
+            (unsigned long)rx_frame_reject_count,
+            (unsigned long)loopback_return_byte_count);
+        return;
+    }
+
+    if ((rx_frame_reject_count == rx_reject_reported_count) ||
+        (rx_reject_report_start_time == 0U)) {
+        return;
+    }
+
+    XTime_GetTime(&now_time);
+    elapsed_us = net_elapsed_us(rx_reject_report_start_time, now_time);
+    if (elapsed_us < NET_LOOPBACK_S2MM_REJECT_REPORT_INTERVAL_US) {
+        return;
+    }
+
+    rx_reject_reported_count = rx_frame_reject_count;
+    rx_reject_report_start_time = now_time;
+    UART_Printf(
+        "S2MM RX stat captures=%lu valid=%lu reject=%lu "
+        "len=%lu no_magic=%lu shift=%lu header=%lu\r\n",
+        (unsigned long)loopback_rx_done_count,
+        (unsigned long)rx_frame_valid_count,
+        (unsigned long)rx_frame_reject_count,
+        (unsigned long)rx_reject_length_count,
+        (unsigned long)rx_reject_no_magic_count,
+        (unsigned long)rx_reject_magic_shift_count,
+        (unsigned long)rx_reject_header_count);
+#endif
+}
+
 static void net_loopback_poll_s2mm(void)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
@@ -1460,9 +1537,6 @@ static void net_loopback_poll_s2mm(void)
 
     payload_magic_found = net_find_payload_magic_offset(loopback_rx_buffer,
         trusted_capture_len, &payload_magic_offset, &payload_magic);
-    best_magic_found = net_find_best_magic_candidate(loopback_rx_buffer,
-        trusted_capture_len, &best_magic_offset, &best_magic,
-        &best_magic_xor, &best_magic_bits);
     if ((payload_magic_found != 0) &&
         (payload_magic_offset < loopback_rx_expected_len) &&
         ((payload_magic == NET_AIR0_MAGIC) || (payload_magic == NET_AIRV_MAGIC))) {
@@ -1502,7 +1576,7 @@ static void net_loopback_poll_s2mm(void)
             }
         }
     }
-    rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
+    rx_crc = 0U;
     if ((payload_magic == NET_AIR0_MAGIC) &&
         (net_air0_stream_offset_from_payload(rx_payload_ptr,
             rx_payload_available_len,
@@ -1539,17 +1613,23 @@ static void net_loopback_poll_s2mm(void)
         ((payload_magic == NET_AIR0_MAGIC) && (air0_offset_valid == 0)) ||
         ((payload_magic == NET_AIRV_MAGIC) && (airv_offset_valid == 0))) ? 1 : 0;
     should_summarize = net_loopback_should_summarize(loopback_rx_transfer_id, abnormal);
-    rx_state_history = Xil_In32(NET_OPENOFDM_RX_STATE_HISTORY_ADDR);
-    wd0 = net_openofdm_rx_watchdog_event_count(0U);
-    wd1 = net_openofdm_rx_watchdog_event_count(1U);
-    wd2 = net_openofdm_rx_watchdog_event_count(2U);
-    wd3 = net_openofdm_rx_watchdog_event_count(3U);
-    wd4 = net_openofdm_rx_watchdog_event_count(4U);
-    if (loopback_rx_expected_len >= 4U) {
-        rx_head0 = net_load_le32(loopback_rx_buffer);
-    }
-    if (rx_payload_available_len >= 4U) {
-        rx_payload_head0 = net_load_le32(rx_payload_ptr);
+    if ((should_summarize != 0) || (should_log != 0)) {
+        best_magic_found = net_find_best_magic_candidate(loopback_rx_buffer,
+            trusted_capture_len, &best_magic_offset, &best_magic,
+            &best_magic_xor, &best_magic_bits);
+        rx_crc = Net_Protocol_Crc32(rx_payload_ptr, compare_len);
+        rx_state_history = Xil_In32(NET_OPENOFDM_RX_STATE_HISTORY_ADDR);
+        wd0 = net_openofdm_rx_watchdog_event_count(0U);
+        wd1 = net_openofdm_rx_watchdog_event_count(1U);
+        wd2 = net_openofdm_rx_watchdog_event_count(2U);
+        wd3 = net_openofdm_rx_watchdog_event_count(3U);
+        wd4 = net_openofdm_rx_watchdog_event_count(4U);
+        if (loopback_rx_expected_len >= 4U) {
+            rx_head0 = net_load_le32(loopback_rx_buffer);
+        }
+        if (rx_payload_available_len >= 4U) {
+            rx_payload_head0 = net_load_le32(rx_payload_ptr);
+        }
     }
 
     if (payload_len_valid == 0) {
@@ -1683,11 +1763,18 @@ static void net_loopback_poll_s2mm(void)
 
     if (frame_valid == 0) {
         rx_frame_reject_count += 1U;
-        UART_Printf("S2MM reject id=%lu tx_block=%d reason=%s rejects=%lu action=rearm_rx\r\n",
-            (unsigned long)loopback_rx_transfer_id,
-            dma_block_index,
-            diag_class,
-            (unsigned long)rx_frame_reject_count);
+        if (payload_len_valid == 0) {
+            rx_reject_length_count += 1U;
+        } else if (payload_magic_found == 0) {
+            rx_reject_no_magic_count += 1U;
+        } else if (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES) {
+            rx_reject_magic_shift_count += 1U;
+        } else {
+            rx_reject_header_count += 1U;
+        }
+        if (rx_reject_report_start_time == 0U) {
+            XTime_GetTime(&rx_reject_report_start_time);
+        }
         return;
     }
 
@@ -1710,6 +1797,17 @@ static void net_loopback_poll_s2mm(void)
     return_len = payload_len_guess;
     if (return_len > rx_payload_available_len) {
         return_len = rx_payload_available_len;
+    }
+    rx_frame_valid_count += 1U;
+    if (rx_frame_valid_count <= NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES) {
+        rx_valid_log_pending = 1;
+        rx_valid_log_id = loopback_rx_transfer_id;
+        rx_valid_log_magic = payload_magic;
+        rx_valid_log_seq = (payload_magic == NET_AIR0_MAGIC) ?
+            air0_packet_seq : airv_packet_seq;
+        rx_valid_log_stream_offset = return_stream_offset;
+        rx_valid_log_payload_len = return_len;
+        rx_valid_log_wait_us = (uint32_t)total_wait_us;
     }
     net_loopback_return_udp(NULL, rx_payload_ptr, return_len,
         return_stream_offset, timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
@@ -2216,6 +2314,14 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     rf_drop_count = 0U;
     rx_frame_reject_count = 0U;
     rx_payload_diff_pass_count = 0U;
+    rx_frame_valid_count = 0U;
+    rx_reject_length_count = 0U;
+    rx_reject_no_magic_count = 0U;
+    rx_reject_magic_shift_count = 0U;
+    rx_reject_header_count = 0U;
+    rx_reject_reported_count = 0U;
+    rx_reject_report_start_time = 0U;
+    rx_valid_log_pending = 0;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;
     loopback_rx_busy = 0;
@@ -2242,11 +2348,11 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
 #endif
 #endif
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
-    UART_Printf("S2MM independent RX ready, arm_after=RXCFG rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u tx_stall_timeout_us=%lu\r\n",
+    UART_Printf("S2MM independent RX ready, arm_after=RXCFG rx_base=0x%08lX rx_bytes=%u valid_log_first=%u reject_report_us=%lu tx_stall_timeout_us=%lu\r\n",
         (unsigned long)RX_BUFFER_BASE,
         (unsigned)RX_TRANSFER_LENGTH_BYTES,
-        (unsigned)NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS,
-        (unsigned)NET_LOOPBACK_S2MM_LOG_INTERVAL_BLOCKS,
+        (unsigned)NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES,
+        (unsigned long)NET_LOOPBACK_S2MM_REJECT_REPORT_INTERVAL_US,
         (unsigned long)NET_DMA_STALL_TIMEOUT_US);
 #endif
 
@@ -2258,11 +2364,16 @@ void Net_RxPoll(void)
     XTime now_time;
     uint64_t dma_elapsed_us;
 
-    NetStats_PrintPeriodic();
     net_check_agg_timeout();
     net_check_ack_timeout();
     net_loopback_poll_s2mm();
     net_loopback_ensure_s2mm();
+    net_loopback_print_rx_status();
+    /*
+     * Periodic UART statistics are also deferred until S2MM is armed, so a
+     * slow console cannot create an avoidable receive gap.
+     */
+    NetStats_PrintPeriodic();
 
     if (dma_fatal_error != 0) {
         return;
