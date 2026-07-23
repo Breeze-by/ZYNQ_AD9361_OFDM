@@ -1,6 +1,6 @@
 # ZYNQ_AD9361_OFDM
 
-这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。当前板级链路已经从纯 PL 数字回环推进到 AD9361 RF 回环：PL 侧 OFDM 调制后的数据送入 AD9361 TX，经 SMA 线直连到 AD9361 RX，再进入 PL 侧 OFDM 接收/解调；解调后的数据通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。
+这是一个基于 `Xilinx SDK 2018.3` 的 `Zynq-7000 + AD9361` 裸机工程。当前主链路是 PC 通过 UDP 向 Zynq PS 发送应用层数据包，PS 使用 lwIP RAW UDP 接收、校验和排序，把数据写入 DDR 中的发送缓冲，再通过 AXI DMA MM2S 推给 PL 侧 `tx_intf/openofdm_tx`。PL 侧 OFDM 调制后的数据送入 AD9361 TX，经 SMA/RF 链路进入 AD9361 RX 和 PL OFDM 解调；解调后的数据通过 S2MM 回到 PS，PS 再把恢复出的 payload 用 UDP 发回专门的 PC 接收工具做分片 CRC、连续性检查和文件恢复。PS 的 MM2S 发射与 S2MM 接收已经采用独立调度：同一份 ELF 可以用于单板自发自收，也可以用于两块板分别发射、接收。
 
 SDK 默认 `APP_RX_SOURCE=APP_RX_SOURCE_AD9361`，即 `rx_intf` 使用真实 AD9361
 ADC 数据。PL 内部数字回环仍保留为单独的诊断选项；需要隔离 RF 链路时，可把
@@ -72,7 +72,7 @@ AD9361_test2/src/drivers/net/net_init.c
 
 AD9361_test2/src/drivers/net/net_rx.c
     UDP RX 回调、session reset、严格按序接收、ACK、聚合块提交、
-    MM2S DMA 启动、S2MM 回环接收、PL 头解析、UDP 回传和完成回收。
+    独立 MM2S 发射、RXCFG 驱动的持续 S2MM 接收、PL 头解析和 UDP 回传。
 
 AD9361_test2/src/drivers/net/net_stats.c
     周期性串口统计输出。
@@ -119,7 +119,7 @@ while (1) {
 }
 ```
 
-`Net_Poll()` 每轮最多处理 `NET_INPUT_POLL_BUDGET=32` 个以太网输入包。`Net_RxPoll()` 负责统计输出、ACK 合并超时 flush、聚合块超时 flush、DMA 启动、DMA 完成回收和错误停机。
+`Net_Poll()` 每轮最多处理 `NET_INPUT_POLL_BUDGET=32` 个以太网输入包。`Net_RxPoll()` 负责统计输出、ACK 合并超时 flush、聚合块超时 flush、独立 MM2S 调度，以及在收到显式 RXCFG 后持续 arm/re-arm S2MM。没有 RXCFG 的发射板不会等待本地 RF 接收；没有本地发送数据的接收板也能持续捕获外部 RF 帧。
 
 ## 网络配置
 
@@ -228,17 +228,17 @@ ACK 状态：
 
 `NO_CRC` 由 PC 工具的 Payload CRC32 开关决定。关闭 payload CRC 时，reset 包携带 `NO_CRC`，普通包的 `payload_crc32=0`；开启 `--payload-crc` 或 GUI 对应选项后，PC 对 wire payload 计算 CRC32，PS 接收后校验。GUI 默认开启 Payload CRC32，高负载测试时曾观察到少量 PC->PS payload CRC 错误，开启后坏包会被 PS 拒收并由发送端重传，最终 loopback 校验才可信。
 
-`RF_RETRY` 只在每次传输开始的 reset 包中选择本 session 的板端 RF 策略。发送 GUI 的 `RF Strict Match + Retry (max 3)` 默认关闭，对应启动日志 `rf_mode=deliver_no_retry`；勾选后 reset 包携带 `RF_RETRY`，对应 `rf_mode=strict_retry`。该 flag 不改变 PC->PS UDP 滑动窗口重传，也不是 AIR0/AIRV 接收端 ACK。
+`RF_RETRY` 仍随 reset 包传输，但独立 TX/RX 调度不再把某次 S2MM 捕获强行对应到当前 MM2S 聚合块，因此不能跨两块板执行 payload 匹配重发。当前双板及通用模式测试必须保持发送 GUI 的 `RF Strict Match + Retry (max 3)` 关闭；PC->PS UDP 的 CRC、ACK、BUSY/PENDING 重传不受影响。
 
 IPCFG 是独立的 24 字节控制包，包含 `magic/seq/ip_addr/netmask/gateway/reserved`。PC 和 PS 都按 4 个原始网络地址字节传输 IPv4 字段，避免主机字节序歧义。板端拒绝非法/广播/网络地址、非连续掩码、跨网段非零网关、请求源不在目标网段以及传输期间的改址请求。直连板卡推荐 `gateway=0.0.0.0`。
 
 ## UDP Loopback 回传协议
 
-如果启用了运行时板端改址，接收工具先广播 IPCFG；收到 ACK 或完成有限次数尝试后，再用本机接收 socket 向 GUI 中的 `Board IP:Board Port` 发送一个 16 字节 `RXCFG` 控制包。RXCFG 与普通 `net_data_header_t` 形状相同，只是 `magic=0x52435830`、`payload_len=0`。板端收到后记录该 UDP 包的源 IP/源端口作为 PL loopback 回传目标，返回 `ACK OK`，并打印 `RXCFG loopback peer port=...`。
+如果启用了运行时板端改址，接收工具先广播 IPCFG；收到 ACK 或完成有限次数尝试后，再用本机接收 socket 向 GUI 中的 `Board IP:Board Port` 发送一个 16 字节 `RXCFG` 控制包。RXCFG 与普通 `net_data_header_t` 形状相同，只是 `magic=0x52435830`、`payload_len=0`。板端收到后记录该 UDP 包的源 IP/源端口作为回传目标，返回 `ACK OK`，并切换为独立接收模式：立即 arm 8192 字节 S2MM 窗口，每收到一个带 TLAST 的 PL 解调帧就解析、UDP 回传并再次 arm。串口打印 `RXCFG loopback peer ... rx_mode=independent` 和 `S2MM arm ... mode=independent`。
 
-注册成功后，即使发送端随后发 `RESET`，板端也会继续把 PL loopback 回传发给已注册的接收端；不会被发送端源端口覆盖。这样支持单电脑场景，也支持一台电脑只跑发送 GUI、另一台电脑只跑接收 GUI 的场景。如果接收工具没有注册，板端仍保留兼容行为：把回传发给最近一次发送/RESET 数据包的源 IP/端口。
+注册成功后，即使同一板的发送端随后发 `RESET`，显式 RXCFG 注册仍会保留，S2MM 在 DMA reset 后自动重新 arm，不会被发送端源端口覆盖。单板时 MM2S 和 S2MM 两个 DMA 方向可以并行；双板时发射板只需发送 GUI，接收板只需接收 GUI。如果没有显式 RXCFG，板端不会仅因 sender reset 而启动 S2MM，避免发射板等待一个未连接的本地 RX。
 
-PL->PS S2MM 完成后，PS 会跳过 PL 返回数据前面的 16 字节头，只把恢复出的 payload 按 1200 字节分片 UDP 发回已注册接收端。DMA 比较仍按 `align8(payload_len)` 检查补零后的传输内容，但 UDP 回传只发送原始聚合块 `payload_len`，不会把末尾 8 字节对齐补零写进恢复文件。发送程序现在只处理发送 ACK；如果意外收到 loopback 包，会按 magic 识别后忽略。
+PL->PS S2MM 完成后，PS 从 PL 的 16 字节头取得实际 payload 长度，跳过该头，只把恢复出的 payload 按 1200 字节分片 UDP 发回已注册接收端。AIR0/AIRV v2 头中的全局 `packet_seq * chunk_bytes` 决定 `stream_offset`，不再要求接收板具有对应的本地 TX block。单板同时收发时仍会保留当前 TX block 的对比诊断，但长度不同或 payload 不同不会阻止合法 AIR0/AIRV 帧回传。
 
 回传包头：
 
@@ -305,7 +305,7 @@ OK ACK 使用累计确认语义。主机收到 `OK seq=N` 后，可认为当前�
 
 `PENDING` 表示前面还有缺口，发送端会优先重传当前窗口中最老的未确认包。`BUSY` 表示板端暂时没有聚合块空间，发送端会退避后重发。二者只影响速度，不改变 PS 到 PL 的数据顺序。
 
-PC->PS UDP 重传与板端 RF 重发是两层不同机制。GUI 的 `Max Retries` 限制 UDP 包因 timeout/BUSY/PENDING/错误 ACK 触发的主机重传；`RF Strict Match + Retry (max 3)` 则控制一个已经被 PS 接受并形成聚合块的数据是否在 RF/S2MM 失败后由板端重新送入 MM2S，最大值由代码中的 `NET_LOOPBACK_RF_RETRY_MAX=3` 固定。
+PC->PS UDP 重传只负责发送电脑到发射板的以太网链路。GUI 的 `Max Retries` 限制 UDP 包因 timeout/BUSY/PENDING/错误 ACK 触发的主机重传。独立双板链路没有从接收板返回发射板的 RF ACK，因此不能做原先按本地 TX block 匹配的 RF 重发；双板测试保持 `RF Strict Match + Retry (max 3)` 关闭，以接收端 AIR0/AIRV 的缺包、CRC 和视频统计为准。
 
 ## 聚合、DMA 和 openofdm 帧长
 
@@ -611,6 +611,36 @@ Sender Configure Board IP            checked
 ```
 
 启动顺序是两块板卡上电并运行新版 ELF，接收电脑先启动接收 GUI；它应依次输出 `IPCFG applied board=...` 和 `RX target registered ...`。随后发送电脑启动发送 GUI，点击 Start 后应先输出 `IPCFG applied board=192.168.2.50 ...; starting sender session`，再出现正常发送进度。两块板各自直连在隔离网段时可以使用相同的板端 IP；IP 地址只需与各自 PC 的直连网卡处于同一子网。若 IPCFG 日志没有出现，首先检查对应 GUI 的 Bind IP 是否误填 `0.0.0.0`、直连网卡是否确实配置为相应地址，以及 Windows 防火墙是否允许该 Python 程序使用专用网络 UDP。
+
+独立 TX/RX 调度的第一轮双板验证不要直接跑大文件，使用 AIR0 小数据：
+
+```text
+接收电脑（192.168.1.101 直连接收板）
+Bind IP                          192.168.1.101
+Board IP                         192.168.1.50
+Configure Board IP by broadcast checked
+Register RX target               checked
+Raw Expected                     0
+Idle Finish(s)                   10
+
+发送电脑（192.168.2.101 直连发射板）
+Mode                             Test Data
+Test Bytes                       16384
+Target IP                        192.168.2.50
+PC Bind IP                       192.168.2.101
+Configure Board IP by broadcast  checked
+Chunk Bytes                      1440
+Window Size                      1
+Rate Limit KiB/s                 100
+Throughput Mode                  checked
+Payload CRC32                    checked
+RF Strict Match + Retry          unchecked
+AIR0 Packet Header               checked
+Verbose Packet Events            unchecked
+Progress ms                      1000
+```
+
+先启动接收 GUI。接收板串口必须先出现 `RXCFG loopback peer ... rx_mode=independent` 和 `S2MM arm id=1 mode=independent`；此时即使没有空口信号也不应出现 DMA stall timeout。再启动发送 GUI。发射板应出现 `UDP RX reset ... tx_mode=independent rx_registered=0`，不应出现 S2MM arm 或因本地 RX 静默产生的 RF drop。接收板收到空口帧后应出现 `S2MM diag ... class=RX_INDEPENDENT ... cmp=NA`、`S2MM air0 ...` 和 `LB UDP sent ...`，接收 GUI 最终目标是 `rx=16384 crc=0 len=0 gaps=0`。第一轮测试需要同时保存发射板串口、接收板串口、发送 GUI 日志和接收 GUI 日志。
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 

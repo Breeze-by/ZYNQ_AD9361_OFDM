@@ -81,9 +81,7 @@ static uint32_t rx_frame_reject_count;
 static uint32_t rx_payload_diff_pass_count;
 static XTime dma_start_time;
 static XTime loopback_rx_start_time;
-static XTime loopback_rx_last_wait_log_time;
 static int loopback_rx_busy;
-static int loopback_rx_done_for_current;
 
 #define TX_INTF_BASE_ADDR 0x40001000U
 #define TX_INTF_REG2_OFFSET 0x08U
@@ -130,6 +128,8 @@ static int loopback_rx_done_for_current;
 
 static int net_should_report_packet_log(void);
 static void net_start_dma_transfer(void);
+static int net_loopback_start_s2mm(void);
+static void net_loopback_ensure_s2mm(void);
 static void net_handle_dma_stall_timeout(uint64_t waited_us);
 static void net_recover_dma_and_drop_current_block(void);
 
@@ -439,9 +439,7 @@ static void net_reset_stream_state(uint16_t session_id, int validate_crc,
     rx_payload_diff_pass_count = 0U;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;
-    loopback_rx_last_wait_log_time = 0U;
     loopback_rx_busy = 0;
-    loopback_rx_done_for_current = 0;
 
     NetStats_Init();
     net_update_queue_stats();
@@ -859,7 +857,8 @@ static void net_loopback_print_rx_header(const uint8_t *buffer, uint32_t length,
         (unsigned long)rate_guess,
         (unsigned long)tx_payload_len,
         (unsigned long)tx_transfer_len,
-        (payload_len_guess == tx_payload_len) ? "yes" : "no");
+        (tx_payload_len == 0U) ? "n/a" :
+            ((payload_len_guess == tx_payload_len) ? "yes" : "no"));
 #else
     (void)buffer;
     (void)length;
@@ -1032,16 +1031,9 @@ static void net_loopback_print_words(const char *tag, const uint8_t *buffer, uin
 
 static void net_loopback_release_dma_block_if_done(void)
 {
-#if NET_LOOPBACK_S2MM_DEBUG_ENABLE
-    if ((dma_busy != 0) || (loopback_rx_busy != 0) ||
-        (loopback_rx_done_for_current == 0) || (dma_block_index < 0)) {
-        return;
-    }
-#else
     if ((dma_busy != 0) || (dma_block_index < 0)) {
         return;
     }
-#endif
 
     agg_blocks[dma_block_index].state = NET_AGG_BLOCK_FREE;
     agg_blocks[dma_block_index].payload_len = 0U;
@@ -1052,7 +1044,6 @@ static void net_loopback_release_dma_block_if_done(void)
     dma_block_index = -1;
     loopback_rx_expected_len = 0U;
     loopback_tx_expected_len = 0U;
-    loopback_rx_done_for_current = 0;
     net_update_queue_stats();
     net_start_dma_transfer();
 }
@@ -1105,12 +1096,10 @@ static void net_clear_dma_runtime_state(void)
     RxDmaBuffLenLast = 0U;
     dma_busy = 0;
     loopback_rx_busy = 0;
-    loopback_rx_done_for_current = 0;
     loopback_rx_expected_len = 0U;
     loopback_tx_expected_len = 0U;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;
-    loopback_rx_last_wait_log_time = 0U;
 }
 
 static void net_recover_dma_and_drop_current_block(void)
@@ -1204,25 +1193,6 @@ static void net_retry_or_drop_block(int block_index, int reset_done,
     }
 }
 
-static void net_recover_and_retry_current_block(const char *reason)
-{
-    int block_index = dma_block_index;
-    int tx_done_snapshot = TxDone;
-    int reset_done;
-
-    reset_done = net_dma_reset_and_reenable();
-    net_rx_pipeline_reset();
-
-    if ((dma_busy != 0) && (tx_done_snapshot != 0) &&
-        (block_index >= 0) && (block_index < (int)NET_AGG_BLOCK_COUNT)) {
-        NetStats_OnDmaDone(agg_blocks[block_index].transfer_len);
-    }
-
-    net_clear_dma_runtime_state();
-    dma_block_index = -1;
-    net_retry_or_drop_block(block_index, reset_done, reason);
-}
-
 static void net_handle_dma_stall_timeout(uint64_t waited_us)
 {
     uint32_t tx_sr;
@@ -1302,32 +1272,23 @@ static void net_handle_dma_stall_timeout(uint64_t waited_us)
     net_retry_or_drop_block(block_index, reset_done, "timeout");
 }
 
-static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index,
-    int rearm_only)
+static int net_loopback_start_s2mm(void)
 {
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
     int status;
 
-    if (loopback_rx_busy != 0) {
+    if ((loopback_rx_busy != 0) || (loopback_return_peer_locked == 0)) {
         return -1;
     }
 
-    if ((block->transfer_len == 0U) || (block->transfer_len > RX_TRANSFER_LENGTH_BYTES)) {
-        UART_Printf("S2MM arm failed block=%d tx_transfer=%lu rx_capacity=%u\r\n",
-            block_index,
-            (unsigned long)block->transfer_len,
-            (unsigned)RX_TRANSFER_LENGTH_BYTES);
-        return -1;
+    loopback_tx_expected_len = 0U;
+    if ((dma_block_index >= 0) &&
+        (dma_block_index < (int)NET_AGG_BLOCK_COUNT)) {
+        loopback_tx_expected_len = agg_blocks[dma_block_index].transfer_len;
     }
-
-    loopback_tx_expected_len = block->transfer_len;
     loopback_rx_expected_len = RX_TRANSFER_LENGTH_BYTES;
-    if ((rearm_only == 0) && (block->retry_count == 0U)) {
-        loopback_rx_transfer_id += 1U;
-    }
-    loopback_rx_done_for_current = 0;
+    loopback_rx_transfer_id += 1U;
     XTime_GetTime(&loopback_rx_start_time);
-    loopback_rx_last_wait_log_time = loopback_rx_start_time;
     RxDone = 0;
     RxError = 0;
     RxIrqStatusLast = 0U;
@@ -1339,9 +1300,8 @@ static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index
     status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)loopback_rx_buffer,
         loopback_rx_expected_len, XAXIDMA_DEVICE_TO_DMA);
     if (status != XST_SUCCESS) {
-        UART_Printf("S2MM start failed id=%lu block=%d len=%lu status=%d\r\n",
+        UART_Printf("S2MM arm failed id=%lu mode=independent len=%lu status=%d\r\n",
             (unsigned long)loopback_rx_transfer_id,
-            block_index,
             (unsigned long)loopback_rx_expected_len,
             status);
         return -1;
@@ -1349,20 +1309,27 @@ static int net_loopback_start_s2mm(const net_agg_block_t *block, int block_index
 
     loopback_rx_busy = 1;
     if (net_loopback_should_log(loopback_rx_transfer_id) != 0) {
-        UART_Printf("S2MM %s id=%lu block=%d capture=%lu tx_transfer=%lu tx_payload=%lu\r\n",
-            (rearm_only != 0) ? "rearm" : "start",
+        UART_Printf("S2MM arm id=%lu mode=independent capture=%lu tx_block=%d tx_transfer=%lu peer_port=%u\r\n",
             (unsigned long)loopback_rx_transfer_id,
-            block_index,
             (unsigned long)loopback_rx_expected_len,
+            dma_block_index,
             (unsigned long)loopback_tx_expected_len,
-            (unsigned long)block->payload_len);
+            (unsigned)loopback_return_port);
     }
     return 0;
 #else
-    (void)block;
-    (void)block_index;
-    (void)rearm_only;
     return 0;
+#endif
+}
+
+static void net_loopback_ensure_s2mm(void)
+{
+#if NET_LOOPBACK_S2MM_DEBUG_ENABLE && \
+    (NET_LOOPBACK_RETURN_SOURCE == NET_LOOPBACK_RETURN_SOURCE_S2MM)
+    if ((loopback_return_peer_locked != 0) && (dma_fatal_error == 0) &&
+        (loopback_rx_busy == 0) && (RxError == 0)) {
+        (void)net_loopback_start_s2mm();
+    }
 #endif
 }
 
@@ -1420,7 +1387,6 @@ static void net_loopback_poll_s2mm(void)
     int block_index_valid;
     const char *diag_class;
     XTime now_time;
-    uint64_t wait_elapsed_us;
     uint64_t total_wait_us;
 
     if (loopback_rx_busy == 0) {
@@ -1448,36 +1414,16 @@ static void net_loopback_poll_s2mm(void)
     }
 
     if (RxDone == 0) {
-        XTime_GetTime(&now_time);
-        total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
-        if ((NET_DMA_STALL_TIMEOUT_US != 0ULL) &&
-            (total_wait_us >= NET_DMA_STALL_TIMEOUT_US)) {
-            net_handle_dma_stall_timeout(total_wait_us);
-            return;
-        }
-        wait_elapsed_us = net_elapsed_us(loopback_rx_last_wait_log_time, now_time);
-        if (wait_elapsed_us >= NET_LOOPBACK_S2MM_WAIT_LOG_US) {
-            loopback_rx_last_wait_log_time = now_time;
-            UART_Printf("S2MM wait id=%lu capture=%lu tx_transfer=%lu waited_ms=%lu txdone=%d rxdone=%d "
-                "tx_irq=0x%08lX rx_irq=0x%08lX rx_sr=0x%08lX rx_cr=0x%08lX rx_buflen=%lu\r\n",
-                (unsigned long)loopback_rx_transfer_id,
-                (unsigned long)loopback_rx_expected_len,
-                (unsigned long)loopback_tx_expected_len,
-                (unsigned long)(total_wait_us / 1000ULL),
-                TxDone,
-                RxDone,
-                (unsigned long)TxIrqStatusLast,
-                (unsigned long)RxIrqStatusLast,
-                (unsigned long)XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_SR_OFFSET),
-                (unsigned long)XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_CR_OFFSET),
-                (unsigned long)XAxiDma_ReadReg(AxiDma0.RegBase + XAXIDMA_RX_OFFSET, XAXIDMA_BUFFLEN_OFFSET));
-        }
+        /*
+         * In independent RX mode an armed S2MM channel may legitimately wait
+         * indefinitely for the next RF frame. Do not treat RF silence as a
+         * DMA stall and do not print periodic wait messages.
+         */
         return;
     }
 
     RxDone = 0;
     loopback_rx_busy = 0;
-    loopback_rx_done_for_current = 1;
     loopback_rx_done_count += 1U;
     XTime_GetTime(&now_time);
     total_wait_us = net_elapsed_us(loopback_rx_start_time, now_time);
@@ -1526,9 +1472,6 @@ static void net_loopback_poll_s2mm(void)
     rx_payload_ptr = &loopback_rx_buffer[rx_prefix_len];
     rx_payload_available_len = trusted_capture_len - rx_prefix_len;
     compare_len = (payload_len_valid != 0) ? payload_len_guess : 0U;
-    if (compare_len > loopback_tx_expected_len) {
-        compare_len = loopback_tx_expected_len;
-    }
     if (compare_len > rx_payload_available_len) {
         compare_len = rx_payload_available_len;
     }
@@ -1584,18 +1527,14 @@ static void net_loopback_poll_s2mm(void)
     }
 #endif
 
-    frame_valid = ((block_index_valid != 0) &&
-        (payload_len_valid != 0) &&
+    frame_valid = ((payload_len_valid != 0) &&
         (payload_len_guess != 0U) &&
-        (payload_len_mismatch == 0) &&
-        ((rf_retry_enabled == 0) || (mismatch_found == 0)) &&
         (payload_magic_found != 0) &&
         (rx_prefix_len == NET_LOOPBACK_RX_PREFIX_BYTES) &&
         ((payload_magic != NET_AIR0_MAGIC) || (air0_offset_valid != 0)) &&
         ((payload_magic != NET_AIRV_MAGIC) || (airv_offset_valid != 0))) ? 1 : 0;
-    abnormal = ((block_index_valid == 0) || (payload_len_valid == 0) ||
-        (payload_len_mismatch != 0) ||
-        (mismatch_found != 0) || (payload_magic_found == 0) ||
+    abnormal = ((payload_len_valid == 0) ||
+        (payload_magic_found == 0) ||
         (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES) ||
         ((payload_magic == NET_AIR0_MAGIC) && (air0_offset_valid == 0)) ||
         ((payload_magic == NET_AIRV_MAGIC) && (airv_offset_valid == 0))) ? 1 : 0;
@@ -1613,12 +1552,8 @@ static void net_loopback_poll_s2mm(void)
         rx_payload_head0 = net_load_le32(rx_payload_ptr);
     }
 
-    if (block_index_valid == 0) {
-        diag_class = "NO_CURRENT_BLOCK";
-    } else if (payload_len_valid == 0) {
+    if (payload_len_valid == 0) {
         diag_class = "RX_LENGTH_INVALID";
-    } else if (payload_len_mismatch != 0) {
-        diag_class = "RX_LENGTH_MISMATCH";
     } else if (payload_magic_found == 0) {
         diag_class = "NO_AIR_MAGIC";
     } else if (rx_prefix_len != NET_LOOPBACK_RX_PREFIX_BYTES) {
@@ -1629,6 +1564,10 @@ static void net_loopback_poll_s2mm(void)
         diag_class = "AIRV_HEADER_INVALID";
     } else if (mismatch_found != 0) {
         diag_class = "AIR_MAGIC_PAYLOAD_DIFF";
+    } else if (block_index_valid == 0) {
+        diag_class = "RX_INDEPENDENT";
+    } else if (payload_len_mismatch != 0) {
+        diag_class = "RX_LENGTH_DESYNC";
     } else {
         diag_class = "OK";
     }
@@ -1663,8 +1602,9 @@ static void net_loopback_poll_s2mm(void)
             (unsigned long)tx_head0,
             (unsigned long)rx_crc,
             (unsigned long)tx_crc,
-            ((payload_len_valid != 0) && (payload_len_mismatch == 0) &&
-                (mismatch_found == 0)) ? "OK" : "DIFF",
+            (block_index_valid == 0) ? "NA" :
+                (((payload_len_valid != 0) && (payload_len_mismatch == 0) &&
+                    (mismatch_found == 0)) ? "OK" : "DIFF"),
             (unsigned long)mismatch_index,
             (unsigned long)rx_state_history,
             (unsigned long)wd0,
@@ -1686,8 +1626,9 @@ static void net_loopback_poll_s2mm(void)
             (unsigned long)RxDmaSrLast,
             (unsigned long)rx_crc,
             (unsigned long)tx_crc,
-            ((payload_len_valid != 0) && (payload_len_mismatch == 0) &&
-                (mismatch_found == 0)) ? "OK" : "DIFF");
+            (block_index_valid == 0) ? "NA" :
+                (((payload_len_valid != 0) && (payload_len_mismatch == 0) &&
+                    (mismatch_found == 0)) ? "OK" : "DIFF"));
         if ((mismatch_found != 0) && (block_index_valid != 0)) {
             UART_Printf(" first_diff=%lu rx=0x%02X tx=0x%02X",
                 (unsigned long)mismatch_index,
@@ -1742,56 +1683,11 @@ static void net_loopback_poll_s2mm(void)
 
     if (frame_valid == 0) {
         rx_frame_reject_count += 1U;
-        if (rf_retry_enabled != 0) {
-            if (block_index_valid == 0) {
-                net_recover_and_retry_current_block("rx_without_block");
-                return;
-            }
-
-            /*
-             * A CRC-valid frame can be a late copy of an earlier attempt.
-             * Re-arm S2MM first; the normal timeout path retransmits the
-             * retained block only if the expected frame still does not arrive.
-             */
-            if ((dma_busy != 0) && (TxDone != 0) && (TxError == 0)) {
-                NetStats_OnDmaDone(agg_blocks[dma_block_index].transfer_len);
-                dma_busy = 0;
-                TxDone = 0;
-                dma_start_time = 0U;
-            }
-            loopback_rx_done_for_current = 0;
-            if (net_loopback_start_s2mm(&agg_blocks[dma_block_index],
-                dma_block_index, 1) == 0) {
-                return;
-            }
-
-            net_recover_and_retry_current_block("rx_rearm_failed");
-            return;
-        }
-
-        UART_Printf("S2MM reject id=%lu block=%d reason=%s rejects=%lu action=drop_no_retry\r\n",
+        UART_Printf("S2MM reject id=%lu tx_block=%d reason=%s rejects=%lu action=rearm_rx\r\n",
             (unsigned long)loopback_rx_transfer_id,
             dma_block_index,
             diag_class,
             (unsigned long)rx_frame_reject_count);
-
-        if (block_index_valid == 0) {
-            net_recover_dma_and_drop_current_block();
-            return;
-        }
-
-        /*
-         * The frame header does not identify the current block. Discard this
-         * capture and retire the current block without re-arming S2MM or
-         * retransmitting it.
-         */
-        if ((dma_busy != 0) && (TxDone != 0) && (TxError == 0)) {
-            NetStats_OnDmaDone(agg_blocks[dma_block_index].transfer_len);
-            dma_busy = 0;
-            TxDone = 0;
-            dma_start_time = 0U;
-        }
-        net_loopback_release_dma_block_if_done();
         return;
     }
 
@@ -1815,9 +1711,8 @@ static void net_loopback_poll_s2mm(void)
     if (return_len > rx_payload_available_len) {
         return_len = rx_payload_available_len;
     }
-    net_loopback_return_udp(&agg_blocks[dma_block_index], rx_payload_ptr, return_len,
+    net_loopback_return_udp(NULL, rx_payload_ptr, return_len,
         return_stream_offset, timestamp_lo, timestamp_hi, rx_meta0, rx_meta1);
-    net_loopback_release_dma_block_if_done();
 #endif
 }
 
@@ -1827,7 +1722,7 @@ static void net_start_dma_transfer(void)
     int status;
     net_agg_block_t *block;
 
-    if ((dma_busy != 0) || (dma_fatal_error != 0) || (loopback_rx_busy != 0)) {
+    if ((dma_busy != 0) || (dma_fatal_error != 0)) {
         return;
     }
 
@@ -1866,21 +1761,6 @@ static void net_start_dma_transfer(void)
         return;
     }
 
-    if (net_loopback_start_s2mm(block, ready_index, 0) != 0) {
-        UART_Printf("S2MM arm failed before MM2S block=%d payload=%lu transfer=%lu\r\n",
-            ready_index,
-            (unsigned long)block->payload_len,
-            (unsigned long)block->transfer_len);
-        NetStats_OnDmaError();
-        dma_fatal_error = 1;
-        dma_block_index = ready_index;
-        dma_busy = 0;
-        TxDone = 0;
-        TxError = 0;
-        net_update_queue_stats();
-        return;
-    }
-
     Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
     status = XAxiDma_SimpleTransfer(&AxiDma0, (UINTPTR)block->buffer_ptr,
         block->transfer_len, XAXIDMA_DMA_TO_DEVICE);
@@ -1895,8 +1775,6 @@ static void net_start_dma_transfer(void)
         dma_busy = 0;
         TxDone = 0;
         TxError = 0;
-        loopback_rx_busy = 0;
-        loopback_rx_done_for_current = 1;
         net_update_queue_stats();
         return;
     }
@@ -2071,7 +1949,8 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
         loopback_return_port = port;
         loopback_return_peer_valid = 1;
         loopback_return_peer_locked = 1;
-        UART_Printf("RXCFG loopback peer port=%u\r\n", (unsigned)loopback_return_port);
+        UART_Printf("RXCFG loopback peer port=%u rx_mode=independent\r\n",
+            (unsigned)loopback_return_port);
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, 0U);
         pbuf_free(p);
         return;
@@ -2117,10 +1996,11 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
             loopback_return_port = port;
             loopback_return_peer_valid = 1;
         }
-        UART_Printf("UDP RX reset session=%u crc=%s rf_mode=%s\r\n",
+        UART_Printf("UDP RX reset session=%u crc=%s rf_mode=%s tx_mode=independent rx_registered=%d\r\n",
             (unsigned)current_session_id,
             (current_session_validate_crc != 0) ? "on" : "off",
-            (rf_retry_enabled != 0) ? "strict_retry" : "deliver_no_retry");
+            (rf_retry_enabled != 0) ? "strict_retry" : "deliver_no_retry",
+            loopback_return_peer_locked);
         net_send_ack(addr, port, header.seq, NET_ACK_STATUS_OK, 0U);
         pbuf_free(p);
         return;
@@ -2338,9 +2218,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
     rx_payload_diff_pass_count = 0U;
     dma_start_time = 0U;
     loopback_rx_start_time = 0U;
-    loopback_rx_last_wait_log_time = 0U;
     loopback_rx_busy = 0;
-    loopback_rx_done_for_current = 0;
 
     NetStats_Init();
     net_update_queue_stats();
@@ -2364,7 +2242,7 @@ int Net_RxInit(uint8_t *tx_buffer, uint32_t tx_buffer_capacity_bytes)
 #endif
 #endif
 #if NET_LOOPBACK_S2MM_DEBUG_ENABLE
-    UART_Printf("S2MM loopback debug ready, rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u stall_timeout_us=%lu\r\n",
+    UART_Printf("S2MM independent RX ready, arm_after=RXCFG rx_base=0x%08lX rx_bytes=%u log_first=%u log_interval=%u tx_stall_timeout_us=%lu\r\n",
         (unsigned long)RX_BUFFER_BASE,
         (unsigned)RX_TRANSFER_LENGTH_BYTES,
         (unsigned)NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS,
@@ -2384,6 +2262,7 @@ void Net_RxPoll(void)
     net_check_agg_timeout();
     net_check_ack_timeout();
     net_loopback_poll_s2mm();
+    net_loopback_ensure_s2mm();
 
     if (dma_fatal_error != 0) {
         return;
