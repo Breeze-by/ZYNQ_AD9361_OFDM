@@ -8,6 +8,7 @@ import random
 import socket
 import struct
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple
@@ -48,6 +49,7 @@ DEFAULT_BOARD_PORT = 5001
 DEFAULT_IDLE_FINISH_S = 10.0
 DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_SOCKET_BUFFER_BYTES = 16 * 1024 * 1024
+RECEIVER_RATE_WINDOW_S = 1.0
 
 
 @dataclass
@@ -396,6 +398,7 @@ class LoopbackReceiver:
         self._airv_diag_count = 0
         self._airv_wait_diag_offset = -1
         self._airv_chunk_bytes = 0
+        self._rate_samples = deque()
 
     def stop(self):
         self._stop_requested = True
@@ -421,9 +424,30 @@ class LoopbackReceiver:
     def _refresh_rates(self, stats: ReceiverStats, event_time: Optional[float] = None):
         if event_time is None:
             event_time = time.time()
-        elapsed = max(event_time - stats.started_at, 1e-6)
-        stats.rate_kib_s = (stats.received_bytes / 1024.0) / elapsed
-        stats.packet_rate_s = stats.packets / elapsed
+        current_sample = (event_time, stats.received_bytes, stats.packets)
+        if not self._rate_samples or self._rate_samples[-1] != current_sample:
+            self._rate_samples.append(current_sample)
+
+        cutoff = event_time - RECEIVER_RATE_WINDOW_S
+        while len(self._rate_samples) >= 2 and self._rate_samples[1][0] <= cutoff:
+            self._rate_samples.popleft()
+
+        if len(self._rate_samples) < 2:
+            stats.rate_kib_s = 0.0
+            stats.packet_rate_s = 0.0
+            return
+
+        base_time, base_bytes, base_packets = self._rate_samples[0]
+        elapsed = event_time - base_time
+        if elapsed <= 0.0:
+            stats.rate_kib_s = 0.0
+            stats.packet_rate_s = 0.0
+            return
+
+        stats.rate_kib_s = (
+            max(stats.received_bytes - base_bytes, 0) / 1024.0
+        ) / elapsed
+        stats.packet_rate_s = max(stats.packets - base_packets, 0) / elapsed
 
     def _emit_progress(self, callback, stats: ReceiverStats, force: bool = False):
         now = time.time()
@@ -1147,6 +1171,8 @@ class LoopbackReceiver:
                         data, _addr = sock.recvfrom(4096)
                     except socket.timeout:
                         now = time.time()
+                        if last_payload_time > 0.0:
+                            self._emit_progress(callback, stats)
                         if (last_payload_time > 0.0 and self.config.idle_finish_s > 0.0 and
                             (now - last_payload_time) >= self.config.idle_finish_s):
                             if self._save_if_ready(stats, callback, force=True):
@@ -1159,8 +1185,14 @@ class LoopbackReceiver:
 
                     packet_type, packet = parse_udp_packet(data)
                     if packet_type == "loopback":
+                        payload_time = time.time()
+                        if last_payload_time == 0.0:
+                            self._rate_samples.append(
+                                (payload_time, stats.received_bytes, stats.packets)
+                            )
+                            self._last_progress_emit = payload_time
                         self._process_loopback(packet, stats, callback)
-                        last_payload_time = time.time()
+                        last_payload_time = payload_time
                         self._emit_progress(callback, stats)
                         if self._save_if_ready(stats, callback):
                             if self.config.stop_after_save:

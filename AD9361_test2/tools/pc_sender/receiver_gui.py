@@ -233,7 +233,7 @@ class ReceiverGui:
             ("Highest", self.highest_var),
             ("Packets", self.packet_var),
             ("Blocks", self.block_var),
-            ("Rate", self.rate_var),
+            ("RX Rate (1s)", self.rate_var),
             ("CRC Errors", self.crc_var),
             ("Length Errors", self.len_var),
             ("Gaps", self.gap_var),
@@ -289,13 +289,13 @@ class ReceiverGui:
 
         rate_frame = ttk.Frame(grid)
         rate_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        ttk.Label(rate_frame, text="RX KiB/s").pack(anchor=tk.W)
+        ttk.Label(rate_frame, text="RX KiB/s (last 1s)").pack(anchor=tk.W)
         self.rate_chart = Sparkline(rate_frame, height=100, line_color="#2E7D32", unit="KiB/s")
         self.rate_chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
 
         packet_frame = ttk.Frame(grid)
         packet_frame.grid(row=0, column=1, sticky="nsew")
-        ttk.Label(packet_frame, text="Packets/s").pack(anchor=tk.W)
+        ttk.Label(packet_frame, text="Packets/s (last 1s)").pack(anchor=tk.W)
         self.packet_chart = Sparkline(packet_frame, height=100, line_color="#1976D2", unit="pkt/s")
         self.packet_chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
 

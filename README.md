@@ -549,6 +549,8 @@ Test Bytes              64 MiB 或 256 MiB
 
 接收 GUI 主窗口的 Network/Output 参数和 Metrics 使用双列紧凑布局；下方 Charts 与 Event Log 之间的横向分隔条可以上下拖动。需要重点看串口/接收日志时，可向上拖动分隔条扩大 Event Log；AIRV 图像继续显示在独立 `AIRV Preview` 窗口中，不占主窗口日志空间。
 
+接收 GUI 的 `RX Rate (1s)`、`RX KiB/s (last 1s)` 和 `Packets/s (last 1s)` 都使用最近 1 秒滑动窗口，只统计该窗口内新增的 loopback payload 和 UDP 包数。点击 Start 后等待 IPCFG/RXCFG 或等待第一批数据的时间不进入速率分母；停止收包后，指标会在约 1 秒内回落到 `0`。这表示近期接收速率，不是从启动至今的累计平均值。
+
 接收 GUI 入口：
 
 ```bash

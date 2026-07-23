@@ -23,6 +23,7 @@
 - AIRV 流中间出现完整 chunk 级缺口时，接收器会在下一段通过 chunk 对齐和 AIRV magic 校验后打印 `VIDEO_DIAG gap_skip ...`，只丢弃跨缺口未完成帧并继续按序交付后续完整帧；连续 3 次解码失败才等待 keyframe。`VIDEO stream_gap=...` 累计跳过字节。AIR0 不跳过流中缺口。
 - AIRV 接收 GUI 每两秒最多输出 `VIDEO_PREVIEW input/backlog/drops/decoded/rendered/decoder_errors/waiting_key/images/skipped/error`，结束时输出 `VIDEO_PREVIEW_DONE`；逐分片、逐坏帧日志已关闭，用周期 `VIDEO` 和最终汇总看 CRC/丢帧，避免日志影响处理性能。
 - 接收 GUI 主窗口已改为紧凑双列布局：Network/Output 参数和 Metrics 都按两列排列；Charts 与 Event Log 位于可上下拖动的纵向分隔区，避免顶部字段把日志挤出窗口。AIRV Preview 仍是独立窗口。
+- 接收 GUI 的 `RX Rate (1s)`、RX KiB/s 图和 Packets/s 图使用最近 1 秒滑动窗口，按窗口内累计字节/包数差值计算；不得再改回从点击 Start 起算的累计平均值。第一批数据前不出速率点，停止收包约 1 秒后应回落到 0。
 - 发送 GUI 也已改为紧凑布局：Source/Network/Metrics 尽量按双列排列，Charts 与 Event Log 位于可上下拖动的纵向分隔区；默认窗口和最大化窗口都应保留两者的可见空间。
 - 当前 SDK 默认 `APP_RX_SOURCE=APP_RX_SOURCE_AD9361`，走真实 AD9361 TX -> SMA -> AD9361 RX 链路；PL 数字回环保留为 `APP_RX_SOURCE_DIGITAL_LOOPBACK` 诊断选项。启动日志必须打印当前 RX source。板级调试继续分阶段做；先加可观察日志，让用户上板跑并回传串口输出，再根据日志继续改。
 - 板端每次上电仍以 `192.168.1.50/24` 启动，接收 GUI 支持在 RXCFG 前通过全局广播发送 `IPCFG`，把本次运行的板端 IP/掩码/网关切换到另一网段；配置不写 flash，重启恢复 `192.168.1.50`。双网卡电脑必须把接收 GUI 的 `Bind IP` 明确填成直连 Zynq 的 PC 网卡地址，不能用 `0.0.0.0`，否则无法保证广播从正确网卡发出。新电脑使用 `Bind IP=192.168.2.101`、`Board IP=192.168.2.50`、`Board Netmask=255.255.255.0`、`Board Gateway=0.0.0.0`，勾选 `Configure Board IP by broadcast` 和 `Register RX target`；发送 GUI `Target IP=192.168.2.50`。旧电脑仍可使用 `192.168.1.101 -> 192.168.1.50`，无需改板端默认代码。
