@@ -133,9 +133,9 @@ Gateway  192.168.1.1
 UDP port 5001
 ```
 
-以上是每次上电后的默认地址。为了兼容不同直连网段，接收 GUI 可以在注册回传目标前发送全局 UDP 广播 `IPCFG`，调用板端 `netif_set_addr()` 临时修改 IP、掩码和网关。该设置只在本次上电有效，不写 flash；板子复位后仍回到 `192.168.1.50/24`，所以原来的电脑和已有 ELF 使用习惯不受影响。
+以上是每次上电后的默认地址。为了兼容不同直连网段，接收 GUI 可以在注册回传目标前发送全局 UDP 广播 `IPCFG`，调用板端 `netif_set_addr()` 临时修改 IP、掩码和网关；发送 GUI 也可以在建立发送 session 前独立广播相同的 `IPCFG`。发送 GUI 只改板端网络参数，不发送 `RXCFG`，不会注册或覆盖回传目标。该设置只在本次上电有效，不写 flash；板子复位后仍回到 `192.168.1.50/24`，所以原来的电脑和已有 ELF 使用习惯不受影响。
 
-板端只在 DMA、S2MM 和聚合队列均空闲时接受 IPCFG。接收 GUI 必须先绑定到直连 Zynq 的 PC 网卡地址，再向 `255.255.255.255:5001` 发送配置；板端切换地址后从新地址 ACK，然后 GUI 再向新地址发送普通 RXCFG。双网卡电脑不要使用 `Bind IP=0.0.0.0` 做 IPCFG，否则 Windows 可能从连接互联网的另一张网卡发送广播。
+板端只在 DMA、S2MM 和聚合队列均空闲时接受 IPCFG。执行改址的 GUI 必须先绑定到直连 Zynq 的 PC 网卡地址，再向 `255.255.255.255:5001` 发送配置；板端切换地址后从新地址 ACK。接收 GUI 随后向新地址发送 RXCFG，发送 GUI 则直接建立发送 session。双网卡电脑不要使用 `Bind IP=0.0.0.0` 做 IPCFG，否则 Windows 可能从连接互联网的另一张网卡发送广播。
 
 两台电脑的推荐配置：
 
@@ -144,7 +144,7 @@ UDP port 5001
 新电脑：PC/Zynq 网卡 192.168.2.101/24 -> Board IP 192.168.2.50
 ```
 
-新电脑接收 GUI 启动并看到 `IPCFG applied ...`、`RX target registered ...` 后，应能 `ping 192.168.2.50`；随后发送 GUI 的 `Target IP` 也必须使用 `192.168.2.50`。
+新电脑只承担接收时，由接收 GUI 完成 IPCFG 和 RXCFG；只承担发送时，由发送 GUI 自己完成 IPCFG，不需要临时启动接收 GUI。两种情况下都应能在改址后 `ping 192.168.2.50`。
 
 正常网络启动日志应包含：
 
@@ -404,11 +404,17 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 
 发送 GUI 的 Source、Network and Sender、Metrics 已使用紧凑双列布局；下方 Charts 与 Event Log 位于可上下拖动的纵向分隔区。普通窗口和最大化窗口都会保留图表、日志的可见空间，需要重点查看其中一项时可拖动分隔条调整高度。
 
+发送 GUI 的 `Target IP` 是改址后的板端地址；`PC Bind IP` 是本机直连 Zynq 的网卡地址。勾选 `Configure Board IP by broadcast` 后，发送程序会先用 `PC Bind IP` 定向选择网卡并广播 IPCFG，成功后所有 session reset、数据和 ACK socket 也继续绑定该网卡。直连板卡的 `Board Gateway` 推荐保持 `0.0.0.0`。不勾选时兼容原有行为，板端仍使用上电默认地址。
+
 常用参数：
 
 ```text
 --ip                    Zynq IP，默认工程应使用 192.168.1.50
 --port                  UDP 端口，默认 5001
+--bind-ip               直连 Zynq 的 PC 网卡地址
+--configure-board-ip    发送前广播 IPCFG
+--board-netmask         IPCFG 写入的板端掩码
+--board-gateway         IPCFG 写入的板端网关；直连推荐 0.0.0.0
 --test-size             生成测试数据字节数
 --file                  从文件读取 payload
 --chunk-size            每个 UDP wire payload 字节数，默认 1440
@@ -581,7 +587,7 @@ Raw Expected        仅 raw 模式使用的期望连续字节数；AIR0 模式�
 Idle Finish(s)      数据不完整时，收到最后一个回传分片后空闲多久判定结束
 ```
 
-单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。两台 PC 分别承担发送和接收时，在接收电脑先完成 IPCFG/RXCFG；发送电脑的 `Target IP` 必须与接收 GUI 的 `Board IP` 一致。
+单电脑测试时，在同一台电脑上先启动 `receiver_gui.py`，确认日志出现 `RX target registered ...`，再启动 `sender_gui.py` 发送文件。两台 PC、两块 Zynq 分别承担发送和接收时，每个 GUI 只配置自己直连的板卡：接收电脑由接收 GUI 完成 IPCFG/RXCFG；发送电脑由发送 GUI 完成 IPCFG 后开始传输。不要在发送电脑上借用默认配置的接收 GUI 改址，因为它还会发送 RXCFG；如果使用新版发送 GUI则完全不需要这样做。
 
 新电脑双网卡直连 Zynq 的完整 GUI 设置：
 
@@ -598,9 +604,13 @@ Receiver Idle Finish(s)              10
 
 Sender Target IP                     192.168.2.50
 Sender Target Port                   5001
+Sender PC Bind IP                    192.168.2.101
+Sender Board Netmask                 255.255.255.0
+Sender Board Gateway                 0.0.0.0
+Sender Configure Board IP            checked
 ```
 
-启动顺序必须是板卡上电并运行新版 ELF，再启动接收 GUI。接收 GUI 预期依次输出 `IPCFG applied board=192.168.2.50 ...` 和 `RX target registered at board 192.168.2.50:5001 ...`；板端串口预期输出 `IPCFG applied IP=192.168.2.50`、`IPCFG ready ...`、`RXCFG loopback peer ...`。确认这些日志后再启动发送 GUI。若 IPCFG 日志没有出现，首先检查 `Bind IP` 是否误填 `0.0.0.0`、网口2是否确实为 `192.168.2.101/24`，以及 Windows 防火墙是否允许该 Python 程序使用专用网络 UDP。
+启动顺序是两块板卡上电并运行新版 ELF，接收电脑先启动接收 GUI；它应依次输出 `IPCFG applied board=...` 和 `RX target registered ...`。随后发送电脑启动发送 GUI，点击 Start 后应先输出 `IPCFG applied board=192.168.2.50 ...; starting sender session`，再出现正常发送进度。两块板各自直连在隔离网段时可以使用相同的板端 IP；IP 地址只需与各自 PC 的直连网卡处于同一子网。若 IPCFG 日志没有出现，首先检查对应 GUI 的 Bind IP 是否误填 `0.0.0.0`、直连网卡是否确实配置为相应地址，以及 Windows 防火墙是否允许该 Python 程序使用专用网络 UDP。
 
 要恢复图片或视频，发送 GUI 使用 `Mode=File`，选择原始图片/视频文件；`Payload CRC32` 开启，`AIR0 Packet Header` 保持默认开启。AIR0 头已携带 `file_size`、`total_packets` 和 `file_crc32`，接收 GUI 的 `Raw Expected` 保持 `0` 即可，不需要预先填写文件大小。无失真且无缺口时，恢复出的文件会出现在 `output` 目录，扩展名会根据文件头自动推断为 `.png`、`.jpg`、`.mp4` 等常见格式。
 

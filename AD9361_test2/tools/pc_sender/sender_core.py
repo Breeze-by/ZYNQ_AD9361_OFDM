@@ -89,6 +89,10 @@ FFPROBE_TIMEOUT_S = 2.0
 class SenderConfig:
     ip: str
     port: int = 5001
+    bind_ip: str = "0.0.0.0"
+    configure_board_ip: bool = False
+    board_netmask: str = "255.255.255.0"
+    board_gateway: str = "0.0.0.0"
     chunk_size: int = DEFAULT_CHUNK_SIZE
     timeout: float = DEFAULT_ACK_TIMEOUT_S
     retries: int = DEFAULT_RETRIES
@@ -165,6 +169,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="UDP sliding-window sender for AD9361_test2")
     parser.add_argument("--ip", required=True, help="Zynq target IP address")
     parser.add_argument("--port", type=int, default=5001, help="Zynq UDP port")
+    parser.add_argument("--bind-ip", default="0.0.0.0",
+        help="explicit PC address of the Zynq-facing adapter")
+    parser.add_argument("--configure-board-ip", action="store_true",
+        help="broadcast IPCFG before starting the transfer")
+    parser.add_argument("--board-netmask", default="255.255.255.0",
+        help="netmask applied by IPCFG")
+    parser.add_argument("--board-gateway", default="0.0.0.0",
+        help="gateway applied by IPCFG; use 0.0.0.0 for a direct link")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
         help="payload bytes per UDP chunk; 1440 fits a 1500 byte MTU")
     parser.add_argument("--timeout", type=float, default=DEFAULT_ACK_TIMEOUT_S,
@@ -625,6 +637,105 @@ class UdpSender:
             if chunk_size <= AIRV_HEADER_BYTES:
                 raise ValueError(f"chunk_size must be greater than AIRV header size {AIRV_HEADER_BYTES}")
 
+        target_ip = ipaddress.IPv4Address(self.config.ip)
+        bind_ip = ipaddress.IPv4Address(self.config.bind_ip)
+        if self.config.configure_board_ip:
+            if bind_ip == ipaddress.IPv4Address("0.0.0.0"):
+                raise ValueError(
+                    "PC Bind IP must be the explicit Zynq-facing adapter address when "
+                    "Configure Board IP by broadcast is enabled"
+                )
+            board_network = ipaddress.IPv4Network(
+                f"{target_ip}/{self.config.board_netmask}",
+                strict=False,
+            )
+            if bind_ip not in board_network:
+                raise ValueError(
+                    f"PC Bind IP {bind_ip} and Target IP {target_ip} are not in "
+                    f"the same {board_network.netmask} subnet"
+                )
+            build_board_ip_config_packet(
+                1,
+                str(target_ip),
+                self.config.board_netmask,
+                self.config.board_gateway,
+            )
+
+    def _create_udp_socket(self) -> socket.socket:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if self.config.bind_ip != "0.0.0.0":
+            try:
+                sock.bind((self.config.bind_ip, 0))
+            except OSError as exc:
+                sock.close()
+                raise RuntimeError(
+                    f"local UDP bind failed for PC Bind IP {self.config.bind_ip}: {exc}. "
+                    "Check that this address is assigned to the Zynq-facing network adapter."
+                ) from exc
+        return sock
+
+    def _configure_board_ip(self, callback=None) -> bool:
+        if not self.config.configure_board_ip:
+            return False
+
+        seq = random.randint(1, 0xFFFFFFFF)
+        packet = build_board_ip_config_packet(
+            seq,
+            self.config.ip,
+            self.config.board_netmask,
+            self.config.board_gateway,
+        )
+        destination = ("255.255.255.255", self.config.port)
+        sock = self._create_udp_socket()
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.settimeout(0.35)
+            for attempt in range(4):
+                sock.sendto(packet, destination)
+                self._emit(callback, "ip_config_attempt", {
+                    "attempt": attempt + 1,
+                    "bind_ip": self.config.bind_ip,
+                    "board_ip": self.config.ip,
+                    "netmask": self.config.board_netmask,
+                    "gateway": self.config.board_gateway,
+                })
+                deadline = time.time() + 0.35
+                retry_after_busy = False
+                while time.time() < deadline:
+                    try:
+                        packet_type, parsed = recv_any_packet(sock)
+                    except socket.timeout:
+                        break
+                    if packet_type != "ack" or parsed["seq"] != seq:
+                        continue
+                    if parsed["status"] == ACK_STATUS_OK:
+                        self._emit(callback, "ip_configured", {
+                            "board_ip": self.config.ip,
+                            "netmask": self.config.board_netmask,
+                            "gateway": self.config.board_gateway,
+                        })
+                        return True
+                    if parsed["status"] == ACK_STATUS_BUSY:
+                        self._emit(callback, "ip_config_busy", {
+                            "attempt": attempt + 1,
+                        })
+                        retry_after_busy = True
+                        break
+                    status_name = ACK_STATUS_NAMES.get(
+                        parsed["status"], f"UNKNOWN_{parsed['status']}"
+                    )
+                    raise RuntimeError(f"board rejected IPCFG with {status_name}")
+                if retry_after_busy:
+                    time.sleep(0.05)
+        finally:
+            sock.close()
+
+        self._emit(callback, "ip_config_unconfirmed", {
+            "board_ip": self.config.ip,
+            "attempts": 4,
+        })
+        return False
+
     def _prepare_transfer(self, payload: bytes):
         protocol = self._transfer_protocol()
         self._active_source_size = len(payload)
@@ -675,6 +786,10 @@ class UdpSender:
         config = SenderConfig(
             ip=self.config.ip,
             port=self.config.port,
+            bind_ip=self.config.bind_ip,
+            configure_board_ip=self.config.configure_board_ip,
+            board_netmask=self.config.board_netmask,
+            board_gateway=self.config.board_gateway,
             chunk_size=self.config.chunk_size,
             timeout=self.config.timeout,
             retries=self.config.retries,
@@ -702,17 +817,21 @@ class UdpSender:
             file_id=self._active_file_id,
         )
 
-    def _begin_new_session(self):
+    def _begin_new_session(self, retry_limit: Optional[int] = None):
         destination = (self.config.ip, self.config.port)
         reset_timeout_s = min(max(self.config.timeout, 0.2), 1.0)
-        retries = max(self.config.retries, 3)
+        retries = (
+            max(self.config.retries, 3)
+            if retry_limit is None
+            else max(retry_limit, 3)
+        )
         session_id = random.randint(1, DATA_SESSION_MASK)
         with self._config_lock:
             validate_payload_crc = self.config.validate_payload_crc
             rf_retry = self.config.rf_retry
         packet = build_reset_packet(session_id, validate_payload_crc, rf_retry)
 
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        with self._create_udp_socket() as sock:
             sock.settimeout(reset_timeout_s)
             for attempt in range(retries + 1):
                 sock.sendto(packet, destination)
@@ -970,7 +1089,7 @@ class UdpSender:
         self._last_progress_emit = 0.0
         self._emit(callback, "start", {"total_size": stats.total_size, "config": self.config})
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = self._create_udp_socket()
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.config.socket_buffer_bytes)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.config.socket_buffer_bytes)
         sock.setblocking(False)
@@ -1132,7 +1251,14 @@ class UdpSender:
 
     def send(self, payload: bytes, callback: Optional[Callable[[str, dict], None]] = None) -> SenderStats:
         self._validate_config()
-        self._begin_new_session()
+        ip_configured = self._configure_board_ip(callback)
+        if self.config.configure_board_ip and not ip_configured:
+            # The board may have switched address even if its IPCFG ACK was lost.
+            # Probe the requested address briefly, but do not wait for the normal
+            # potentially large per-chunk retry budget when IPCFG did not confirm.
+            self._begin_new_session(retry_limit=3)
+        else:
+            self._begin_new_session()
         payload = self._prepare_transfer(payload)
 
         if self.config.throughput_mode:
@@ -1152,7 +1278,7 @@ class UdpSender:
         self._last_progress_emit = 0.0
         self._emit(callback, "start", {"total_size": stats.total_size, "config": self.config})
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = self._create_udp_socket()
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, self.config.socket_buffer_bytes)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.config.socket_buffer_bytes)
         poll_timeout = min(max(self.config.timeout / 8.0, 0.01), 0.05)
@@ -1418,6 +1544,10 @@ def run_cli(args) -> int:
     sender = UdpSender(SenderConfig(
         ip=args.ip,
         port=args.port,
+        bind_ip=args.bind_ip,
+        configure_board_ip=args.configure_board_ip,
+        board_netmask=args.board_netmask,
+        board_gateway=args.board_gateway,
         chunk_size=args.chunk_size,
         timeout=args.timeout,
         retries=args.retries,

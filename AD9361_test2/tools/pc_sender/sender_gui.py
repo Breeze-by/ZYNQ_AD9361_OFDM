@@ -104,6 +104,10 @@ class SenderGui:
         self.file_info_var = tk.StringVar(value="No file selected")
         self.ip_var = tk.StringVar(value="192.168.1.50")
         self.port_var = tk.StringVar(value="5001")
+        self.bind_ip_var = tk.StringVar(value="0.0.0.0")
+        self.configure_board_ip_var = tk.BooleanVar(value=False)
+        self.board_netmask_var = tk.StringVar(value="255.255.255.0")
+        self.board_gateway_var = tk.StringVar(value="0.0.0.0")
         self.chunk_var = tk.StringVar(value=str(DEFAULT_CHUNK_SIZE))
         self.timeout_var = tk.StringVar(value=str(DEFAULT_ACK_TIMEOUT_S))
         self.retries_var = tk.StringVar(value=str(DEFAULT_RETRIES))
@@ -239,6 +243,9 @@ class SenderGui:
         fields = [
             ("Target IP", self.ip_var),
             ("Target Port", self.port_var),
+            ("PC Bind IP", self.bind_ip_var),
+            ("Board Netmask", self.board_netmask_var),
+            ("Board Gateway", self.board_gateway_var),
             ("Chunk Bytes", self.chunk_var),
             ("ACK Timeout(s)", self.timeout_var),
             ("Max Retries", self.retries_var),
@@ -265,25 +272,47 @@ class SenderGui:
             )
 
         option_row = (len(fields) + 1) // 2
+        primary_options = ttk.Frame(net_box)
+        primary_options.grid(
+            row=option_row, column=0, columnspan=4, sticky="ew", pady=(1, 0)
+        )
         ttk.Checkbutton(
-            net_box,
+            primary_options,
+            text="Configure Board IP by broadcast",
+            variable=self.configure_board_ip_var,
+        ).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            primary_options,
             text="AIR0 Packet Header",
             variable=self.air_protocol_var,
             command=self._update_air0_compat,
-        ).grid(row=option_row - 1, column=2, columnspan=2, sticky=tk.W)
-        ttk.Checkbutton(net_box, text="Throughput Mode", variable=self.throughput_mode_var,
-            command=self._update_throughput_mode).grid(row=option_row, column=0, columnspan=2, sticky=tk.W)
-        ttk.Checkbutton(net_box, text="Verbose Packet Events", variable=self.verbose_var).grid(
-            row=option_row, column=2, columnspan=2, sticky=tk.W
-        )
-        ttk.Checkbutton(net_box, text="Payload CRC32", variable=self.payload_crc_var).grid(
-            row=option_row + 1, column=0, columnspan=2, sticky=tk.W
+        ).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Checkbutton(
+            primary_options,
+            text="Throughput Mode",
+            variable=self.throughput_mode_var,
+            command=self._update_throughput_mode,
+        ).pack(side=tk.LEFT, padx=(12, 0))
+
+        secondary_options = ttk.Frame(net_box)
+        secondary_options.grid(
+            row=option_row + 1, column=0, columnspan=4, sticky="ew"
         )
         ttk.Checkbutton(
-            net_box,
+            secondary_options,
+            text="Verbose Packet Events",
+            variable=self.verbose_var,
+        ).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            secondary_options,
+            text="Payload CRC32",
+            variable=self.payload_crc_var,
+        ).pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Checkbutton(
+            secondary_options,
             text="RF Strict Match + Retry (max 3)",
             variable=self.rf_retry_var,
-        ).grid(row=option_row + 1, column=2, columnspan=2, sticky=tk.W)
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
         action_box = ttk.Frame(parent, padding=(8, 4))
         action_box.pack(fill=tk.X, pady=(6, 0))
@@ -502,6 +531,10 @@ class SenderGui:
                 "test_size": int(self.test_size_var.get().strip()),
                 "ip": self.ip_var.get().strip(),
                 "port": int(self.port_var.get().strip()),
+                "bind_ip": self.bind_ip_var.get().strip(),
+                "configure_board_ip": bool(self.configure_board_ip_var.get()),
+                "board_netmask": self.board_netmask_var.get().strip(),
+                "board_gateway": self.board_gateway_var.get().strip(),
                 "chunk_size": int(self.chunk_var.get().strip()),
                 "timeout": float(self.timeout_var.get().strip()),
                 "retries": int(self.retries_var.get().strip()),
@@ -552,6 +585,10 @@ class SenderGui:
             config = SenderConfig(
                 ip=params["ip"],
                 port=params["port"],
+                bind_ip=params["bind_ip"],
+                configure_board_ip=params["configure_board_ip"],
+                board_netmask=params["board_netmask"],
+                board_gateway=params["board_gateway"],
                 chunk_size=params["chunk_size"],
                 timeout=params["timeout"],
                 retries=params["retries"],
@@ -648,6 +685,7 @@ class SenderGui:
                     self._append_log(f"AIRV source file={actual_source_path}")
             self._append_log(
                 f"Start send target={config.ip}:{config.port} bytes={payload_len} "
+                f"bind={config.bind_ip} ipcfg={config.configure_board_ip} "
                 f"chunk={config.chunk_size} window={config.window_size} throughput={config.throughput_mode} "
                 f"{self._format_start_mode(config)} "
                 f"payload_crc={config.validate_payload_crc} air0={config.air_protocol} "
@@ -656,6 +694,38 @@ class SenderGui:
 
         if event_name == "start":
             self.progress_text_var.set(f"0 / {payload['total_size']} | ETA --:--")
+            return
+
+        if event_name == "ip_config_attempt":
+            self.status_text_var.set(f"IPCFG attempt {payload['attempt']}")
+            self._append_log(
+                f"IPCFG attempt={payload['attempt']} bind={payload['bind_ip']} "
+                f"board={payload['board_ip']} mask={payload['netmask']} "
+                f"gateway={payload['gateway']}"
+            )
+            return
+
+        if event_name == "ip_config_busy":
+            self.status_text_var.set("IPCFG board busy")
+            self._append_log(
+                f"IPCFG board busy on attempt {payload['attempt']}; retrying"
+            )
+            return
+
+        if event_name == "ip_configured":
+            self.status_text_var.set("IPCFG applied")
+            self._append_log(
+                f"IPCFG applied board={payload['board_ip']} mask={payload['netmask']} "
+                f"gateway={payload['gateway']}; starting sender session"
+            )
+            return
+
+        if event_name == "ip_config_unconfirmed":
+            self.status_text_var.set("IPCFG unconfirmed")
+            self._append_log(
+                f"IPCFG ACK not seen after {payload['attempts']} attempts; "
+                f"trying target {payload['board_ip']}"
+            )
             return
 
         if event_name == "progress":
