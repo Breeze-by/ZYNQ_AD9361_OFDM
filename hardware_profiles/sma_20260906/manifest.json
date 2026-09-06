@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "profile": "YunSDR320 SMA dual-board TX transport continuity experiment",
+  "date": "2026-09-06",
+  "toolchain": "Vivado / SDK 2018.3",
+  "part": "xc7z020clg400-2",
+  "firmware_source_commit": "5b457ba29e39a3b2a87ece1db37bd8b6ec1de20a",
+  "rf_arq": false,
+  "flash_or_sd_updated": false,
+  "production_timing_signoff": false,
+  "radio": {
+    "lo_hz": 2200000000,
+    "reference_hz": 26000000,
+    "sample_rate_hz": 40000000,
+    "lvds_data_clock_hz": 160000000,
+    "tx_board_attenuation_mdb": 25000,
+    "rx_board_own_tx_attenuation_mdb": 30000,
+    "rx_gain_mode": "MGC",
+    "rx_gain_db": 36,
+    "rx_clock_data_delay_readback": "0x05",
+    "tx_clock_data_delay_readback": "0x70",
+    "ofdm_regs_1_2_3": ["0x101", "0x00300000", "0x40"],
+    "legacy_phy_rate_mbps": 6,
+    "modulation": "BPSK",
+    "coding_rate": "1/2"
+  },
+  "transport": {
+    "tx_clock": "FCLK3 = 1000 MHz / (6 * 4)",
+    "rx_clock": "FCLK2 = 40 MHz",
+    "slcr_fclk3": "0x00400600",
+    "slcr_fclk2": "0x00500500",
+    "chunk_bytes": 1024,
+    "rate_limit_kib_s": 400,
+    "window_size": 1,
+    "payload_crc32": true
+  },
+  "sha256": {
+    "System_wrapper.bit": "b6bb2f00cae94a3c9dc7b11777e5d751c68bf6ba8c3c8a6d4d927003069fca71",
+    "System_wrapper.hdf": "7559f454942d7bd53be639c5ad3a1c61ee47927d1d8ff987576d5a65009cb120",
+    "System_wrapper.ltx": "1de66227f72bca7c0211f5280253dfd5462c39c1591e093045e0d86cc4c7dfc9",
+    "ps7_init.tcl": "b7703c580b8dc317ff40daf414101b11d7c7dbbd4548e4e8bb3e9476d1b94d66"
+  },
+  "both_new_hardware_tests": [
+    {"tag": "stage2-both-splitclock-random16m", "source_bytes": 16777216, "tx_packets": 17477, "rx_packets": 17413, "missing_packets": 64, "checked_bytes": 16715776, "bit_errors": 0, "pc_retries": 0},
+    {"tag": "stage2-both-splitclock-random32m", "source_bytes": 33554432, "tx_packets": 34953, "rx_packets": 34793, "missing_packets": 160, "checked_bytes": 33400832, "bit_errors": 0, "pc_retries": 0}
+  ],
+  "gui_test": {"tag": "stage2-delivered-profile-gui-rx", "tx_fragments": 3930, "rx_fragments": 3905, "assembled_frames": 284, "dropped_frames": 20, "decoded": 212, "rendered": 79, "fragment_crc_errors": 0, "frame_crc_errors": 0, "decoder_errors": 0, "preview_drops": 0, "hidden_diagnostic_window": true},
+  "snr_estimate": {"range_db": [38.02, 38.66], "method": "DC-removed power in three short received-IQ captures versus three separate idle captures", "samples_per_capture_approx": 102, "calibrated": false, "evm_based": false},
+  "limitations": [
+    "Zero errors among received payloads does not count missing packets as correct or establish lossless transfer.",
+    "Residual packet loss; no RF ACK or retransmission.",
+    "Full-design WNS -6.280 ns and WHS -1.721 ns; not timing-closed.",
+    "Legacy LVDS delay constraints and internal Fc_in_MHz=2400 still need alignment/validation against current software.",
+    "RSSI input is tied to zero; SNR is a short-window estimate, not calibrated input power or SINR.",
+    "The original project/default hardware platform is retained; use the matching download.tcl for this profile."
+  ]
+}

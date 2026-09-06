@@ -118,6 +118,25 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - 为降低 115200 UART 对 PS/lwIP/DMA 主循环的影响，当前默认不再打印前若干任意 S2MM 捕获的详细 dump，也不逐帧打印结构 reject。首 2 个真正通过 AIR0/AIRV 头 CRC 校验的捕获在下一次 S2MM 已 arm 后打印紧凑 `S2MM valid`；无效捕获每 10 秒最多汇总一行 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header/last_seq/seq_gap/seq_back`。无效路径不计算仅供详细诊断使用的近似 magic、payload CRC 和 watchdog dump。DMA/RF 错误与周期 STAT 仍保留，周期 STAT 也必须放在 S2MM 重装之后打印。
 - MM2S 启动前必须先 `OpenWifi_Tx_Rearm(payload_len)`，再调用 `net_configure_tx_frame()` 写最终 `tx_intf` 帧长、DMA word 数和 auto-start threshold。不要把 re-arm 放在配置之后；否则某些短帧长度会覆盖并清掉 auto-start enable，表现为 `S2MM wait ... txdone=0 rxdone=0`。
 
+## 2026-09-06 第二轮实验硬件配置
+
+- 当前两台在线板的实验配置来自 `hardware_profiles/sma_20260906/`：独立 FCLK3=41.667 MHz
+  驱动 TX DAC 搬运/FIFO3 写端及相应复位，RX FCLK2 保持 40 MHz，AD9361 仍是 40 MSPS / 160 MHz LVDS。
+  不要把这解释为修改 AD9361 采样率；不要把 RX FCLK2 也提高，该对照未正常收包。
+- 新 bitstream 已用 Vivado 2018.3 全量构建，SHA256 为
+  `B6BB2F00CAE94A3C9DC7B11777E5D751C68BF6BA8C3C8A6D4D927003069FCA71`。
+  原默认硬件平台和主工程保留，实验配置独立存放；用配套 `download.tcl` 下载本机原 ELF，
+  不要混用默认旧 bit / PS 初始化。没有写 flash/SD，也没有改 COMMON.c 或启用 RF 重传。
+- 两端新硬件 16+32 MiB 随机源共 52430 包、缺 224（约0.427%）；收到的 50,116,608 字节逐字节正确。
+  原时钟 8 MiB 有 6 个坏 payload / 15507 个 bit 错误；新配置缓解了包内错误，但不能宣称
+  整包丢失率显著改善、全文件无损或任意时长零误码。核心视频复测 3909/3930 分片、283 组帧、166 解码，CRC/解码异常 0。
+  最终配套下载脚本在双板重载后的隐藏 GUI 流程为 3905/3930 分片、284 组帧、212 解码、79 绘制，CRC/解码异常 0；不是原用户窗口的截图。
+- 短 I/Q 窗口粗估 SNR 38.02～38.66 dB，不是校准仪表、EVM/SINR 或真实 RSSI；RSSI 输入仍为 0。
+  全设计时序仍未收敛，LVDS 约束延时模型、内部 Fc=2400 与实际 LO=2200 的遗留差异仍待处理。
+  新时钟内部路径有余量不等于整个设计已通过时序签核。完整记录只维护根 README。
+- 额外包间隔、RX 增益30、DC watchdog关闭、重装前后100us等待均未显示改善，不保留。
+  `stage2-fastpl-p68-random8m` 的参数写入被脚本拒绝，实际仍为64，不能把该日志当68测试。
+
 ## 当前推荐 GUI 测试设置
 
 ```text

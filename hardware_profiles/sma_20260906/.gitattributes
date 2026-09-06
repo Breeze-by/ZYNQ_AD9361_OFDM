@@ -1,0 +1,5 @@
+# Preserve generated artifacts byte-for-byte for manifest SHA-256 checks.
+*.bit binary
+*.hdf binary
+*.ltx -text
+ps7_init.tcl -text
