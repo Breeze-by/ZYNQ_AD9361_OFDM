@@ -16,20 +16,20 @@
  * values aligned; changing only one of them breaks the custom PL unpacker.
  */
 #define OPENWIFI_REFERENCE_CLK_HZ  26000000UL
-#define OPENWIFI_CENTER_FREQ_HZ    2000000000ULL
+#define OPENWIFI_CENTER_FREQ_HZ    2200000000ULL
 #define OPENWIFI_SAMPLE_RATE_HZ    40000000U
 #define OPENWIFI_RX_BW_HZ          25215513U
 #define OPENWIFI_TX_BW_HZ          25215414U
 
 /*
- * Initial SMA-loopback values for an external 10 dB attenuator.
- * If no frame is detected, reduce on-chip TX attenuation one step at a time:
- * 60 -> 50 -> 40 -> 30 dB. Never use 0 dB for a direct cable connection.
+ * YunSDR 320 two-board SMA profile, tested with 1024-byte RF frames.
+ * Keep the tested TX attenuation; on-chip attenuation is not a substitute
+ * for checking the receiver input power when connecting boards by cable.
  */
-#define OPENWIFI_TX_ATT_MDB        30000U
-#define OPENWIFI_RX_GAIN_DB        20
+#define OPENWIFI_TX_ATT_MDB        25000U
+#define OPENWIFI_RX_GAIN_DB        36
+//#define OPENWIFI_RX_GAIN_MODE      RF_GAIN_FASTATTACK_AGC
 #define OPENWIFI_RX_GAIN_MODE      RF_GAIN_MGC
-
 struct ad9361_rf_phy *ad9361_phy;
 struct ad9361_rf_phy *ad9361_phy_b;
 uint64_t rfout;

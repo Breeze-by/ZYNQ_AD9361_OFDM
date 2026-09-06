@@ -67,7 +67,8 @@ DATA_FLAG_RF_RETRY = 0x2000
 DATA_SESSION_MASK = 0x1FFF
 LOOPBACK_FLAG_LAST_CHUNK = 0x0001
 
-DEFAULT_CHUNK_SIZE = 1440
+# Keep aligned with NET_OFDM_TARGET_PSDU_BYTES in the board firmware.
+DEFAULT_CHUNK_SIZE = 1024
 DEFAULT_WINDOW_SIZE = 1
 DEFAULT_ACK_TIMEOUT_S = 2.0
 DEFAULT_RETRIES = 200
@@ -178,7 +179,7 @@ def parse_args():
     parser.add_argument("--board-gateway", default="0.0.0.0",
         help="gateway applied by IPCFG; use 0.0.0.0 for a direct link")
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE,
-        help="payload bytes per UDP chunk; 1440 fits a 1500 byte MTU")
+        help="payload bytes per UDP chunk; default 1024 matches the board RF profile")
     parser.add_argument("--timeout", type=float, default=DEFAULT_ACK_TIMEOUT_S,
         help="ACK timeout in seconds")
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES,

@@ -24,6 +24,57 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
+## YunSDR 320 双板实测配置（2026-09-06）
+
+本次使用两块 YunSDR 320，经一根 SMA 线直连，没有外串固定衰减器。以下是该接线下
+实测的工作配置，不是所有板卡、频点和输入功率下的通用最佳值：
+
+| 参数 | 当前配置 |
+| --- | --- |
+| AD9361 LO / 采样率 | 2.2 GHz / 40 MSPS，保持原板上设置 |
+| 发射板 TX 衰减 | 25 dB；接收板自身 TX 的 30 dB 保留，不参与单向链路 |
+| RX 增益模式 / 增益 | MGC / 36 dB |
+| OFDM RF 检测 | reg1=`0x00000101`（short-sync 0.75），reg2=`0x00300000`（DC 48、RSSI 0），reg3=`64` |
+| PC Chunk Bytes / 板端 PSDU | 1024 / 1024 字节，AIR0/AIRV 有效分片最多 960 字节 |
+| Sender Rate Limit / Window Size | 400 KiB/s / 1 |
+| 校验及重传 | Payload CRC32 开，RF Strict Match + Retry 关 |
+
+RF 检测参数只作用于 `APP_RX_SOURCE_AD9361`，数字回环保留原来的检测配置。
+启动日志新增 `OFDM RX profile enable=0x00000101 power=0x00300000 plateau=64 psdu=1024`，
+同时核对 AD9361 的增益、衰减读回以及 `UDP RX ready` 中的 block/stride=1024。
+本次修改是 PS 初始化参数及 PC 默认值，不需要重新综合 FPGA。
+
+定位记录：旧 1440 字节配置中，降低发送速率或只提高接收增益，仍可观察到长帧尾部
+payload CRC 错误；不能据此把问题简单归结为发射衰减或主机发得太快。
+缩短为 1024 字节并调整检测参数后，128 KiB AIR0 曾完成 137/137 包、整文件 CRC 通过。
+固化前两轮原始 H.264（304 帧）测试分别收到 3916/3930、3913/3930 个 RF 分片，
+解码 223、250 帧，两轮分片 CRC、整帧 CRC 和解码错误均为 0。
+这些结果说明视频解码路径已打通，但仍有少量 RF 分片丢失；长帧损坏的底层原因尚未完全定位，
+不能把当前配置表述为“无丢包”或“精确视频文件传输”。AIRV 仍不具备跨板 ACK/重传/FEC。
+
+源码固化、SDK 2018.3 重新编译并经 JTAG 重新配置 bit/下载 ELF 后，两端 36 项 Python
+回归测试全部通过，启动寄存器读回与上表一致。复测结果如下；原视频仍为 304 帧：
+
+| 固化后测试 | 接收分片 / 发送分片 | 视频解码 | 视频分片 / 整帧 CRC 错误 |
+| --- | --- | --- | --- |
+| 1024 字节，接收核心 + PyAV | 3911 / 3930 | 235 帧 | 2 / 2 |
+| 1024 字节，ReceiverGui 完整预览流程 | 3914 / 3930 | 275 帧，Tk 绘制 85 帧 | 4 / 4 |
+| 768 字节对照，仍用 1024 字节容量固件 | 5287 / 5308 | 199 帧 | 1 / 1 |
+
+三轮解码异常计数均为 0，但偶发 payload CRC 错误仍存在，不能用解码异常为 0 推断视频无损。
+768 对照的实际吞吐降至约 282 KiB/s，未显示总体收益，因此保留 1024 默认值。
+固化后的 128 KiB AIR0 复测收到 135/137 包，收到的 payload CRC 均正确，但文件不完整；
+前面单轮 137/137 的成功不代表稳定的精确文件传输能力。GUI 测试通过临时诊断窗口执行了
+原 ReceiverGui、PyAV、ImageTk/canvas 代码，不是对用户桌面原有窗口的远程截图；测试窗口已关闭。
+测试日志及修改前源码/ELF 备份位于两台电脑 `%TEMP%/ad9361-diag-20260906/` 下，
+备份子目录为 `pre-fix-backup`。此次只经 JTAG 下载到运行内存，没有更新 flash/SD 启动镜像；
+断电后需要再次下载新 ELF，或另行生成启动镜像。
+
+更新后需重新启动 Sender GUI，确认 `Chunk Bytes=1024`；旧窗口中的 1440 不会自动改变，
+新版板端会拒绝超过 1024 字节的 payload。接收 PC 的 Bind IP 必须是直连板卡网卡地址，
+本次实测为 `192.168.1.100`；发送 PC 为 `192.168.2.101`。先启动接收，再发送原 `.h264`。
+不要仅凭“没有图像”继续降低直连线的 TX 衰减；更换接线和射频参数前应核对输入功率。
+
 ## 目录结构
 
 ```text
@@ -106,7 +157,7 @@ AD9361_test2/tools/pc_sender/receiver_gui.py
 4. 将 2R2T LVDS 采样率配置为 `40 MSPS`（DATA_CLK 约 `160 MHz`），当前源码设置
    `tx_fb_clock_delay=7`，并在启动时强制校验 TX clock/data delay 寄存器读回为 `0x70`。
 5. 初始化 SCU GIC。
-6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `1440` 字节 PSDU 先 re-arm 一次。
+6. 初始化 `openofdm_tx`、`tx_intf` 静态寄存器，并用默认 `1024` 字节 PSDU 先 re-arm 一次。
 7. 根据 `APP_RX_SOURCE` 初始化 `openofdm_rx/rx_intf`，并打印实际 RX 数据源。
 8. 初始化 AXI DMA 和高电平敏感的 MM2S/S2MM 中断。
 9. 初始化 lwIP/GEM，使用上电默认 IPv4，并允许空闲时通过 IPCFG 临时改址。
@@ -155,7 +206,7 @@ IP  : 192.168.1.50
 MASK: 255.255.255.0
 GW  : 192.168.1.1
 UDP : listen on port 5001
-UDP RX ready, agg_blocks=1424 block_bytes=1440 stride=1472 total_bytes=2097152 max_payload=1440 rec_window<=64 ack=on_accept
+UDP RX ready, agg_blocks=2048 block_bytes=1024 stride=1024 total_bytes=2097152 max_payload=1024 rec_window<=64 ack=on_accept
 Loopback UDP return ready, magic=0x304B424C chunk_bytes=1200
 ```
 
@@ -316,27 +367,27 @@ TX_BUFFER_BASE                 0x01200000
 TX_BUFFER_WORD_COUNT           262144
 TX buffer size                 2097152 bytes
 
-NET_OFDM_TARGET_PSDU_BYTES     1440
+NET_OFDM_TARGET_PSDU_BYTES     1024
 NET_OFDM_MAX_DMA_WORDS         1022
 NET_OFDM_MAX_PSDU_BYTES        8176 bytes
 NET_DMA_CACHE_LINE_BYTES       64
-NET_AGG_BLOCK_BYTES            1440
-NET_AGG_BLOCK_STRIDE_BYTES     1472
-NET_AGG_BLOCK_COUNT            1424
-NET_DMA_QUEUE_CAPACITY         1424
-NET_AGG_MIN_FLUSH_BYTES        720
+NET_AGG_BLOCK_BYTES            1024
+NET_AGG_BLOCK_STRIDE_BYTES     1024
+NET_AGG_BLOCK_COUNT            2048
+NET_DMA_QUEUE_CAPACITY         2048
+NET_AGG_MIN_FLUSH_BYTES        512
 NET_AGG_FLUSH_TIMEOUT_US       15000
 NET_AGG_IDLE_FLUSH_TIMEOUT_US  100000
-NET_MAX_PAYLOAD_BYTES          1440
+NET_MAX_PAYLOAD_BYTES          1024
 ```
 
-每个聚合块的有效 payload 容量是 `1440` 字节，正好容纳默认一个 AIR0/AIRV wire chunk；不再把两个包合成约 2880 字节的长 OFDM 帧。这样一次空口帧损坏最多影响一个 AIR 包，而且每个 RF 帧开头都有独立头部。DDR slot stride 是 64 字节对齐后的 `1472` 字节，队列共 `1424` 个 slot，实际占用 `2096128` 字节。
+每个聚合块的有效 payload 容量是 `1024` 字节，正好容纳默认一个 AIR0/AIRV wire chunk；不再把两个包合成约 2880 字节的长 OFDM 帧。这样一次空口帧损坏最多影响一个 AIR 包，而且每个 RF 帧开头都有独立头部。DDR slot stride 是 64 字节对齐后的 `1024` 字节，队列共 `2048` 个 slot，实际占用 `2097152` 字节。
 
 聚合块提交条件：
 
-- 下一个 payload 放不进当前 `1440` 字节块时，先提交当前块；
-- 当前块已达到 `1440` 字节；
-- 当前块至少达到 `1500` 字节，且填充耗时达到 `15000 us`；
+- 下一个 payload 放不进当前 `1024` 字节块时，先提交当前块；
+- 当前块已达到 `1024` 字节；
+- 当前块至少达到 `512` 字节，且填充耗时达到 `15000 us`；
 - 当前块空闲达到 `100000 us`。
 
 提交时 `transfer_len = align8(payload_len)`，不足 8 字节补 0。DMA 启动前，`net_rx.c` 会：
@@ -348,20 +399,20 @@ NET_MAX_PAYLOAD_BYTES          1440
 5. 对 DMA buffer 执行 `Xil_DCacheFlushRange()`。
 6. 调用 `XAxiDma_SimpleTransfer(..., XAXIDMA_DMA_TO_DEVICE)`。
 
-默认 `Chunk Bytes=1440` 时：
+默认 `Chunk Bytes=1024` 时：
 
 ```text
 raw payload:
-  每包 wire payload = 1440 bytes
-  典型每个 DMA block = 2 * 1440 = 2880 bytes
+  每包 wire payload = 1024 bytes
+  每个满长 DMA block = 1 * 1024 = 1024 bytes
 
 AIR0 enabled:
-  每包 wire payload 仍为 1440 bytes
+  每包 wire payload 仍为 1024 bytes
   其中 64 bytes 是 PC-only AIR0 header
-  最多 1376 bytes 是原始文件/测试 payload
+  最多 960 bytes 是原始文件/测试 payload
 ```
 
-如果修改 PC chunk 大小，需要满足 PS 侧 `payload_len <= 1440`。开启 AIR0 时，chunk 必须大于 64 字节，实际业务 payload 为 `chunk_size - 64`。默认并推荐继续使用 `1440`，使一个 PC wire chunk 对应一个 OFDM PSDU，并避免普通 1500 MTU 下 IP 分片。
+如果修改 PC chunk 大小，需要满足 PS 侧 `payload_len <= 1024`。开启 AIR0 时，chunk 必须大于 64 字节，实际业务 payload 为 `chunk_size - 64`。默认并推荐继续使用 `1024`，使一个 PC wire chunk 对应一个 OFDM PSDU，并避免普通 1500 MTU 下 IP 分片。
 
 ## Cache 和 DMA 一致性
 
@@ -387,13 +438,13 @@ Xil_DCacheFlushRange((UINTPTR)block->buffer_ptr, block->transfer_len);
 命令行入口：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1440 --window-size 1 --target-rate-kib-s 400 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --test-size 67108864 --chunk-size 1024 --window-size 1 --target-rate-kib-s 400 --throughput-mode
 ```
 
 发送文件：
 
 ```bash
-python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1440 --window-size 1 --target-rate-kib-s 400 --throughput-mode
+python AD9361_test2/tools/pc_sender/send_data.py --ip 192.168.1.50 --file data.bin --chunk-size 1024 --window-size 1 --target-rate-kib-s 400 --throughput-mode
 ```
 
 GUI：
@@ -417,7 +468,7 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 --board-gateway         IPCFG 写入的板端网关；直连推荐 0.0.0.0
 --test-size             生成测试数据字节数
 --file                  从文件读取 payload
---chunk-size            每个 UDP wire payload 字节数，默认 1440
+--chunk-size            每个 UDP wire payload 字节数，默认 1024
 --window-size           滑动窗口，默认 1
 --throughput-mode       轻量吞吐输出
 --target-rate-kib-s     主机侧限速，默认 400 KiB/s，0 表示不限速
@@ -431,10 +482,10 @@ python AD9361_test2/tools/pc_sender/sender_gui.py
 
 ## PC-only AIR0 payload header
 
-AIR0 强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1440` 的 wire payload 封装成：
+AIR0 强协议只在 PC 端生效。发送 PC 默认把每个 `Chunk Bytes=1024` 的 wire payload 封装成：
 
 ```text
-64-byte AIR0 header + up to 1376-byte original file/test payload
+64-byte AIR0 header + up to 960-byte original file/test payload
 ```
 
 PL 不解析 AIR0；PS 不恢复文件，只读取捕获块起始 AIR0 头的 `packet_seq/chunk_bytes` 来恢复延迟 RF 帧的回传偏移，其余内容仍按普通 payload 转发。接收 PC 从 PL loopback 回传的字节流中自动识别 AIR0，按 `packet_seq/file_offset/file_size/payload_crc32/header_crc32/file_crc32` 恢复原始文件，并统计丢包、坏头、坏 payload CRC 和重复包。AIR0 本身不做 FEC、接收端 ACK 或分片级重传，只用于让接收端明确知道是否完整以及缺了哪些包；发送 GUI 可另行开启板端 `RF Strict Match + Retry (max 3)`，让整个 PS 聚合块在 RF/S2MM 失败后重发。
@@ -451,10 +502,10 @@ airv_video  实时视频组帧/统计模式
 raw         旧版原始字节流
 ```
 
-AIRV 使用 64 字节固定头，`Chunk Bytes=1440` 时每个 PC->PS wire payload 是：
+AIRV 使用 64 字节固定头，`Chunk Bytes=1024` 时每个 PC->PS wire payload 是：
 
 ```text
-64-byte AIRV header + up to 1376-byte encoded video frame fragment + optional zero padding
+64-byte AIRV header + up to 960-byte encoded video frame fragment + optional zero padding
 ```
 
 AIRV v2 头包含 `session_id/stream_id/packet_seq/frame_seq/frag_index/frag_count/frame_type/frame_size/fragment_offset/fragment_len/chunk_bytes/frame_crc32/fragment_crc32/pts_us` 等字段。每个分片都重复携带完整帧元数据，不要求先收到 `frag_index=0` 才能建立帧状态；全局 `packet_seq` 位于 64 字节头偏移 58，PS 用 `packet_seq * chunk_bytes` 计算绝对回传偏移，避免 TX/RX 解耦时误用当前 TX block 的偏移。发送端会把 H.264 Annex-B elementary stream 按 access unit 粗分帧；如果输入文件没有 Annex-B start code，则先作为单个 encoded frame 分片发送。AIRV v1 与 v2 不混用，升级后必须同时使用新版 ELF 和新版 PC 工具。
@@ -516,7 +567,7 @@ AIRV 的 `fps` 当前按 AIRV `pts_us` 帧间隔估算源视频帧率，不再�
 Sender Transfer Mode    airv_video
 Sender Mode             File
 Sender file             MP4 video or H.264 Annex-B elementary stream
-Chunk Bytes             1440
+Chunk Bytes             1024
 Window Size             1
 ACK Timeout(s)          2.0
 Max Retries             200
@@ -540,7 +591,7 @@ Payload CRC32           开启
 RF Strict Match + Retry 关闭
 AIR0 Packet Header      开启
 Verbose Packet Events   关闭
-Chunk Bytes             1440
+Chunk Bytes             1024
 Window Size             1
 ACK Timeout(s)          2.0
 Max Retries             200
@@ -629,7 +680,7 @@ Test Bytes                       16384
 Target IP                        192.168.2.50
 PC Bind IP                       192.168.2.101
 Configure Board IP by broadcast  checked
-Chunk Bytes                      1440
+Chunk Bytes                      1024
 Window Size                      1
 Rate Limit KiB/s                 50
 Throughput Mode                  checked
@@ -745,7 +796,7 @@ got_last    是否收到合法 LAST 包；LAST 必须出现在 `packet_seq == to
 
 ## AD9361 RF 回环与 S2MM 调试
 
-当前 DMA 调试使用 `NET_DMA_STALL_TIMEOUT_US = 20000`。此前 64 KiB AIR0 数字回环
+当前 DMA 调试保留板上原有 `NET_DMA_STALL_TIMEOUT_US = 50000`。此前旧配置的 64 KiB AIR0 数字回环
 精确恢复测试表明前 8 个块的主循环观察耗时约 `8.1～10.1 ms`，旧 `6000 us`
 阈值会误判正常 S2MM 为 stall；改为 `20000 us` 后所有块 `cmp=OK`，文件
 `65536/65536` 字节、48/48 AIR0 包和最终 CRC 全部正确。
@@ -760,7 +811,7 @@ NET_LOOPBACK_S2MM_DEBUG_ENABLE 1
 NET_LOOPBACK_UDP_RETURN_ENABLE 1
 RX_BUFFER_BASE                 0x01400000
 RX_TRANSFER_LENGTH_BYTES       8192
-NET_DMA_STALL_TIMEOUT_US       20000
+NET_DMA_STALL_TIMEOUT_US       50000
 NET_LOOPBACK_RX_PREFIX_BYTES   16
 NET_LOOPBACK_UDP_PAYLOAD_BYTES 1200
 NET_LOOPBACK_S2MM_LOG_FIRST_BLOCKS 0
@@ -782,8 +833,7 @@ RXCFG 注册接收目标后，S2MM 独立连续 arm。空口安静时它可以�
 
 接收目标通过 RXCFG 注册后，PS 会独立 arm 一个 `8192` 字节 S2MM 捕获窗口；
 它不依赖本板是否存在 MM2S 发送块，因而同一份 ELF 可用于单板自发自收和双板
-单向收发。简单模式 AXI DMA 只保留编程的窗口容量，没有独立的实际接收
-字节数；因此 S2MM 完成后，PS 会从 16 字节 PL 头中的 OFDM length 字段推导
+单向收发。当前应用在 S2MM 完成后，从 16 字节 PL 头中的 OFDM length 字段推导
 真实 payload 长度，并校验它不超过 OFDM/捕获窗口上限。magic 扫描、CRC、比较
 和 UDP 回传都被限制在该可信长度内，窗口尾部未写入的旧数据不再参与处理。
 头部长度非法的帧不会回传，并累计到 `S2MM RX stat` 的 `len`。
@@ -819,7 +869,7 @@ S2MM error id=1 irq=0x... sr=0x... cr=0x... buflen=... err_int=... err_slv=... e
 - 发送板的 `UDP RX reset ... tx_mode=independent`、`MM2S error`、`DMA stall timeout/recovery`、`STAT rate` / `STAT state` 行。
 - 接收 GUI 日志中的 `RX target registered ...`、`PROGRESS rx=... crc=... len=... gaps=...`、`INCOMPLETE ... missing_seq=...` 和 `DONE ... saved=... missing_seq=...` 行。
 
-如果发送板出现 `DMA stall timeout`，它现在表示 MM2S/TX stream 没有在 20 ms 内完成，不再表示接收板没有收到空口帧。接收板没有合法帧时看 `S2MM RX stat`：`captures/reject` 持续增加说明 PL 正在输出伪解码帧，`captures` 不增加则表示 S2MM 仍在等待 TLAST；若出现 `S2MM error`，再根据 `irq/sr` 检查 DMA、长度、TLAST 和 AXI-Stream 握手。
+如果发送板出现 `DMA stall timeout`，它现在表示 MM2S/TX stream 没有在 50 ms 内完成，不再表示接收板没有收到空口帧。接收板没有合法帧时看 `S2MM RX stat`：`captures/reject` 持续增加说明 PL 正在输出伪解码帧，`captures` 不增加则表示 S2MM 仍在等待 TLAST；若出现 `S2MM error`，再根据 `irq/sr` 检查 DMA、长度、TLAST 和 AXI-Stream 握手。
 
 ## 构建和运行
 

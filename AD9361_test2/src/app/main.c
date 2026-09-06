@@ -2,6 +2,7 @@
 #include "COMMON.h"
 #include "AXI_DMA.h"
 #include "net_init.h"
+#include "net_config.h"
 #include "net_rx.h"
 #include "PS_UART.h"
 #include "SCU_GIC.h"
@@ -27,7 +28,7 @@
 #define OPENOFDM_RX_BASE  0x40002000U
 #define RX_INTF_BASE      0x40003000U
 #define REG(base, n)      ((base) + ((n) * 4U))
-#define DEFAULT_PSDU_LEN_BYTES 3000U
+#define DEFAULT_PSDU_LEN_BYTES NET_OFDM_TARGET_PSDU_BYTES
 #define OPENOFDM_RX_STATE_HISTORY_ADDR REG(OPENOFDM_RX_BASE, 20)
 #define OPENOFDM_RX_WATCHDOG_EVENT_SEL_ADDR REG(OPENOFDM_RX_BASE, 17)
 #define OPENOFDM_RX_WATCHDOG_EVENT_COUNTER_ADDR REG(OPENOFDM_RX_BASE, 30)
@@ -37,10 +38,12 @@
 #define TX_INTF_CTS_WAIT_SIFS_TOP     (((16U * 10U) << 16) | (16U * 10U))
 #define TX_INTF_INTERRUPT_PHY_DONE    0x00000103U
 
-#define OPENOFDM_RX_ENABLE_RF         0x00000001U
+#define OPENOFDM_RX_ENABLE_RF         0x00000101U
 #define OPENOFDM_RX_ENABLE_LOOPBACK   0x00010001U
-#define OPENOFDM_RX_POWER_THRES_NO_RSSI ((127U << 16) | 0U)
-#define OPENOFDM_RX_MIN_PLATEAU 100U
+#define OPENOFDM_RX_POWER_THRES_RF    (48U << 16)
+#define OPENOFDM_RX_POWER_THRES_LOOPBACK (127U << 16)
+#define OPENOFDM_RX_MIN_PLATEAU_RF    64U
+#define OPENOFDM_RX_MIN_PLATEAU_LOOPBACK 100U
 #define OPENOFDM_RX_SIGNAL_LEN_CFG    ((4095U << 16) | (14U << 12) | 1U)
 #define OPENOFDM_RX_FFT_WIN_CFG       ((48U << 4) | 4U)
 #define OPENOFDM_RX_PHASE_ABS_TH      0x0001FFFFU
@@ -118,7 +121,7 @@ static void OpenWifi_TxStaticRegs_Init(void)
 /*
  * Call this once before each MM2S DMA transfer.
  * psdu_len is the real wireless PSDU length in bytes, not the large DDR buffer
- * capacity. For the current fixed test, use 3000.
+ * capacity. The default length follows NET_OFDM_TARGET_PSDU_BYTES.
  */
 void OpenWifi_Tx_Rearm(uint32_t psdu_len)
 {
@@ -138,9 +141,9 @@ void OpenWifi_Tx_Rearm(uint32_t psdu_len)
 
     /*
      * slv_reg2 and slv_reg17 must match this frame length.
-     * For psdu_len = 3000:
-     *   slv_reg2  = 2 * 3000 + 24 = 6024 = 0x1788
-     *   slv_reg17 = 3000 = 0x0BB8
+     * For psdu_len = 1024:
+     *   slv_reg2  = 2 * 1024 + 24 = 2072 = 0x0818
+     *   slv_reg17 = 1024 = 0x0400
      */
     Xil_Out32(REG(TX_INTF_BASE, 2), tx_intf_len_cfg);
     Xil_Out32(REG(TX_INTF_BASE, 17), psdu_len);
@@ -149,6 +152,8 @@ void OpenWifi_Tx_Rearm(uint32_t psdu_len)
 static void OpenWifi_RxRegs_Init(void)
 {
     uint32_t openofdm_rx_enable;
+    uint32_t openofdm_rx_power_thres;
+    uint32_t openofdm_rx_min_plateau;
     uint32_t rx_intf_source;
 
     /*
@@ -160,27 +165,31 @@ static void OpenWifi_RxRegs_Init(void)
     if (APP_RX_SOURCE == APP_RX_SOURCE_DIGITAL_LOOPBACK) {
         /* Digital loopback is deterministic, so disable the EQ watchdog. */
         openofdm_rx_enable = OPENOFDM_RX_ENABLE_LOOPBACK;
+        openofdm_rx_power_thres = OPENOFDM_RX_POWER_THRES_LOOPBACK;
+        openofdm_rx_min_plateau = OPENOFDM_RX_MIN_PLATEAU_LOOPBACK;
         rx_intf_source = RX_INTF_DIGITAL_LOOPBACK_ENABLE;
     } else {
         /* Real RF/AD9361 input keeps the equalizer watchdog enabled. */
         openofdm_rx_enable = OPENOFDM_RX_ENABLE_RF;
+        openofdm_rx_power_thres = OPENOFDM_RX_POWER_THRES_RF;
+        openofdm_rx_min_plateau = OPENOFDM_RX_MIN_PLATEAU_RF;
         rx_intf_source = RX_INTF_RF_VALID_DELAY_ENABLE;
     }
 
-    /* bit0 keeps force_ht_smoothing; bit16 disables the EQ watchdog. */
+    /* bit0: force_ht_smoothing; bit8: 0.75 short-sync; bit16: EQ WD off. */
     Xil_Out32(REG(OPENOFDM_RX_BASE, 1), openofdm_rx_enable);
     /*
      * The current wrapper has no usable RSSI feed, so threshold 0 keeps the
-     * detector active for both sources. The high DC watchdog threshold avoids
-     * false resets while the RF input/AGC is being validated.
+     * detector active for both sources. RF uses a DC watchdog threshold of
+     * 48 with a 64-sample plateau; digital loopback keeps its old profile.
      */
-    Xil_Out32(REG(OPENOFDM_RX_BASE, 2), OPENOFDM_RX_POWER_THRES_NO_RSSI);
-    /*
-     * slv_reg3 is sync_short min_plateau. The openofdm_rx testbench uses
-     * 100; leaving this at 0 makes the short-preamble detector window too
-     * short to reliably accumulate both positive and negative I samples.
-     */
-    Xil_Out32(REG(OPENOFDM_RX_BASE, 3), OPENOFDM_RX_MIN_PLATEAU);
+    Xil_Out32(REG(OPENOFDM_RX_BASE, 2), openofdm_rx_power_thres);
+    Xil_Out32(REG(OPENOFDM_RX_BASE, 3), openofdm_rx_min_plateau);
+    UART_Printf("OFDM RX profile enable=0x%08lX power=0x%08lX plateau=%lu psdu=%u\r\n",
+        (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 1)),
+        (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 2)),
+        (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 3)),
+        (unsigned int)DEFAULT_PSDU_LEN_BYTES);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 4), OPENOFDM_RX_SIGNAL_LEN_CFG);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 5), OPENOFDM_RX_FFT_WIN_CFG);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 18), OPENOFDM_RX_PHASE_ABS_TH);

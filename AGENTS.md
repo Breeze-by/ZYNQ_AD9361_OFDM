@@ -96,21 +96,23 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
-- 当前 `NET_AGG_BLOCK_BYTES = 1440`，使默认一个 AIR0/AIRV wire chunk 对应一个 OFDM PSDU，避免 2880 字节长帧一次损坏两个 AIR 包。DDR 中每个 slot 的有效 payload 是 1440 字节，`NET_AGG_BLOCK_STRIDE_BYTES = 1472`，队列深度为 1424；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
-- 默认 `Chunk Bytes = 1440` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1440`，其中 `64` 字节是 PC-only AIR0 头，最多 `1376` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后每包 wire payload 为原始文件/测试 payload。
-- AIRV 模式也保持 `Chunk Bytes = 1440`，每包 wire payload 为 `64` 字节 AIRV v2 头、最多 `1376` 字节 encoded video fragment 和零填充。v2 在偏移 58 增加全局 `packet_seq`，PS 校验头 CRC 后用 `packet_seq * chunk_bytes` 恢复延迟 RF 帧的 UDP `stream_offset`；必须同时使用新版 ELF 和新版 PC 工具。发送端选择 MP4 时会自动在同目录查找同名 `.h264/.264`；已有 sidecar 时直接复用，不再对 MP4 做耗时 `ffprobe`，日志显示 `fps_source=sidecar_fallback` 并按 30fps 写入 PTS；找不到 sidecar时用最多 2 秒的 `ffprobe` 探测帧率并调用 `ffmpeg` 生成同名 `.h264`。新生成文件固定约每秒一个 IDR、无 B 帧、带 AUD、重复 SPS/PPS；旧 sidecar 的 GOP 不受保证，需要统一恢复上限时删除后重新生成。不要再要求用户手工准备 H.264 裸流。
+- 2026-09-06 YunSDR 320 双板 SMA 直连（无外串固定衰减器）实测配置：LO 2.2 GHz、RX MGC 36 dB；发射板 TX 衰减 25 dB，接收板自身 TX 衰减 30 dB 保留。RF 模式的 OFDM reg1=0x101（short-sync 0.75）、reg2=0x00300000（DC 48/RSSI 0）、reg3=64，数字回环保留原检测值。1024 字节短帧显著降低视频 payload CRC 错误并成功解码；重编译下载后 GUI 流程实测 decoded=275、rendered=85、decoder_errors=0，但仍丢失 16/3930 个分片并有 4 次 fragment/frame CRC 错误，不能宣称无损或长帧根因完全修复。768 字节对照没有总体改善，不作为默认。不要再盲目降低衰减；没有实测依据不要改采样率、PL 时序或时钟延迟。
+- 用户已授权远程编译、JTAG 下载和链路测试，两台电脑使用 Vivado/SDK 2018.3；变更前备份各自源码和 ELF，保留各自 TX 衰减及无关未提交改动。不要把远程登录凭据写入仓库。新版默认分包改为 1024 后，应重启发送 GUI 或明确修改旧窗口的 Chunk Bytes；Rate Limit 保持用户要求的 400。
+- 当前 `NET_AGG_BLOCK_BYTES = 1024`，使默认一个 AIR0/AIRV wire chunk 对应一个 OFDM PSDU，避免 2880 字节长帧一次损坏两个 AIR 包。DDR 中每个 slot 的有效 payload 是 1024 字节，`NET_AGG_BLOCK_STRIDE_BYTES = 1024`，队列深度为 2048；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
+- 默认 `Chunk Bytes = 1024` 且发送 GUI 默认开启 `AIR0 Packet Header`。开启 AIR0 时，每包 wire payload 仍为 `1024`，其中 `64` 字节是 PC-only AIR0 头，最多 `960` 字节是原始文件/测试 payload。PS/PL 不解析 AIR0。关闭 AIR0 后每包 wire payload 为原始文件/测试 payload。
+- AIRV 模式也保持 `Chunk Bytes = 1024`，每包 wire payload 为 `64` 字节 AIRV v2 头、最多 `960` 字节 encoded video fragment 和零填充。v2 在偏移 58 增加全局 `packet_seq`，PS 校验头 CRC 后用 `packet_seq * chunk_bytes` 恢复延迟 RF 帧的 UDP `stream_offset`；必须同时使用新版 ELF 和新版 PC 工具。发送端选择 MP4 时会自动在同目录查找同名 `.h264/.264`；已有 sidecar 时直接复用，不再对 MP4 做耗时 `ffprobe`，日志显示 `fps_source=sidecar_fallback` 并按 30fps 写入 PTS；找不到 sidecar时用最多 2 秒的 `ffprobe` 探测帧率并调用 `ffmpeg` 生成同名 `.h264`。新生成文件固定约每秒一个 IDR、无 B 帧、带 AUD、重复 SPS/PPS；旧 sidecar 的 GOP 不受保证，需要统一恢复上限时删除后重新生成。不要再要求用户手工准备 H.264 裸流。
 - AIRV 接收组帧器按递增 `frame_seq` 输出，保留最多 3 帧乱序深度；缺片只丢所属帧并继续释放后续完整帧，坏 fragment/frame CRC 的完整帧仍交给 PyAV，允许局部马赛克。预览解码连续 1～2 次 P 帧异常继续尝试，连续 3 次才重置等待 IDR。不要把单帧缺失改回立即等待 keyframe。
 - AIRV 接收日志里的 `fps` 是按 AIRV `pts_us` 估算的源帧率，不是 Python 处理瞬时速度；`latency_ms` 是接收端本帧首片到组齐的最近一次可报告耗时，最终日志会保留上一条非零值以避免 idle finish 后显示 `0.0` 误导，`latency_avg_ms` / `latency_max_ms` 是组帧平均/最大耗时，不是严格端到端空口时延。
 - AIRV 预览依赖可选 `av` 和 `Pillow`。接收 GUI 会打开独立 `AIRV Preview` 窗口，默认 `1280x720`；后台线程解码，Tk 主线程约 30fps 刷新。预览输入队列最多缓存 240 个 assembled encoded frame，按 H.264 顺序送入解码器；队列满时才丢弃预览队列并等待下一帧 keyframe。`Preview Input`、`Preview Backlog`、`Preview Drops`、`Decoded`、`Displayed`、`Decoder Errors`、`Waiting Key` 是预览指标，其中 `Displayed` 表示实际渲染到 Tk 预览窗口的帧数；预览丢帧不代表 AIRV 传输丢包。
-- PS 侧 `NET_MAX_PAYLOAD_BYTES = 1440`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 1440。
+- PS 侧 `NET_MAX_PAYLOAD_BYTES = 1024`。开启 AIR0 时 `Chunk Bytes` 必须大于 64，且 wire payload 不能超过 1024。
 - 当前默认启用 I-cache 和 D-cache。MM2S 发送前必须 flush DMA buffer；S2MM 完成后必须 invalidate。不要把 DMA buffer slot 设成非 cache-line 对齐；旧 3000 字节 slot 的压测曾暴露相邻 slot 共享 cache line 后的偶发回传差异。
 - 当前 AD9361/PL 速率契约是 2R2T LVDS `40 MSPS`、DATA_CLK 约 `160 MHz`；当前源码设置 `tx_fb_clock_delay=7`，启动时强制校验寄存器读回 `0x70`。不要只在 SDK 改采样率或 delay 而不同时检查 PL bridge、XDC 和板上读回日志。
 - GUI 默认应开启 `Payload CRC32`。64 MiB/window 16 压测曾观察到少量 PC->PS `bad_crc`，开启后坏包会被 PS 拒收并由发送端重传；不开 CRC 时坏包可能进入 PL 并表现为接收端 CRC/内容错误。
 - 发送 GUI 的 `RF Strict Match + Retry (max 3)` 仍保留但默认关闭。独立 TX/RX 调度无法在两块板之间把接收帧对应到发射板当前 TX block，也没有反向 RF ACK，因此双板和通用模式测试必须保持该项关闭；合法 AIR0/AIRV 帧按自身头部序号回传，错误由 PC 接收端统计。后续若要恢复跨板 RF 重传，需要另行设计接收板到发射板的反馈协议，不能复用旧的本地 block compare。
 - 发送 GUI 的 `Busy Retries`、`Pending Retries`、`Recoverable Errors` 是可恢复重传统计，不是最终文件错误。判断文件是否完整，以发送端 `app_ack == total_size` 和接收端 `rx/high == file_size`、`gaps=0`、`crc=0`、`len=0` 为准。
 - OK ACK 默认合并：8 包或 1000 us；非 OK ACK 立即发送。
-- 当前已开启 PL->PS S2MM 调试和 UDP 回传，默认 `NET_LOOPBACK_RETURN_SOURCE=NET_LOOPBACK_RETURN_SOURCE_S2MM`：RXCFG 后独立 arm `8192` 字节 S2MM 捕获窗口，完成后扫描前 `2048` 字节 AIR0/AIRV magic，跳过 RX 前缀，并用 AIR0/AIRV v2 全局包序号恢复 `stream_offset` 后回传。RF 静默时 S2MM 可以无限等待，不再使用 20 ms TX watchdog误判；`NET_DMA_STALL_TIMEOUT_US = 20000` 只监控 MM2S。单板存在当前 TX block 时保留 compare 诊断，但 frame validity 不依赖 TX block。
-- `S2MM valid` 的 `wait_us` 表示 arm S2MM 到主循环观察到 `RxDone` 的时间，其中包含主循环调度延迟；独立 RX 空口静默不受 MM2S 的 20 ms watchdog 约束。
+- 当前已开启 PL->PS S2MM 调试和 UDP 回传，默认 `NET_LOOPBACK_RETURN_SOURCE=NET_LOOPBACK_RETURN_SOURCE_S2MM`：RXCFG 后独立 arm `8192` 字节 S2MM 捕获窗口，完成后扫描前 `2048` 字节 AIR0/AIRV magic，跳过 RX 前缀，并用 AIR0/AIRV v2 全局包序号恢复 `stream_offset` 后回传。RF 静默时 S2MM 可以无限等待，不再使用 50 ms TX watchdog误判；`NET_DMA_STALL_TIMEOUT_US = 50000` 只监控 MM2S。单板存在当前 TX block 时保留 compare 诊断，但 frame validity 不依赖 TX block。
+- `S2MM valid` 的 `wait_us` 表示 arm S2MM 到主循环观察到 `RxDone` 的时间，其中包含主循环调度延迟；独立 RX 空口静默不受 MM2S 的 50 ms watchdog 约束。
 - 上一轮 `NET_LOOPBACK_RETURN_SOURCE_TX_BUFFER` 诊断已证明 PC 发送、PS 接收/聚合、PS UDP 回传和 PC 接收恢复正常；该模式仅作为以后排查 PC/PS 侧时的临时开关，平时不要保持启用。
 - S2MM 收到的帧不一定对应本机当前 MM2S 聚合块；纯接收板没有 TX block 是正常情况。AIR0 和 AIRV v2 都用各自的全局 `packet_seq * chunk_bytes` 推导 UDP 回传 `stream_offset`；紧凑 `S2MM valid` 会报告类型、序号、偏移和长度，无效结构仅进入低频累计 `S2MM RX stat`。
 - 为降低 115200 UART 对 PS/lwIP/DMA 主循环的影响，当前默认不再打印前若干任意 S2MM 捕获的详细 dump，也不逐帧打印结构 reject。首 2 个真正通过 AIR0/AIRV 头 CRC 校验的捕获在下一次 S2MM 已 arm 后打印紧凑 `S2MM valid`；无效捕获每 10 秒最多汇总一行 `S2MM RX stat captures/valid/reject/len/no_magic/shift/header/last_seq/seq_gap/seq_back`。无效路径不计算仅供详细诊断使用的近似 magic、payload CRC 和 watchdog dump。DMA/RF 错误与周期 STAT 仍保留，周期 STAT 也必须放在 S2MM 重装之后打印。
@@ -121,7 +123,7 @@ AD9361_test2/tools/pc_sender/video_playback.py
 ```text
 Mode                    Test Data
 Test Bytes              16384
-Chunk Bytes             1440
+Chunk Bytes             1024
 Window Size             1
 ACK Timeout(s)          2.0
 Max Retries             200
@@ -139,7 +141,7 @@ Receiver Idle Finish(s) 10
 
 这一组用于小数据量回环确认。AIR0 模式下接收端会从 AIR0 头读取 `file_size`、`total_packets` 和 `file_crc32`，`Raw Expected` 保持 `0`，不要再要求用户预填文件大小。先启动接收 GUI并等待 `RX target registered ...`，再启动发送 GUI。预期接收板串口出现 `RXCFG loopback peer` 和 `S2MM valid ... type=AIR0`，接收 GUI `DONE` 行中 `rx=16384` 且 `crc=0 len=0 gaps=0`。
 
-双板第一轮独立调度验证使用同样的 `Test Bytes=16384`、`Chunk Bytes=1440`、`Window Size=1`，但先把 `Rate Limit KiB/s=50`，且必须关闭 `RF Strict Match + Retry`。发送 GUI 的 `Start send` 行必须显示 `rate_limit=50KiB/s`；发射板只运行发送 GUI，预期 reset 日志 `tx_mode=independent rx_registered=0`，不应再因未连接本地 RX 出现逐块 DMA stall/RF drop。接收板先确认 `RXCFG ... rx_mode=independent`，合法帧看 `S2MM valid`，噪声伪帧看低频 `S2MM RX stat`。让用户同时回传两块板串口和两个 GUI 日志。
+双板独立调度验证使用同样的 `Test Bytes=16384`、`Chunk Bytes=1024`、`Window Size=1`，`Rate Limit KiB/s=400`，且必须关闭 `RF Strict Match + Retry`。发射板只运行发送 GUI，预期 reset 日志 `tx_mode=independent rx_registered=0`，不应因未连接本地 RX 出现逐块 DMA stall/RF drop。接收板先确认 `RXCFG ... rx_mode=independent`，合法帧看 `S2MM valid`，噪声伪帧看低频 `S2MM RX stat`。后续对照实验可临时降速，但不要把降到 50 当作已验证修复。
 
 ## 当前推荐 AIRV GUI 测试设置
 
@@ -147,7 +149,7 @@ Receiver Idle Finish(s) 10
 Sender Transfer Mode    airv_video
 Sender Mode             File
 Sender file             MP4 video or H.264 Annex-B elementary stream
-Chunk Bytes             1440
+Chunk Bytes             1024
 Window Size             1
 ACK Timeout(s)          2.0
 Max Retries             200

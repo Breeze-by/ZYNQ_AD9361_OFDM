@@ -30,6 +30,28 @@ from receiver_core import LoopbackReceiver, ReceiverConfig, ReceiverStats
 
 
 class AirvProtocolTests(unittest.TestCase):
+    def test_default_short_rf_chunks_round_trip(self):
+        config = SenderConfig(ip="127.0.0.1")
+        self.assertEqual(config.chunk_size, 1024)
+        self.assertEqual(config.target_rate_kib_s, 400.0)
+        frame = b"\x00\x00\x00\x01\x65" + b"\x80" * 3000
+        stream = build_airv_stream(
+            frame, chunk_bytes=config.chunk_size, session_id=1, stream_id=2,
+        )
+        self.assertEqual(len(stream), 4 * config.chunk_size)
+        assembler = VideoStreamAssembler()
+        completed = []
+        for seq, offset in enumerate(range(0, len(stream), config.chunk_size)):
+            packet = stream[offset:offset + config.chunk_size]
+            header = parse_airv_header(packet[:AIRV_HEADER_BYTES])
+            self.assertEqual(header.packet_seq, seq)
+            self.assertEqual(header.chunk_bytes, config.chunk_size)
+            self.assertLessEqual(header.fragment_len, 960)
+            payload = packet[AIRV_HEADER_BYTES:AIRV_HEADER_BYTES + header.fragment_len]
+            completed.extend(assembler.process_fragment(header, payload, True))
+        self.assertEqual([item.payload for item in completed], [frame])
+        self.assertEqual(assembler.bad_frame_crc, 0)
+
     def test_receiver_emits_airv_layer_diagnostics(self):
         packet = build_airv_packet(
             b"abc",
@@ -485,7 +507,8 @@ class AirvProtocolTests(unittest.TestCase):
         sender._session_id = 1
         prepared = sender._prepare_transfer(h264_frames)
         first = parse_airv_header(prepared[:AIRV_HEADER_BYTES])
-        second = parse_airv_header(prepared[1440:1440 + AIRV_HEADER_BYTES])
+        chunk_bytes = sender.config.chunk_size
+        second = parse_airv_header(prepared[chunk_bytes:chunk_bytes + AIRV_HEADER_BYTES])
         self.assertEqual(first.pts_us, 0)
         self.assertEqual(second.pts_us, 40000)
         self.assertEqual((first.packet_seq, second.packet_seq), (0, 1))
