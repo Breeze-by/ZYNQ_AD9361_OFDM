@@ -197,6 +197,36 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - 恢复后隐藏GUI回归3908/3930分片、286组帧、190解码、62绘制；CRC/解码错误0，
   最终串口序号缺口22，仍非无损。原ELF、COMMON.c、net_rx.c、推荐bit哈希未改变。
 
+## 2026-09-06 第六轮：短前导符号比例边界
+
+- 用户本轮要求继续排查根因，未要求固化新修复。已抓到三段有效4096点失败前导：STF/LTF波形到达，
+  STF相关约0.9998，主状态停在SYNC_SHORT；窗口内ADC丢弃不变、输入间隔全为5个100MHz时钟。
+  三段I路正样本比例25%/25%/75%。源码 `sync_short` 的 `pos_count/neg_count > (min_plateau>>2)`
+  存在严格四分之一边界，是本轮重点证据；不要再只凭GUI猜增益或直接认定CFO过大。
+- 逐字提取原always块的控制单元仿真，以三段实测符号序列和16种起始位置复现边界：64时每种4/16通过，
+  63时16/16通过。相关判据固定通过，未回放真实乘法/FIFO/复位历史，不能夸成完整OFDM仿真。
+- 仅临时RX reg3切换：诊断ILA bit下64的8MiB缺28，63的8MiB缺0，回64缺25，再63的16MiB缺0。
+  两次63共24MiB/26216包，TX PHY、RX LTF/header/FCS/PC增量一致，落盘文件SHA256及逐字节比较通过。
+  63使符号计数门槛16→15，不是RF功率或CRC门限变化；也不能把以前60/68的结果当成测试过63。
+- 恢复原推荐bit/原ELF后，64的8MiB缺45，临时63的16MiB仍缺2/17477，收到内容正确。
+  改善明显但剩余少量异常尚未闭环；这两轮累计S2MM完成/valid/UDP成功/PC均26169，reject/error/stall0，
+  缺口47，不能将剩余2包归因于已观察到的PS长度拒绝。完整后续复测以根README为准。
+- 新仪表bit仅在临时stage6-hw-c：SHA F57F114114333A3BD4FCB83ED756CE8ACC8D5250F01E5AA5F1F22D42D834CDFD。
+  原41探针ILA保留，新增13端口89bit、100MHz4096深度；全局WNS=-9.374/WHS=-1.722ns未收敛，
+  新探针输入setup/hold+2.473/+0.172ns，调试配置通道仍-1.911ns，不推广该bit。
+- 本轮原40MHz再次测得板内AD9361/PS速率差+5.999ppm，994个真实ADC丢弃；63没有修复ADC接口。
+  `do_mult`控制仿真也复现4拍重入丢计算，但正常捕获无冲突，不是这三段STF漏检的直接证据。
+- `stage6-c-timeout8mb_timeout_*.csv`是空数据，不能引用成失败波形；后续加入FULL/4096行校验，
+  count128正向触发通过。真正三段失败文件是`stage6-c-shortwait8m_shortwait_0/1/2.csv`。
+- 本轮仅更新README/AGENTS；原COMMON.c/ELF/profile未改，没有写flash/SD或增加RF重传。
+  新63是已测试的诊断候选，不应未经说明改写当前推荐64。临时脚本、波形、日志以stage6前缀保存，
+  原文件备份pre-stage6-backup；两端原工程无关改动必须继续保留。
+- 原bit的63再测8MiB全文件一致，两轮63共24MiB/26216包缺2；63隐藏GUI视频3930/3930分片、
+  304组帧/解码、100绘制，CRC/decoder errors/preview drops0。不要把这说成任意时长无损。
+- 最后两板已恢复原推荐bit、原ELF、reg3=64，TX41.667/RX40MHz及reg1/2读回通过，COM均释放，
+  原GUI/Vivado/SDK保留。最终64隐藏GUI3920/3930、294组帧、282解码、98绘制，CRC/解码异常0。
+  本轮没有固化63；后续明确说明后可固化初始化参数，写reg3本身不需要重生成bitstream。
+
 ## 当前推荐 GUI 测试设置
 
 ```text
