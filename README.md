@@ -24,6 +24,48 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
+## 2026-09-07 第十一轮：已合并同步修复到两台原工程
+
+用户确认两台原Vivado工程已关闭，并明确要求合并。现在两台电脑
+`E:/by2025/AD9361_test_board/AD9361_test2`的原工程已经包含第十轮验证的两处
+`sync_long.v`历史采样修复；下文“候选未合并”是第十轮结束时的历史状态。
+
+本轮只合入功能RTL，将原`openofdm_rx`打包修订号由2更新到3，执行IP升级、BD校验、
+清除旧BD输出目标并重新生成全部输出文件。未加入第五/六轮的诊断总线或计数器，
+未改短同步检测器、plateau=63、RF功率、LO、TX41.667/RX40 MHz搬运时钟、采样率或SDK C程序。
+两端Vivado 2018.3的`check_syntax`均报告无错误/警告；BD/IP生成阶段仍有原工程的接口类型、
+XGUI文件缺失、FREQ_HZ格式等警告，语法检查通过不等于全设计时序签核通过。
+
+两端原工程实际引用的生成源码已与修复后的`ip_repo/openofdm_rx/src/sync_long.v`逐文本核对：
+发送电脑为`System/ipshared/9d9f/src/sync_long.v`，接收电脑为`System/ipshared/16f6/src/sync_long.v`。
+自动生成目录名不同本身不代表逻辑不同。综合/实现运行均已标记`NEEDS_REFRESH=1`，
+不能把界面保留的旧`write_bitstream Complete!`状态解释为已经生成包含修复的新bit。
+两台再用全新Vivado进程重新打开验证通过（`stage11-reopen.log`）：RX IP未锁定、生成XCI修订3、
+实际引用源码一致、BD校验和语法检查通过。BD与备份比较只有4条网络的端口列表顺序变化，
+连接集合、其余BD字段和时钟配置未变；component.xml除修订2→3之外文本不变。
+两台原RTL文件SHA256均为`505C27A91C3A921EB48D17AFDDC3B2F6D00B3A8E0F5ED9D3913FB72A1FD1B218`，
+归一化换行后为第十轮测试源`487EE27B…`；打包component SHA256为`95145A68E191BAB2A3F78646A2046C69620FC7E1D83A217B9CB6CFDB9E167FBA`。
+
+**本轮完成的是原工程合并及生成文件验证，没有重新综合/实现生成bitstream，没有导出覆盖SDK硬件平台，
+没有编译/替换ELF，也没有重新下载板卡。板上仍运行第十轮结束时恢复的用户原bit/ELF。**
+要让修复实际生效，请在两台原工程按GUI流程执行：Generate Bitstream → Export Hardware并勾选
+Include bitstream → SDK更新硬件平台/必要的BSP并重新构建 → 下载对应新bit和本机ELF。
+新的布局布线需要重新检查时序与链路，不能直接沿用诊断bit的200 MiB结果当作新正式bit的测试结果。
+
+可复现合并脚本为`hardware_profiles/sync_late_20260907/merge_into_project.tcl`，使用同目录补丁，
+参数为工程目录、全新的备份/报告目录、Git可执行文件。支持原修订2以及已合并修订3的刷新验证，
+会拒绝诊断修订，并在改写前备份原XPR/BD/RTL/component和现有RX XCI。
+脚本自动定位生成RX IP的目录后缀，并归一化补丁副本的CRLF/LF，避免跨电脑Git换行设置导致应用失败。
+首轮因这两项差异在远端源码改写前停止，修正脚本后的两机完整完成日志为`stage11-merge-b.log`，
+成功标记为`SYNC_LATE_ORIGINAL_MERGE_OK RX_IP_REVISION=3`，不要将首次预检查失败当作最终状态。
+
+两机源工程备份在`%TEMP%/ad9361-diag-20260906/stage11-original-merge-b/backup`；
+软件/原导出平台/文档另备份于`pre-stage11-merge`。已有用户BSP、HDF、COMMON和IDE未提交修改继续保留。
+本轮结束已逐项核对原main/COMMON/net_rx、ELF、平台bit/HDF/PS初始化与上述备份哈希一致。
+本地工作区同步了`ip_repo`的功能RTL和修订号，可复现脚本和文档也已同步；本地未安装Vivado，
+本地旧生成目录不作为验证对象，如在本地构建应运行同一脚本刷新输出；原生验证在两台远程原工程完成。
+PC收发工具36项单元测试通过。本轮没有新SNR/BER或上板传输测量。
+
 ## 2026-09-07 第十轮：长前导晚检容错修复（独立候选）
 
 本轮按用户要求验证同步晚检能否修复。结论不再只是波形位置推测：使用原RTL及原Xilinx IP

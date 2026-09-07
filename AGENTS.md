@@ -96,6 +96,19 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 第十一轮（2026-09-07）用户已关闭两台原Vivado并明确授权合并。两机原工程已包含第十轮prefill2功能RTL，
+  `openofdm_rx`原打包修订2→3，升级IP、重新生成BD输出、实际引用源码比对及check_syntax通过。
+  生成共享目录TX=9d9f、RX=16f6，目录名不同不代表逻辑不同；没有合入stage5诊断接口/计数器。
+  短同步器、63、RF、采样率、TX41.667/RX40时钟和SDK C/ELF都未改。第十轮“原工程尚未合并”现为历史状态。
+- 第十一轮只合并/刷新验证，没有重生成bit、导出SDK平台、编译ELF或下载板卡。synth_1/impl_1均NEEDS_REFRESH=1，
+  当前板上仍是第十轮恢复的用户新bit，不能告诉用户本轮补丁已经上板生效；需Generate Bitstream→匹配硬件导出→构建/下载再回归。
+  本地仅同步ip_repo源与修订号，旧生成目录未用Vivado刷新；本地构建前也须运行合并脚本。不要手动伪造生成产物或时序验收。
+- 新可复现脚本`hardware_profiles/sync_late_20260907/merge_into_project.tcl`会备份源文件并支持修订3刷新，
+  自动识别RX IP目录后缀、归一化补丁换行。成功日志stage11-merge-b.log；初次两机预检查失败发生在远端源码修改前。
+  原源文件备份stage11-original-merge-b/backup，软件/平台/文档备份pre-stage11-merge，均在两机ad9361-diag-20260906临时目录。
+  两机用户已有BSP/HDF/COMMON/IDE改动必须保留，提交只含本轮脚本/文档；36项PC单元测试通过。
+  全新Vivado进程重新打开复核通过：RX未锁定、XCI修订3、实际生成源一致、BD/语法校验通过。
+  BD差异仅4条net的端口排列顺序，连接集合和其他字段不变；main/COMMON/net_rx、ELF/bit/HDF/ps7_init与备份哈希一致。
 - 第十轮（2026-09-07）已用原RTL+原Xilinx IP行为模型回放三段失败/三段正常I/Q，
   在捕获short脉冲的边界驱动下复现LTF状态、检测周期和错误帧头。`sync_long.v`候选prefill2
   同时预填充32点相关历史、把跳过尾部写入环形RAM224～255；三例错误头均恢复11/1028，
