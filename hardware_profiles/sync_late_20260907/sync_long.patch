@@ -1,0 +1,52 @@
+--- a/ip_repo/openofdm_rx/src/sync_long.v
++++ b/ip_repo/openofdm_rx/src/sync_long.v
+@@ -248,12 +248,18 @@
+ wire s_axis_config_tready;
+ wire m_axis_data_tlast;
+ 
++// Preserve the skipped tail at negative ring-buffer addresses. For a late
++// STF detection the -fft_win_shift prefix of the first LTF FFT may precede
++// address zero. Without this history it would read stale/undefined RAM.
++wire [IN_BUF_LEN_SHIFT-1:0] capture_waddr =
++    (state == S_SKIPPING_TAIL) ? (num_sample - NUM_STS_TAIL) : in_waddr;
++
+ dpram  #(.DATA_WIDTH(32), .ADDRESS_WIDTH(IN_BUF_LEN_SHIFT)) in_buf (
+     .clock(clock),
+     .reset(reset_dot11),
+     .enable_a(1),
+     .write_enable(sample_in_strobe),
+-    .write_address(in_waddr),
++    .write_address(capture_waddr),
+     .write_data(sample_in),
+     .read_data_a(),
+     .enable_b(fft_start | fft_loading),
+@@ -371,6 +377,17 @@
+         end
+         num_input_avail <= num_input_produced - num_input_consumed;
+ 
++        // Keep the 32-sample correlator history warm during the skip states.
++        // The metric search and its address origin are deliberately unchanged.
++        // A late STF trigger must not discard the beginning of the first LTF
++        // merely because it arrives before S_WAIT_FOR_FIRST_PEAK.
++        if (sample_in_strobe && state <= S_WAIT_FOR_SECOND_PEAK) begin
++            cross_corr_buf[31] <= sample_in;
++            for (j = 0; j < 31; j = j+1) begin
++                cross_corr_buf[j] <= cross_corr_buf[j+1];
++            end
++        end
++
+         case(state)
+             S_SKIPPING_TAIL: begin
+                 // skip the tail of  short preamble
+@@ -532,11 +549,6 @@
+ task do_mult; begin
+     // cross correlation of the first 16 samples of LTS
+     if (sample_in_strobe) begin
+-        cross_corr_buf[31] <= sample_in;
+-        for (do_mult_i = 0; do_mult_i < 31; do_mult_i = do_mult_i+1) begin
+-            cross_corr_buf[do_mult_i] <= cross_corr_buf[do_mult_i+1];
+-        end
+-
+         sum_stage <= 0;
+         sum_i <= 0;
+         sum_q <= 0;
