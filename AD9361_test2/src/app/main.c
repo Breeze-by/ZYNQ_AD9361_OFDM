@@ -42,7 +42,12 @@
 #define OPENOFDM_RX_ENABLE_LOOPBACK   0x00010001U
 #define OPENOFDM_RX_POWER_THRES_RF    (48U << 16)
 #define OPENOFDM_RX_POWER_THRES_LOOPBACK (127U << 16)
-#define OPENOFDM_RX_MIN_PLATEAU_RF    64U
+/* sync_short derives both sign-count minima as min_plateau >> 2.
+ * RF plateau 63 therefore selects 15 (counts must be > 15), avoiding
+ * the strict quarter-count boundary observed with plateau 64/minimum 16.
+ * Keep the PL comparator and the digital-loopback profile unchanged.
+ */
+#define OPENOFDM_RX_MIN_PLATEAU_RF    63U
 #define OPENOFDM_RX_MIN_PLATEAU_LOOPBACK 100U
 #define OPENOFDM_RX_SIGNAL_LEN_CFG    ((4095U << 16) | (14U << 12) | 1U)
 #define OPENOFDM_RX_FFT_WIN_CFG       ((48U << 4) | 4U)
@@ -154,6 +159,7 @@ static void OpenWifi_RxRegs_Init(void)
     uint32_t openofdm_rx_enable;
     uint32_t openofdm_rx_power_thres;
     uint32_t openofdm_rx_min_plateau;
+    uint32_t openofdm_rx_plateau_readback;
     uint32_t rx_intf_source;
 
     /*
@@ -181,15 +187,21 @@ static void OpenWifi_RxRegs_Init(void)
     /*
      * The current wrapper has no usable RSSI feed, so threshold 0 keeps the
      * detector active for both sources. RF uses a DC watchdog threshold of
-     * 48 with a 64-sample plateau; digital loopback keeps its old profile.
+     * 48 with plateau 63; digital loopback keeps its old profile.
      */
     Xil_Out32(REG(OPENOFDM_RX_BASE, 2), openofdm_rx_power_thres);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 3), openofdm_rx_min_plateau);
-    UART_Printf("OFDM RX profile enable=0x%08lX power=0x%08lX plateau=%lu psdu=%u\r\n",
+    openofdm_rx_plateau_readback = Xil_In32(REG(OPENOFDM_RX_BASE, 3));
+    if (openofdm_rx_plateau_readback != openofdm_rx_min_plateau) {
+        App_Fatal("OFDM RX plateau readback", (int32_t)openofdm_rx_plateau_readback);
+    }
+    /* The sign minimum is derived from reg3, not a separate PL readback. */
+    UART_Printf("OFDM RX profile enable=0x%08lX power=0x%08lX plateau=%lu psdu=%u sign_min_derived=%lu\r\n",
         (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 1)),
         (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 2)),
-        (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 3)),
-        (unsigned int)DEFAULT_PSDU_LEN_BYTES);
+        (unsigned long)openofdm_rx_plateau_readback,
+        (unsigned int)DEFAULT_PSDU_LEN_BYTES,
+        (unsigned long)(openofdm_rx_plateau_readback >> 2));
     Xil_Out32(REG(OPENOFDM_RX_BASE, 4), OPENOFDM_RX_SIGNAL_LEN_CFG);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 5), OPENOFDM_RX_FFT_WIN_CFG);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 18), OPENOFDM_RX_PHASE_ABS_TH);

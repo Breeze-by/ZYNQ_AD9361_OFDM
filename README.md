@@ -24,12 +24,36 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
+## 当前固化配置：RF 短前导 plateau=63（2026-09-07）
+
+用户确认采用第六轮测试过的63。本次将 `AD9361_test2/src/app/main.c` 中
+`OPENOFDM_RX_MIN_PLATEAU_RF` 固化为 `63U`，每次新版程序初始化都会写入RX reg3并校验读回，
+不再依赖测试脚本临时改寄存器。`COMMON.c`、射频增益/衰减、搬运时钟、CRC和重传设置不变。
+
+| 接收模式 | reg3 / min_plateau | PL 自动派生 min_pos、min_neg | 原判据 |
+| --- | ---: | ---: | --- |
+| AD9361 RF（当前默认） | 63 | 15 | 正、负计数均须 >15，即至少16 |
+| PL 数字回环（保留原值） | 100 | 25 | 正、负计数均须 >25，即至少26 |
+
+门槛由原 `sync_short.v` 的 `min_plateau >> 2` 自动派生，无需另外写15或修改 `>` 比较器；
+也不能把数字回环门槛一起硬编码成15。启动日志应出现
+`OFDM RX profile enable=0x00000101 power=0x00300000 plateau=63 psdu=1024 sign_min_derived=15`；
+`sign_min_derived` 是从reg3读回值计算的派生门槛，不是独立内部计数器读回。
+
+继续使用原 `hardware_profiles/sma_20260906/` 配套 bit / PS 初始化及本机新版 ELF，
+无需重新Generate Bitstream。TX搬运41.667MHz、RX搬运40MHz、AD9361采样40MSPS、
+TX板衰减25dB、RX板自身TX衰减30dB、RX MGC36dB，以及Chunk1024 / Rate400 / Window1均不变。
+这是程序默认值固化，不是Flash/SD自启动镜像刷写；断电后仍按原流程下载新版ELF。
+第六轮的“恢复64、尚未固化”属于历史结束状态，已由本次源码固化取代；验证结果见第七轮记录。
+该硬件目录的 `manifest.json` 是第二轮（2026-09-06、plateau=64）的历史测试快照，
+不参与寄存器初始化；本次当前软件默认值以 `main.c` 和启动读回为准。
+
 ## 第一轮：YunSDR 320 双板实测配置（2026-09-06）
 
 本次使用两块 YunSDR 320，经一根 SMA 线直连，没有外串固定衰减器。以下是该接线下
-实测的工作配置，不是所有板卡、频点和输入功率下的通用最佳值：
+第一轮当时实测的工作配置，不是所有板卡、频点和输入功率下的通用最佳值；当前配置见上一节：
 
-| 参数 | 当前配置 |
+| 参数 | 第一轮配置 |
 | --- | --- |
 | AD9361 LO / 采样率 | 2.2 GHz / 40 MSPS，保持原板上设置 |
 | 发射板 TX 衰减 | 25 dB；接收板自身 TX 的 30 dB 保留，不参与单向链路 |
@@ -498,6 +522,60 @@ COM4/COM3已释放，原GUI/Vivado/SDK进程保留；本轮新增观察bit及全
 不能把视频组帧内部的`frag_missing=61`直接当作源分片全局缺失数。
 下一步若要固化改进，应在明确说明后采用经过测试的63，并继续长测与定位残余前级缺口；
 无需为“写reg3=63”本身重新生成bitstream，但不能用参数规避代替ADC接口和全设计时序修复。
+
+## 第七轮：固化63与自动派生计数门槛（2026-09-07）
+
+本轮按用户明确要求，将第六轮的63候选写入默认初始化。只修改 `src/app/main.c`：
+RF `OPENOFDM_RX_MIN_PLATEAU_RF=63U`，写入后核对reg3读回，并在启动日志附加
+`sign_min_derived=15`。原PL比较条件不变，正负计数都需要大于15；数字回环100/25保留。
+没有改 `COMMON.c`、PC协议、CRC/重传、采样率、搬运时钟、RF增益/衰减或任何RTL。
+
+两台电脑使用各自 SDK 2018.3 的正常工程make编译、链接新版ELF，并执行原推荐profile的
+`download.tcl` 下载匹配bit/PS初始化及新版ELF。启动串口和JTAG读回均确认：
+
+```text
+OFDM RX profile enable=0x00000101 power=0x00300000 plateau=63 psdu=1024 sign_min_derived=15
+RX reg3 = 0x0000003F
+TX FCLK3 = 41.667 MHz; RX FCLK2 = 40 MHz; AD9361 = 40 MSPS
+```
+
+新日志中的15是从reg3读回值右移2位计算，不是另一个可写寄存器或内部计数器测量值。
+下载后没有运行临时 `stage6_plateau.tcl` 改值，63完全由新版程序设置。
+发送板TX衰减25000mdB、接收板自身TX衰减30000mdB、RX MGC36dB、LO约2.2GHz、
+数字延迟RX0x05/TX0x70均与原配置一致。原36项PC单元回归通过；编译保留原驱动头文件声明和
+未使用调试函数警告，未为清除无关警告修改驱动/BSP。
+
+| 固件 | 新ELF SHA256 |
+| --- | --- |
+| 发送板（自身TX衰减25dB） | `764CF8860063D96DB607D64F5EF6DFE86F528CA76D79F50340E1F74F2B7F1C46` |
+| 接收板（自身TX衰减30dB） | `456100D66D21DF2AC3CF6F3A24E57B74379A3D6FE9717E910302EAB89398B633` |
+
+推荐bit SHA256仍为`B6BB2F00CAE94A3C9DC7B11777E5D751C68BF6BA8C3C8A6D4D927003069FCA71`，
+PS初始化SHA256仍为`B7703C580B8DC317FF40DAF414101B11D7C7DBBD4548E4E8BB3E9476D1B94D66`。
+本次没有生成新bit或刷写Flash/SD。源码/ELF默认值已固化，但断电后仍需原JTAG下载流程；
+若另有自启动需求，需要单独更新相应启动镜像，不能把旧启动介质误认为已更新。
+
+### 固化后的链路回归
+
+使用与前几轮相同的随机种子9361320、1024字节wire chunk、400KiB/s、Window1、
+PC→PS payload CRC开、RF重传关。首轮8MiB的SSH返回会话中断，重连后取得完整发送汇总、
+接收RESULT及WIRE_CHECK原始日志：发送8739包全部ACK，收到8734包，缺序号0、8、9、826、827，
+收到的8,383,808字节逐字节正确，错误bit0；文件不完整，不能将本轮称为零丢包。
+随后16MiB发送17477包、收到17475包，缺序号8985、16744；收到的16,775,296字节逐字节正确，
+错误bit0。两轮合计24MiB / 26216包缺7，已接收内容未观察到错误，仍不是总体无损。
+
+最终真实ReceiverGui/PyAV/ImageTk隐藏诊断窗口（`stage7-final-video-gui`）收到3930/3930分片，
+304帧全部组齐并解码，frame_drop、fragment/frame CRC、decoder errors、preview drops均0；
+Tk绘制104帧，TX重试0。绘制数不是传输丢帧数，原用户GUI窗口未被替换。
+这次视频完整不代表任意文件、任意时长都无损，残余缺包和ADC/时序问题仍按前几轮记录保留。
+
+原文件备份在两端 `%TEMP%/ad9361-diag-20260906/pre-stage7-p63-backup/`，
+编译/启动/复测日志以 `stage7-` 开头；旧固件只作为回退备份，不是当前默认下载文件。
+新ELF的符号地址可能变化，不能继续对它使用按旧ELF固定地址的 `stage6_ps_counts.tcl`。
+本地工作区ELF也已同步为发送板25dB构建；两台远程电脑分别保留各自25/30dB构建，
+不要用另一台的ELF覆盖本机而改变射频配置。
+回归结束后，两板仍运行新版63，JTAG再次核对reg3=0x3F及原时钟/检测参数通过；
+COMMON.c、net_rx.c、原bit和PS初始化哈希未变，COM4/COM3已释放，原GUI/Vivado/SDK进程保留。
 
 ## 目录结构
 

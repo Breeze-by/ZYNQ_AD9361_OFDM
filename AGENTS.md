@@ -96,6 +96,10 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-07 用户明确要求固化63及关联计数门槛。当前默认以本条和第七轮为准：
+  `main.c::OPENOFDM_RX_MIN_PLATEAU_RF=63U`，PL原 `min_plateau>>2` 自动派生15，原比较 `>15` 保留，
+  不要再恢复64，也不要将15硬编码到RTL；数字回环100/25不变。启动读回失败会报FATAL，
+  日志 `sign_min_derived=15` 是软件从reg3计算的值，不是内部计数器实测。只改源码/ELF，不刷Flash/SD。
 - 2026-09-06 YunSDR 320 双板 SMA 直连（无外串固定衰减器）实测配置：LO 2.2 GHz、RX MGC 36 dB；发射板 TX 衰减 25 dB，接收板自身 TX 衰减 30 dB 保留。RF 模式的 OFDM reg1=0x101（short-sync 0.75）、reg2=0x00300000（DC 48/RSSI 0）、reg3=64，数字回环保留原检测值。1024 字节短帧显著降低视频 payload CRC 错误并成功解码；重编译下载后 GUI 流程实测 decoded=275、rendered=85、decoder_errors=0，但仍丢失 16/3930 个分片并有 4 次 fragment/frame CRC 错误，不能宣称无损或长帧根因完全修复。768 字节对照没有总体改善，不作为默认。不要再盲目降低衰减；没有实测依据不要改采样率、PL 时序或时钟延迟。
 - 用户已授权远程编译、JTAG 下载和链路测试，两台电脑使用 Vivado/SDK 2018.3；变更前备份各自源码和 ELF，保留各自 TX 衰减及无关未提交改动。不要把远程登录凭据写入仓库。新版默认分包改为 1024 后，应重启发送 GUI 或明确修改旧窗口的 Chunk Bytes；Rate Limit 保持用户要求的 400。
 - 当前 `NET_AGG_BLOCK_BYTES = 1024`，使默认一个 AIR0/AIRV wire chunk 对应一个 OFDM PSDU，避免 2880 字节长帧一次损坏两个 AIR 包。DDR 中每个 slot 的有效 payload 是 1024 字节，`NET_AGG_BLOCK_STRIDE_BYTES = 1024`，队列深度为 2048；stride 必须保持 cache-line 对齐，避免相邻 DMA slot 共享 cache line。
@@ -226,6 +230,29 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - 最后两板已恢复原推荐bit、原ELF、reg3=64，TX41.667/RX40MHz及reg1/2读回通过，COM均释放，
   原GUI/Vivado/SDK保留。最终64隐藏GUI3920/3930、294组帧、282解码、98绘制，CRC/解码异常0。
   本轮没有固化63；后续明确说明后可固化初始化参数，写reg3本身不需要重生成bitstream。
+
+## 2026-09-07 第七轮：已授权固化63
+
+- 用户已明确要求将63及关联计数门槛固化。当前源码 `main.c` 的RF默认值已是63，
+  写reg3后校验读回并打印`sign_min_derived=15`；该15由原PL `min_plateau>>2`自动派生，
+  原 `>` 比较器未改。数字回环100/25不变；不要把15硬编码进RTL或恢复第六轮结束时的64。
+- 两台电脑各自原SDK工程已编译新版ELF并配合原sma_20260906 bit/PS初始化下载。启动与JTAG读回
+  均为reg1/2/3=0x101/0x00300000/63，TX41.667/RX40MHz不变。COMMON.c及各自25/30dB衰减保留。
+  新TX ELF SHA764CF8860063D96DB607D64F5EF6DFE86F528CA76D79F50340E1F74F2B7F1C46，
+  新RX ELF SHA456100D66D21DF2AC3CF6F3A24E57B74379A3D6FE9717E910302EAB89398B633。
+- 原36项PC单元回归通过。本轮仅改初始化和日志，不修改CRC、协议、重传、RTL或采样时钟。
+  旧profile manifest是第二轮历史快照，不参与初始化；当前参数看main.c和启动读回。
+- 固化不等于长期无损。首轮8MiB发送8739，收到8734，缺5、收到内容错误bit0；SSH会话断开后
+  已重连取回完整RESULT/WIRE_CHECK，不能报告此轮零丢包。完整后续数据以根README第七轮为准。
+- 随后16MiB收到17475/17477，缺2、错误bit0；两轮共24MiB缺7/26216。保留新63配置，
+  不要把收到内容正确解释为缺包已全部解决，也不要为此恢复64或开启RF重传。
+- 最终隐藏GUI视频3930/3930分片、304完整组帧和解码、104绘制，CRC/decoder errors/preview drops0。
+  本地工作区ELF同步为TX25dB构建，远程各机保留各自25/30dB构建，避免跨机混用ELF。
+- 回归后再次读回63及原时钟/检测参数通过，新ELF和保留文件哈希核对通过，串口已释放，
+  原GUI/Vivado/SDK保留；板卡最终运行的是新63，不是上一轮的64。
+- 原文件备份pre-stage7-p63-backup，日志stage7前缀，位置仍为远端ad9361-diag-20260906临时目录。
+  ELF地址可能变化，禁止照用按旧ELF固定地址的stage6_ps_counts.tcl。没有刷Flash/SD，断电后
+  仍按原流程下载新版ELF；这次程序默认值已经固化，不再是临时调参、也不再恢复64。
 
 ## 当前推荐 GUI 测试设置
 
