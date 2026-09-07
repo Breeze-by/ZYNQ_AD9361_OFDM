@@ -96,6 +96,19 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-07第八轮用户明确要求把TX独立时钟合并回原工程。当前原 `.xpr/.bd` 已包含
+  FCLK3约41.667 MHz、TX DAC/FIFO3写时钟和新 `rst_tx_transport`；RX仍FCLK2=40 MHz。
+  第二轮“原工程未改”已成为历史说明，不要再告诉用户原工程没有这项改动。
+  仅合并连接和修正ROM路径，不加入第五/六轮仪表，不改SDK C/BSP/ELF或RF参数，不烧录板卡。
+  原profile bit/HDF/PS初始化继续保留；从原工程新生成的bit须与新导出HDF/PS初始化匹配并重新回归。
+- 原硬件文件位于SDK Git仓库之外；仓库内 `hardware_profiles/sma_20260906/merge_into_project.tcl`
+  保存可复现合并步骤，执行前关闭对应Vivado工程，脚本要求全新报告目录并备份源文件。
+  三个ROM的源XCI采用 `../name.coe`，XPR中旧AD9361_test2_ofdm重复引用已移除；
+  要 `reset_target all` 后重新生成BD，单改源XCI而不刷新生成副本会继续使用旧路径。
+  本轮远程有一次SSH返回中断，之后已取回两机完整生成完成日志，不能将首次失败日志作为最终结果。
+  本地未安装Vivado，仅做源设计语义对照和36项PC测试；原工程的原生验证在两台2018.3电脑进行。
+  两机重新打开验证成功（TX日志stage8-reopen-b，RX日志stage8-reopen），综合/实现NEEDS_REFRESH=1；
+  本地/两机BD与第二轮已实测BD语义一致。硬件合并不是重新调参，不保证新布局布线零丢包或时序收敛。
 - 2026-09-07 用户明确要求固化63及关联计数门槛。当前默认以本条和第七轮为准：
   `main.c::OPENOFDM_RX_MIN_PLATEAU_RF=63U`，PL原 `min_plateau>>2` 自动派生15，原比较 `>15` 保留，
   不要再恢复64，也不要将15硬编码到RTL；数字回环100/25不变。启动读回失败会报FATAL，

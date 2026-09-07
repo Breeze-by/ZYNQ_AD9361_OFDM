@@ -24,6 +24,51 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
+## 当前原工程：已合并 TX 独立搬运时钟（2026-09-07）
+
+第八轮按用户要求，将第二轮已采用的 TX 时钟/复位连接合并回原
+`AD9361_test2.xpr` 所引用的 `AD9361_test2.srcs/sources_1/bd/System/System.bd`。
+不再只有独立构建副本包含这项修改；下文第二轮“原工程保留未修改”是历史状态。
+
+| 原工程连接 | 当前设置 |
+| --- | --- |
+| `tx_intf_0/dac_clk`、`axis_data_fifo_3/s_axis_aclk` | PS `FCLK_CLK3`，约41.667 MHz |
+| `rst_tx_transport/slowest_sync_clk` | 同一 `FCLK_CLK3`，复位输入接 `FCLK_RESET0_N`（低有效） |
+| `tx_intf_0/dac_rst`、FIFO3写侧复位 | 分别接新复位模块的 `peripheral_reset`、`peripheral_aresetn` |
+| RX搬运及原RX复位 | 保持 `FCLK_CLK2=40 MHz` 和原连接 |
+| FCLK0 / FCLK1 / AD9361采样率 | 保持100 MHz / 200 MHz / 40 MSPS |
+
+同时将三处ROM XCI的 `Coe_File` 改为 `../deinter_lut.coe`、`../atan_lut.coe`、
+`../rot_lut.coe`，删除XPR里指向旧 `AD9361_test2_ofdm` 目录的三个重复文件引用。
+只修正引用，不更改COE内容。两台远程原工程通过Vivado 2018.3进行BD校验和输出产品再生成；
+原有生成副本也需刷新，不能只改IP源目录而继续复用旧XCI。
+关闭后重新打开工程的独立检查也通过：TX/RX时钟及复位连接正确，三个生成ROM路径有效，
+综合和实现均报告 `NEEDS_REFRESH=1`。本地与两台远程BD经JSON语义比较，均与第二轮已实测设计一致
+（忽略Vivado的键排序及等价的40MHz数字写法）。
+
+本轮不改SDK应用源码、BSP、既有ELF、OFDM算法、CRC或重传，不增加第五/六轮诊断计数器或ILA。
+`plateau=63`、各机原来的TX衰减和所有RF参数保留。本轮没有生成/下载新bitstream或导出新HDF，
+没有操作JTAG、串口或Flash/SD，板卡继续使用此前已加载的版本。
+
+以后从原工程完整重建，可以使用正常GUI流程：
+
+1. 用Vivado **2018.3** 重新打开原 `AD9361_test2.xpr`，确认BD里的上述时钟/复位连接。
+2. 重新生成输出产品并运行 **Generate Bitstream**，允许重新综合和实现；不要使用旧运行结果。
+3. **Export Hardware**，勾选 **Include bitstream**。
+4. SDK更新为这次导出的硬件平台，再重新生成/编译BSP和当前应用；不要覆盖各机的 `COMMON.c`。
+5. 下载这一轮匹配的bit、PS初始化文件和ELF。启动日志应仍为 `plateau=63`、`sign_min_derived=15`。
+
+新生成bit必须重新做链路回归；本次BD验证不等于全设计时序收敛，也不保证新布局布线与旧bit性能完全相同。
+若只是恢复已验证版本，仍可使用 `hardware_profiles/sma_20260906/download.tcl`：
+该脚本固定使用目录内保存的旧profile bit/PS初始化与当前ELF，**不会自动选择刚生成的新bit**。
+原profile里的bit/HDF/LTX/PS初始化与历史manifest均不覆盖。
+
+Git仓库位于 `.sdk`，上层Vivado原工程文件不在该仓库内；可复现的合并工具已纳入
+`hardware_profiles/sma_20260906/merge_into_project.tcl`。脚本会备份输入、校验原频率、修改连接、
+刷新ROM引用和BD输出产品，不执行综合/实现、SDK硬件更新或板卡下载；用法见脚本头部。
+本轮源文件备份在各电脑临时目录的 `pre-stage8-merge-*` / `stage8-original-merge-*/backup`，
+本地备份在 `%TEMP%/ad9361-merge-original-*`；原36项PC单元测试通过。
+
 ## 当前固化配置：RF 短前导 plateau=63（2026-09-07）
 
 用户确认采用第六轮测试过的63。本次将 `AD9361_test2/src/app/main.c` 中
