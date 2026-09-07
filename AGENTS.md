@@ -96,6 +96,27 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 第九轮（2026-09-07）用户确认合并后已经自行重建并下载，恢复必须用各机`pre-stage9-userbuild`的新bit/ELF，
+  不再默认恢复旧`sma_20260906`。TX新bit FBC26AE1…、ELF4DA504F3…；RX新bit6ED9305C…、ELF456100D6…，
+  完整哈希见README。用户新增BSP/HDF/平台导出文件均保留，不得顺手提交或覆盖。
+- 第九轮用户新bit32MiB缺2/34953，收到内容bit错误0，RX S2MM/valid/UDP/PC增量一致，无新增PS拒帧。
+  临时stage6-hw-c诊断bit首次32MiB混合启动结构异常、帧头错误、接收搬运差异，不可只归因RF。
+  不重启后的两轮32MiB分别缺3和2，LTF计数与TX PHY一致；缺口全部对应帧头拒绝，FCS/S2MM/PC一致。
+  随后8MiB全文件一致。TX软件统计在session reset清零，不可直接跨会话作差；TX PHY16位计数按回绕算。
+- 第九轮取得3段独立4096点失败帧头波形及同一63配置的3段正常对照。失败STF检测比正常晚约34～46点，
+  LTF相对真实波形统一晚34点（20MSPS下1.7us），头rate/length错误；三段ADC丢弃不变、strobe全5拍、无do_mult重入。
+  重点嫌疑是短前导晚检与sync_long固定32+22跳过及首次搜索窗口的衔接；未探测addr1/FFT读地址/short内部计数，
+  不得说FFT窗口错位或短前导晚检的成因已经唯一闭环。下一步应加内部观测/回放验证，不再仅凭GUI盲调增益/CFO。
+- 第九轮静默176017532输入/1007真实ADC丢弃（5.721ppm），板内速率差约5.718ppm；这不是双板SFO。
+  ADC问题仍存在，但不是上述3段失败的直接丢样本证据；整体时序仍不收敛也不是单帧因果证明。
+- 2018.3 ILA缓存STATUS可能滞后；需完整4096行、实际触发信号及非重复数据联合校验。
+  stage9-headerwave的badheader_2是_1的重复超时旧数据，不计样本；有效为stage9-badheader-existing与headerwave_0/1。
+  enum必须按LTX逐字段解码：mult的iSTATE=0/iSTATE0=1…，strobe的iSTATE=1/iSTATE0=0，不可统一替换。
+  本轮临时工具/日志在远端stage9前缀，正式源码及63/RF参数未改；完整结果只维护README。
+- 第九轮恢复新bit时另见初始化状态敏感性：双板重载后16MiB缺926/17477、RX无magic拒绝340；
+  TX不动，仅RX重载同一bit/ELF后8MiB只缺开头seq7～10、无magic拒绝0。不得隐去该退化或仅凭读回相同判定恢复验收成功；
+  也不得未经波形确认就指定ADC校准/时钟相位/FIFO复位为唯一原因。保持第二次RX初始化状态最终32MiB全收34953包，
+  CRC/逐字节比较通过、S2MM/valid/UDP/PC一致，无新增reject/error/stall。保留此用户新版本运行状态，不再重载旧profile。
 - 2026-09-07第八轮用户明确要求把TX独立时钟合并回原工程。当前原 `.xpr/.bd` 已包含
   FCLK3约41.667 MHz、TX DAC/FIFO3写时钟和新 `rst_tx_transport`；RX仍FCLK2=40 MHz。
   第二轮“原工程未改”已成为历史说明，不要再告诉用户原工程没有这项改动。
