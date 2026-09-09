@@ -57,6 +57,9 @@ subdir.mk
 # Local launch/debug state
 *.launch
 
+# Per-workspace RF role; tracked receiver template is provided alongside it.
+/AD9361_test2/src/utils/rf_board_local.h
+
 # Editor, temporary and backup files
 *.tmp
 *.temp

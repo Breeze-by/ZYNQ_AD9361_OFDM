@@ -96,6 +96,15 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-09第十六轮用户明确要求固化天线TX22/RX66。当前默认按第十六轮执行，不再把第十五轮未固化当现状。
+  共享COMMON默认TX22000/RX36；接收电脑src/utils/rf_board_local.h本机覆盖为TX25000/RX66，发送电脑无覆盖。
+  本机头文件被Git忽略以保护收发角色，接收模板rf_board_local.h.example已跟踪；新克隆接收工程必须先复制模板再编译。
+  只改源码配置/重编译应用/下载ELF，不改RTL、bit、平台、BSP、时钟、LO、40MSPS、63、RF门限或协议，无RF重传。
+  新TX ELF D23854BF…、RX ELF5C228243…，完整哈希见根README。下载无RAM补丁，编译初值和启动实际读回已验证。
+  这次“固化”不是Flash/SD刷写或上电自启动改造；不要让用户以为仅断电重启即可加载本轮ELF，仍按原流程下载新版。
+  回SMA先改回TX25000/RX36并编译下载；保留候选不等于消除第十五轮波动或证明无损。两机用户无关BSP/HDF/IDE改动须保留。
+  备份stage16-antenna-defaults-before，日志stage16前缀；收尾仍须恢复GUI15002并释放COM3/4，不能混用两机ELF。
+  固化后8MiB收到8567/8739，缺172、收到内容bit错误0，DMA error/stall0；这是参数保留验证，不是无损或性能修复验收。
 - 2026-09-09第十五轮用户已进一步确认全频段天线和2.2GHz获准使用，覆盖第十四轮许可待确认状态。
   允许在现有0.2m天线链路上有界功率/增益对照，不代表已测天线驻波/增益或辐射功率。
   本轮只重载各机原ELF并在启动前临时改RAM txatt/gain；未改原COMMON/ELF/bit/HDF/时钟/采样/LO/63/门限，无RF重传。

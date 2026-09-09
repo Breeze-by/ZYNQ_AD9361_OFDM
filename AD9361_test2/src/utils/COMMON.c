@@ -22,12 +22,23 @@
 #define OPENWIFI_TX_BW_HZ          25215414U
 
 /*
- * YunSDR 320 two-board SMA profile, tested with 1024-byte RF frames.
- * Keep the tested TX attenuation; on-chip attenuation is not a substitute
- * for checking the receiver input power when connecting boards by cable.
+ * YunSDR 320 antenna defaults (2.2 GHz, 1024-byte RF frames).
+ * The shared source defaults to the transmitting board: TX 22 dB / RX 36 dB.
+ * The receiving workspace supplies rf_board_local.h: TX 25 dB / RX 66 dB.
+ * This local header survives normal SDK rebuilds without changing the role
+ * of the other workspace when shared source is synchronized through Git.
+ * Restore TX 25 dB / RX 36 dB before returning to the SMA cable setup.
+ * On-chip attenuation does not replace checking the receiver input power.
  */
-#define OPENWIFI_TX_ATT_MDB        25000U
+#if __has_include("rf_board_local.h")
+#include "rf_board_local.h"
+#endif
+#ifndef OPENWIFI_TX_ATT_MDB
+#define OPENWIFI_TX_ATT_MDB        22000U
+#endif
+#ifndef OPENWIFI_RX_GAIN_DB
 #define OPENWIFI_RX_GAIN_DB        36
+#endif
 //#define OPENWIFI_RX_GAIN_MODE      RF_GAIN_FASTATTACK_AGC
 #define OPENWIFI_RX_GAIN_MODE      RF_GAIN_MGC
 struct ad9361_rf_phy *ad9361_phy;

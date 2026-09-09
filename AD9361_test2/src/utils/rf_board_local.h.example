@@ -1,0 +1,13 @@
+#ifndef RF_BOARD_LOCAL_H
+#define RF_BOARD_LOCAL_H
+
+/* Antenna RECEIVER workspace: copy to rf_board_local.h, then rebuild the ELF.
+ * The active .h is machine-local and ignored by Git; this example is tracked.
+ * TX attenuation is in milli-dB; RX manual gain is in dB.
+ * The sender needs no local override (shared defaults: TX 22000 / RX 36).
+ * For the previous SMA cable setup use TX 25000 / RX 36 instead.
+ */
+#define OPENWIFI_TX_ATT_MDB 25000U
+#define OPENWIFI_RX_GAIN_DB 66
+
+#endif
