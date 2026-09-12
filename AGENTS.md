@@ -110,8 +110,11 @@ AD9361_test2/tools/pc_sender/video_playback.py
   双机原工程完整备份在各机 `%TEMP%/ad9361-diag-20260906/stage17-before-power`，恢复必须用本机备份bit/ELF，不混用角色或旧SMA profile。
   15:06两机JTAG不再返回APU，重试失败；15:15 Vivado报44-494/jsn1可能被别的hw_server锁定。USB和板卡ping正常，不要认定断电或硬件坏。
   用户已关闭Vivado/SDK，进程退出后JTAG仍空；未强杀用户进程。仅对已确认Xilinx USB Cable执行一次pnputil重启设备，随后Present枚举暂未见下载器。
-  已请求用户只拔插两机下载器USB，板卡保持上电，等待回复；未重启电脑/板卡、未动串口/网卡。尚无候选上板，备份无需重烧恢复。
+  未重启电脑/板卡、未动串口/网卡。尚无候选上板，备份无需重烧恢复。
+  用户已完成USB拔插，15:45两机原下载器端口均报USB Device Descriptor Request Failed；scan-devices未恢复。
+  已请求用户下载器USB/JTAG两端断开至少10秒，再只接USB到另一主板直连接口（板卡继续上电），待核验USB后再接JTAG。不得反复软件重启或贸然重装驱动/重启电脑。
   自动测试回传15003已恢复GUI192.168.1.100:15002且有RXCFG确认，JTAG端口读回因连接问题尚未通过；COM3/4须保持释放。原文件及无关dirty不得覆盖。
+  实验脚本/记录已在两机以68f0804提交同步（非原RTL合并、非上板）；GitHub push受网络阻碍，默认127.0.0.1:7890代理不可达，单命令直连覆盖也超时。不得声称已push，不改用户代理设置。
 - 2026-09-09第十六轮用户明确要求固化天线TX22/RX66。当前默认按第十六轮执行，不再把第十五轮未固化当现状。
   共享COMMON默认TX22000/RX36；接收电脑src/utils/rf_board_local.h本机覆盖为TX25000/RX66，发送电脑无覆盖。
   本机头文件被Git忽略以保护收发角色，接收模板rf_board_local.h.example已跟踪；新克隆接收工程必须先复制模板再编译。
