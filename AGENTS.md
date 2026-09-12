@@ -108,6 +108,7 @@ AD9361_test2/tools/pc_sender/video_playback.py
   候选只保留独立实验配方，不固化TX16、不合并原工程、不刷Flash/SD；完整RX仿真/全局时序仍未通过。
   rf_results.json保存实测轮次，README是正式说明。后文“没有候选上板”仅为此前USB故障期间的历史；当前是候选已测但已恢复原版。
   不得将本轮说成已测语义模型、校准SNR或长期零丢包；后续传统/语义比较必须同PHY/保护/资源预算，BER与缺包分开。
+  17:24最终记录commit后push直连已到认证阶段，但SSH会话wincredman无法持久化且无法读取GitHub用户名，未push；当前需解决GitHub认证，不能只沿用早期网络超时说明，不改用户凭据配置。
 - 2026-09-12 第十七轮（实验进行中）：用户要求物理层/包头保护对照，目标是尽量少丢整包、同时收到的业务 payload 有可测误码，服务于后续语义通信比较；不是继续把全部数据调到零误码。
   用户已确认天线约0.2m无遮挡、2.2GHz获准使用、两板JTAG在线；已停止发送并释放COM4/COM3。
   仅在独立 `hardware_profiles/payload_power_20260912` 配方及远端 sibling 工程制作候选，不合并原XPR/BD/IP，不刷Flash/SD，不修改原ELF/平台/BSP。
