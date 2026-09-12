@@ -110,10 +110,15 @@ AD9361_test2/tools/pc_sender/video_playback.py
   双机原工程完整备份在各机 `%TEMP%/ad9361-diag-20260906/stage17-before-power`，恢复必须用本机备份bit/ELF，不混用角色或旧SMA profile。
   15:06两机JTAG不再返回APU，重试失败；15:15 Vivado报44-494/jsn1可能被别的hw_server锁定。USB和板卡ping正常，不要认定断电或硬件坏。
   用户已关闭Vivado/SDK，进程退出后JTAG仍空；未强杀用户进程。仅对已确认Xilinx USB Cable执行一次pnputil重启设备，随后Present枚举暂未见下载器。
-  未重启电脑/板卡、未动串口/网卡。尚无候选上板，备份无需重烧恢复。
+  agent未重启电脑/板卡、未动串口/网卡。尚无候选上板；后续只读发现接收板bit未加载，不能继续认为无需恢复原版。
   用户已完成USB拔插，15:45两机原下载器端口均报USB Device Descriptor Request Failed；scan-devices未恢复。
-  已请求用户下载器USB/JTAG两端断开至少10秒，再只接USB到另一主板直连接口（板卡继续上电），待核验USB后再接JTAG。不得反复软件重启或贸然重装驱动/重启电脑。
-  自动测试回传15003已恢复GUI192.168.1.100:15002且有RXCFG确认，JTAG端口读回因连接问题尚未通过；COM3/4须保持释放。原文件及无关dirty不得覆盖。
+  用户已完成下载器USB/JTAG完全断开及换口，随后接回JTAG并确认电源灯。RX枚举OK/Code0且能读APU/ARM/FPGA，TX仍USB Cable Error/Code10/ProblemStatus C0000001、没有APU。
+  RX只读提示Bitstream is not programmed，两板ping不通；尚无候选下载，不得归因候选。各机原版备份哈希匹配，开始仅恢复RX原版，首次等待超时未获成功标记，需检查落盘阶段日志，不能直接宣称恢复成功。
+  不得反复软件重启或贸然重装驱动/重启电脑。原文件424/425项再次复核差异0。
+  16:13恢复日志stage17-rx-restore-1613.log明确APU目标为空，未执行reset_system/FPGA加载；RX尚未确认恢复。首次未落盘尝试状态不能由退出码推定。
+  16:19发现两机Vivado/SDK/交互式调试重新启动；暂停板卡动作，询问用户是否正在下载以及是否关闭，不能强杀其hw_server/IDE。
+  新hold_hw_server.ps1因3121已有监听主动退出，未启动新服务；download.tcl新增阶段日志。没有候选五档RF结果。
+  15:17曾将自动测试15003恢复GUI192.168.1.100:15002且有RXCFG确认，但板内配置缺失后须重新注册/读回，不沿用旧确认；COM3/4须保持释放。原文件及无关dirty不得覆盖。
   实验脚本/记录已在两机以68f0804提交同步（非原RTL合并、非上板）；GitHub push受网络阻碍，默认127.0.0.1:7890代理不可达，单命令直连覆盖也超时。不得声称已push，不改用户代理设置。
 - 2026-09-09第十六轮用户明确要求固化天线TX22/RX66。当前默认按第十六轮执行，不再把第十五轮未固化当现状。
   共享COMMON默认TX22000/RX36；接收电脑src/utils/rf_board_local.h本机覆盖为TX25000/RX66，发送电脑无覆盖。
