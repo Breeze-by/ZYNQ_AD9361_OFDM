@@ -96,6 +96,20 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-13第二十轮已结束：用户授权小幅增强保护区，同时维持弱payload功率；不是固化授权。没有可靠收益，候选不保留。
+  两板已恢复各机stage20-before-header-power自己的Stage18 bit/正式ELF，基础签名A7170002，候选能力TX reg31/RX reg29读回0。
+  code4仍1/16；新增code5=3/64（不是1/32），RX逆幅度64/3近似和LLR权重9/4096匹配。TX16/code4与TX13.5/code5名义弱区功率近似相同。
+  独立候选bit FA384968…/sender临时mailbox ELF5AC9879B…仅留作实验记录，不用于正式下载；A/B间通过ADI API改衰减并读回，未重初始化。
+  原源码/bit/ELF/BSP/平台没有合并或覆盖，无Flash/SD、无RF重传或人工翻转。当前TX16/RX66、guard32/shift4、RX DC44，DC44仍是临时寄存器，原ELF重新初始化会回48。
+  profile header_power_20260913下load/run_load支持candidate/restore；control只接受候选能力标识，receiver保持DC44/63/RX66，400KiB/s/chunk1024/window1不变。
+  初版A负数舍入仿真失败，构建已仅停止自己的进程，未上板。B全signed16舍入、6档27919点TX、3780拍LLR、786444项RX恢复及40项PC测试通过；不是完整RX仿真。
+  B100MHz setup/hold+0.016/+0.052ns，200MHz-1.771ns，全局-6.280/-1.721ns；余量很窄且全局仍未收敛，不能说量产签核。
+  同一候选/初始化A-B-A-B各两轮32MiB：A缺7+5=12/69906，B缺8+3=11/69906，弱BER3.5329%/3.9590%，相差一包不能证明有效改善。
+  ILA强前导数字功率+2.538dB、DATA含噪-0.139dB，支持分区功率生效，不是校准SNR。返回业务前30字节错误bit均0，不涵盖未回传的头。
+  原版开始32MiB缺4/34953、弱BER5.226%；候选初始化短测缺seq7/8、长度拒收1；不能把跨初始化BER变化归因于功率。
+  恢复后1MiB缺seq7～10、长度拒收2；随后32MiB缺seq238/33260、弱BER3.694%，最终PS captures/valid/reject=36042/36040/2，DMA错误/超时0。
+  共9轮有效195MiB/212997包，原始捕获独立复核均一致，PC重传0；完整逐轮统计、哈希和限制见results.json/根README，原始记录stage20前缀。
+  接收GUI15002已RXCFG与JTAG读回恢复，COM3/4已释放，两板ping正常，自己的hw_server已关闭；不要重新加载本轮候选或回退旧SMA参数。
 - 2026-09-13第十九轮：用户要求继续降低丢包，同时保持高payload误码目标。本轮只做RX寄存器对比，未重新初始化两板。
   当前接收板保留DC44，即RX reg2=0x002C0000；发送板自身RX reg2仍0x00300000。plateau63、TX16/RX66、guard32/shift4、2.2GHz/40MSPS和时钟全部保留。
   原C/ELF/bit/HDF/PS初始化未改，无RF重传、无人工翻转、无Flash/SD。源码main的POWER_THRES_RF仍48<<16，重新初始化原ELF会回48；不要说已固化44。
