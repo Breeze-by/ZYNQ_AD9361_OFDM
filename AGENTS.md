@@ -105,6 +105,9 @@ AD9361_test2/tools/pc_sender/video_playback.py
   RX最终captures/valid/reject=18512/18453/59，len2/no_magic56/shift1，不能将全部缺包认定为空口同步漏检；未测语义模型/校准SNR。
   GUI192.168.1.100:15002已恢复且JTAG读回、COM3/4释放、双板ping正常，临时自己启动的hw_server已关闭。
   当前保留新版，不恢复stage17旧bit/ELF；完整哈希见README/defaults_status.json，三轮统计在defaults_rf_results.json。
+  功能30a9b52已在两机同步，sender为安全FF将本轮自己的临时源码/脚本存入stash 37b2167b77e504010a32f164f16fefa31e8a602d；保留备份，不要pop覆盖最终配置。
+  两机剩余dirty94/15（原93/14加本轮LTX），BSP原始改动保留。push均因wincredman/无法取得密码失败，GitHub连接器权限push=false，不得声称push成功或修改用户凭据。
+  本地SDK配套产物已同步发送机新版，旧本地ps7_init缺FCLK3配置，已从新HDF一起更新；本地无Vivado原生刷新验证、无Git提交能力。
   RX新100MHz setup/hold +0.207/+0.052ns，200MHz -1.803ns，全局 -6.280/-1.721ns仍未签核。BSP和PS初始化/7个地址范围保持。
   COMMON共享TX16000/RX36，接收ignored本机头仍TX25000/RX66。app_config启用不等功率，数字回环旁路；
   main检查TX/RX A7170002签名，默认TXreg2=A704205D/RXreg5=A7048304并读回。旧bit搭配新启用ELF会FATAL。
