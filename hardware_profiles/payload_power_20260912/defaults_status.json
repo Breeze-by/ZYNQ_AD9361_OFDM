@@ -1,5 +1,6 @@
 {
   "stage": 18,
+  "scope_note": "Stage18 startup defaults and historical verification. Stage19 retains these program images but overrides receiver DC threshold to 44 at runtime; see ../loss_tuning_20260913/results.json. The original ELF still initializes DC48.",
   "status": "persisted_built_loaded_and_rf_verified_experimental",
   "boards_running_new_defaults": true,
   "flash_or_sd_written": false,
