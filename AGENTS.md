@@ -96,6 +96,21 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 第十八轮（2026-09-12）用户明确要求“帮我固化进去”，并已确认关闭两台 Vivado/SDK。
+  该授权覆盖第十七轮“不合并/不固化”的历史限制；仍不刷 Flash/SD、不改变启动介质。
+  目标是 D PHY + TX16/RX66 + 前32 DATA符号保护 + 后段1/16匹配幅度/LLR，不是恢复零误码目标。
+  两机已完成 stage18-before-defaults 备份、源码合并与各自ELF构建；RX新bit E3733085…、TX新bit8FF06CFE…均已下载并验证启动默认参数，无RAM补丁。
+  TX首次Vivado实现因EXCEPTION_ACCESS_VIOLATION崩溃，原设置重试成功。首1MiB缺12/1093、弱区BER3.997%；首8MiB缺53/8739、弱区BER3.963%，保护业务前30字节错误0。
+  第二轮8MiB同样缺53/8739、弱区BER3.883%，两次缺失序号不同，独立原始捕获分析一致。共17MiB缺118/18571，RF无重传、PC重传0。
+  RX最终captures/valid/reject=18512/18453/59，len2/no_magic56/shift1，不能将全部缺包认定为空口同步漏检；未测语义模型/校准SNR。
+  GUI192.168.1.100:15002已恢复且JTAG读回、COM3/4释放、双板ping正常，临时自己启动的hw_server已关闭。
+  当前保留新版，不恢复stage17旧bit/ELF；完整哈希见README/defaults_status.json，三轮统计在defaults_rf_results.json。
+  RX新100MHz setup/hold +0.207/+0.052ns，200MHz -1.803ns，全局 -6.280/-1.721ns仍未签核。BSP和PS初始化/7个地址范围保持。
+  COMMON共享TX16000/RX36，接收ignored本机头仍TX25000/RX66。app_config启用不等功率，数字回环旁路；
+  main检查TX/RX A7170002签名，默认TXreg2=A704205D/RXreg5=A7048304并读回。旧bit搭配新启用ELF会FATAL。
+  保留原时钟/63/RF门限/网络协议，无RF重传；完整RX仿真/全局时序限制不得隐藏。
+  新脚本 backup_defaults/merge_defaults/run_merge_defaults/install_defaults 位于原payload_power profile，README是正式说明。
+  本地尚无Vivado/git/rtk；远端Git可用。每次ELF重建必须重新解析符号，不沿用stage17固定地址。
 - 第十七轮最新进展（17:13）：用户确认两机JTAG恢复并自行烧录，磁盘bit/平台bit/ELF及板内时钟、RF、63已核对一致。
   新原版基线stage17-userbaseline1m-1636收到937/1093、缺156、899520业务字节bit错误0，不得沿用此前2.5%作为当前唯一基线。
   D候选56B0FEEC…在双板完成关闭/1/2/1/4/1/8/1/16实际RF对照，原ELF不变，匹配LLR/签名验证通过，无RF重传或人工翻转payload。

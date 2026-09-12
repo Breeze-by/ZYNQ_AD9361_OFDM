@@ -53,6 +53,15 @@
 #define OPENOFDM_RX_FFT_WIN_CFG       ((48U << 4) | 4U)
 #define OPENOFDM_RX_PHASE_ABS_TH      0x0001FFFFU
 
+#define OPENOFDM_PAYLOAD_POWER_SIGNATURE 0xA7170002U
+#define OPENOFDM_TX_DATA_SEED         0x0000005DU
+#define OPENOFDM_PAYLOAD_POWER_ACTIVE (APP_RF_PAYLOAD_POWER_ENABLE && (APP_RX_SOURCE == APP_RX_SOURCE_AD9361))
+#define OPENOFDM_PAYLOAD_POWER_COMMON (0xA7000000U | (APP_RF_PAYLOAD_POWER_SHIFT << 16))
+#define OPENOFDM_TX_DATA_CFG (OPENOFDM_TX_DATA_SEED | (OPENOFDM_PAYLOAD_POWER_ACTIVE ? \
+    (OPENOFDM_PAYLOAD_POWER_COMMON | (APP_RF_PAYLOAD_PROTECTED_SYMBOLS << 8)) : 0U))
+#define OPENOFDM_RX_DATA_CFG (OPENOFDM_RX_FFT_WIN_CFG | (OPENOFDM_PAYLOAD_POWER_ACTIVE ? \
+    (OPENOFDM_PAYLOAD_POWER_COMMON | (APP_RF_PAYLOAD_PROTECTED_SYMBOLS << 10)) : 0U))
+
 #define RX_INTF_START_TRANS_MODE_AUTO 0x00010025U
 #define RX_INTF_MAX_SIGNAL_LEN_CFG    (4095U << 16)
 #define RX_INTF_CFG_DATA_TO_ANT       (1U << 8)
@@ -98,11 +107,25 @@ static void OpenWifi_RxDebugPrint(void)
 
 static void OpenWifi_TxStaticRegs_Init(void)
 {
+    /* Refuse an enabled UEP ELF with an old or unmatched bitstream. */
+    if (OPENOFDM_PAYLOAD_POWER_ACTIVE) {
+        uint32_t tx_signature = Xil_In32(REG(OPENOFDM_TX_BASE, 20));
+        uint32_t rx_signature = Xil_In32(REG(OPENOFDM_RX_BASE, 31));
+        if (tx_signature != OPENOFDM_PAYLOAD_POWER_SIGNATURE) {
+            App_Fatal("OFDM TX payload-power bitstream", (int32_t)tx_signature);
+        }
+        if (rx_signature != OPENOFDM_PAYLOAD_POWER_SIGNATURE) {
+            App_Fatal("OFDM RX payload-power bitstream", (int32_t)rx_signature);
+        }
+    }
     /*
      * openofdm_tx_0 @ 0x40000000
      */
     Xil_Out32(REG(OPENOFDM_TX_BASE, 1), 0x0000007F);
-    Xil_Out32(REG(OPENOFDM_TX_BASE, 2), 0x0000005D);
+    Xil_Out32(REG(OPENOFDM_TX_BASE, 2), OPENOFDM_TX_DATA_CFG);
+    if (Xil_In32(REG(OPENOFDM_TX_BASE, 2)) != OPENOFDM_TX_DATA_CFG) {
+        App_Fatal("OFDM TX payload-power readback", -1);
+    }
 
     /*
      * tx_intf_0 @ 0x40001000
@@ -203,7 +226,17 @@ static void OpenWifi_RxRegs_Init(void)
         (unsigned int)DEFAULT_PSDU_LEN_BYTES,
         (unsigned long)(openofdm_rx_plateau_readback >> 2));
     Xil_Out32(REG(OPENOFDM_RX_BASE, 4), OPENOFDM_RX_SIGNAL_LEN_CFG);
-    Xil_Out32(REG(OPENOFDM_RX_BASE, 5), OPENOFDM_RX_FFT_WIN_CFG);
+    Xil_Out32(REG(OPENOFDM_RX_BASE, 5), OPENOFDM_RX_DATA_CFG);
+    if (Xil_In32(REG(OPENOFDM_RX_BASE, 5)) != OPENOFDM_RX_DATA_CFG) {
+        App_Fatal("OFDM RX payload-power readback", -1);
+    }
+    UART_Printf("OFDM payload-power enabled=%u guard_data_symbols=%u amplitude_shift=%u tx_cfg=0x%08lX rx_cfg=0x%08lX matched_llr=%u\r\n",
+        (unsigned int)OPENOFDM_PAYLOAD_POWER_ACTIVE,
+        (unsigned int)(OPENOFDM_PAYLOAD_POWER_ACTIVE ? APP_RF_PAYLOAD_PROTECTED_SYMBOLS : 0U),
+        (unsigned int)(OPENOFDM_PAYLOAD_POWER_ACTIVE ? APP_RF_PAYLOAD_POWER_SHIFT : 0U),
+        (unsigned long)Xil_In32(REG(OPENOFDM_TX_BASE, 2)),
+        (unsigned long)Xil_In32(REG(OPENOFDM_RX_BASE, 5)),
+        (unsigned int)OPENOFDM_PAYLOAD_POWER_ACTIVE);
     Xil_Out32(REG(OPENOFDM_RX_BASE, 18), OPENOFDM_RX_PHASE_ABS_TH);
 
     /*

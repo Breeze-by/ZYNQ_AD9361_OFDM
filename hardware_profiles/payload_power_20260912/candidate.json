@@ -1,4 +1,5 @@
 {
+  "record_scope": "Historical Stage 17 experiment; current merged defaults are recorded in defaults_status.json",
   "status": "experimental_rf_characterized_not_production_qualified",
   "candidate_was_downloaded": true,
   "boards_running_candidate": false,

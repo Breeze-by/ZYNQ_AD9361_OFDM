@@ -23,7 +23,7 @@
 
 /*
  * YunSDR 320 antenna defaults (2.2 GHz, 1024-byte RF frames).
- * The shared source defaults to the transmitting board: TX 22 dB / RX 36 dB.
+ * Unequal-power experiment: transmitting board TX 16 dB / RX 36 dB.
  * The receiving workspace supplies rf_board_local.h: TX 25 dB / RX 66 dB.
  * This local header survives normal SDK rebuilds without changing the role
  * of the other workspace when shared source is synchronized through Git.
@@ -34,7 +34,7 @@
 #include "rf_board_local.h"
 #endif
 #ifndef OPENWIFI_TX_ATT_MDB
-#define OPENWIFI_TX_ATT_MDB        22000U
+#define OPENWIFI_TX_ATT_MDB        16000U
 #endif
 #ifndef OPENWIFI_RX_GAIN_DB
 #define OPENWIFI_RX_GAIN_DB        36

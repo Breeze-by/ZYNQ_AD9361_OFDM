@@ -16,6 +16,19 @@
 #define APP_RX_SOURCE_DIGITAL_LOOPBACK 1U
 #define APP_RX_SOURCE APP_RX_SOURCE_AD9361
 
+/* Unequal-power RF experiment, matched TX/RX legacy BPSK 1/2 PHY only.
+ * STF/LTF/SIGNAL and the first 32 DATA symbols remain at full amplitude;
+ * later DATA amplitude is 1/16. Set ENABLE=0 on BOTH peers to bypass.
+ * Digital loopback always bypasses this experiment. Requires A7170002 RTL.
+ */
+#define APP_RF_PAYLOAD_POWER_ENABLE 1U
+#define APP_RF_PAYLOAD_POWER_SHIFT 4U
+#define APP_RF_PAYLOAD_PROTECTED_SYMBOLS 32U
+
+#if (APP_RF_PAYLOAD_POWER_ENABLE > 1U) || (APP_RF_PAYLOAD_POWER_SHIFT > 4U) || (APP_RF_PAYLOAD_PROTECTED_SYMBOLS > 63U)
+#error "Invalid unequal-power PHY configuration"
+#endif
+
 #if (APP_RX_SOURCE != APP_RX_SOURCE_AD9361) && (APP_RX_SOURCE != APP_RX_SOURCE_DIGITAL_LOOPBACK)
 #error "Unsupported APP_RX_SOURCE"
 #endif

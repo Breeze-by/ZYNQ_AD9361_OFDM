@@ -24,7 +24,64 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
-## 2026-09-12 第十七轮：包头保护、业务 DATA 降功率对照（已实测，未固化）
+## 2026-09-12 第十八轮：不等功率实验配置已固化、下载并复测
+
+用户已要求固化第十七轮的低缺包/可测 payload 误码工作点，并已保存、关闭两台 Vivado/SDK。
+两机变更前备份在 `%TEMP%/ad9361-diag-20260906/stage18-before-defaults/`，包含各自原工程、
+应用源码/Debug、BSP、硬件平台和用户未提交差异。此次“固化”仍指源码、默认配置和 JTAG 下载，**不刷 Flash/SD**。
+
+- 发送端共享默认 TX 衰减改为 16 dB；接收电脑本机头文件继续覆盖 RX MGC 66 dB / 自身 TX 衰减 25 dB，发送电脑自身 RX 36 dB 保留。
+- `app_config.h` 增加 `APP_RF_PAYLOAD_POWER_ENABLE=1`、`SHIFT=4`、`PROTECTED_SYMBOLS=32`；仅 RF 模式启用。
+  TX 初始化 reg2=`0xA704205D`，RX 初始化 reg5=`0xA7048304`，保留原 scrambler seed 和 FFT/watchdog 低位。
+- 原 `ip_repo` 合入第十七轮 D 的 TX DATA 降幅、RX 匹配幅度恢复/软 LLR 权重及样本标签；两核打包修订 118、签名 `0xA7170002`。
+  前导/SIGNAL/前 32 个 DATA 符号保持数字原幅度，后段幅度 1/16；不是将前导数值直接乘二，也不注入人工误码。
+- 新 ELF 启动检查两个硬件签名及配置读回；启用本模式时旧 bitstream 会 FATAL，必须下载匹配的新 bit + ELF。
+  两端 `ENABLE=0` 并重新编译下载可关闭降幅/补偿；数字回环自动旁路，但 RF 衰减值不会随此开关自动恢复。
+- 时钟、2.2 GHz、40 MSPS、plateau 63、RF 门限、chunk1024/window1/400 KiB/s、PC CRC/ACK、RF 无重传保持。
+
+`backup_defaults.ps1`、`merge_defaults.tcl` / `run_merge_defaults.ps1`、`install_defaults.ps1`
+保存备份、原工程升级 IP/重生成/构建及角色应用构建步骤。两端应用和 bitstream 已构建、导出并下载；
+串口启动及 JTAG 均确认 TX16/RX66、guard32/shift4 自动生效，未使用 RAM 补丁。
+发送端首次实现在功耗优化阶段发生 Vivado `EXCEPTION_ACCESS_VIOLATION`，保留日志后按相同设置重跑成功，未改通信参数。
+下节 0.412% 缺包 / 后段 BER 3.668% 是上一轮候选实测，不是本轮重建后验收结果。
+第十七轮完整 RX 仿真及全局时序仍未通过，不能把固化说成量产签核或零丢包保证。
+
+接收端原工程新 bit SHA256：`E37330850A72545D8957F15BCAA10A726491FA8EF677C2899B1AE6779467A67E`；
+HDF：`118B8D2E9586628C40EE8D3BD9ABF734ACE54A9041D27846A3E6EA78E24541CB`。
+发送端新 bit：`8FF06CFE0ABD89B9B26E57FC47768DB3B1ADA31C452A053DE8CABC676338F8AC`；
+HDF：`8D8801948C0801F9D33C41DAFCE1B5D26106CFB34594211011725BA2FC6B5BB3`。
+发送端 ELF：`D6E5A0AC653F1A1C3E1D374E0B6000F86DE5EACA492C448FC14D20C0BC82C684`；
+接收端 ELF：`59657C535FEDF0BD713C7F1E98BAC5381C770EE7587B38639474C808F300513D`。
+100 MHz setup/hold 为 +0.207/+0.052 ns，200 MHz setup −1.803 ns，全局 setup/hold −6.280/−1.721 ns。
+PS 初始化逐字节不变、7 个硬件地址范围不变、BSP 未改；BD 仅两条网络端口排列顺序变化，连接集合不变。
+两端分别 1211/1212 项无关源/BSP 文件与备份一致；PC 及统计器共 40 项单元测试通过。
+
+固化后实测（随机源、无人工错误、400 KiB/s、无 RF 重传；BER 不含丢失包）：
+
+| 测试 | 收到/发送 | 缺失 | 缺包率 | 收到的坏 payload 包 | 弱区 BER | 保护前缀错误 bit |
+|---|---:|---:|---:|---:|---:|---:|
+| stage18-defaults-1m-a | 1081/1093 | 12 | 1.098% | 895 | 3.997% | 0 |
+| stage18-defaults-8m-a | 8686/8739 | 53 | 0.606% | 7120 | 3.963% | 0 |
+| stage18-defaults-8m-b | 8686/8739 | 53 | 0.606% | 7186 | 3.883% | 0 |
+
+8 MiB 首轮共核对 8,337,728 个业务字节、检出 2,561,033 个错误 bit；全部收到 payload BER 3.8395%，
+弱区 8,077,148 字节的 BER 3.9634%。这仍不是零丢包，不保证每天固定为某个 BER；保护区结论只针对成功回传的样本。
+第二轮 8 MiB 错误 bit 为 2,509,298，全部收到 payload BER 3.7620%，弱区 BER 3.8833%；
+两轮缺失序号和捕获 SHA 不同，并非重复读取同一结果。三轮共 17 MiB、18,571 包，收到 18,453、缺 118。
+发送端三轮 PC 重传均 0。接收串口最终 captures/valid/reject=18512/18453/59，拒绝分类 len=2/no_magic=56/shift=1/header=0；
+不能把所有缺包归因于未识别物理同步头，也不能将 GUI 回传 CRC=0 当作 RF payload 无误码。
+独立离线逐 bit 复核与在线统计一致，机器记录在 `defaults_rf_results.json`，指纹和默认配置在 `defaults_status.json`；
+串口日志保留在各机诊断目录的同名 tag 子目录；接收机另保存 `received_wire.bin` 及完整 `.summary.json`。
+收尾已恢复接收 GUI 目标 `192.168.1.100:15002` 并 JTAG 读回，两板 ping 正常、COM4/COM3 可打开且释放。
+临时 JTAG 服务已关闭，板卡继续运行新版；没有恢复旧版、没有刷 Flash/SD，也没有测试语义模型或测量校准 SNR。
+用户继续使用 GUI 时维持 `Rate Limit KiB/s=400`、`Chunk Bytes=1024`、`Window Size=1`、勾选 `Payload CRC32`、
+关闭 `RF Strict Match + Retry`。下次重新下载必须使用各自原工程当前匹配的 bitstream/硬件平台与 ELF。
+本地第三份工程同步功能 RTL/打包文件及 C 源码；两台远程原工程均完成原生构建。
+本地 SDK 下载产物同步为发送机的配套 bit/HDF/ELF；旧平台初始化与本轮不同，已备份旧产物，
+从新 HDF 导出配套 PS 初始化并核对 SHA，不能将本地旧 ps7_init 与新 bit 混用。
+本地没有 Vivado 原生刷新验证，生成目录不能视为本机构建验收；重新构建时仍需让 Vivado 升级并重新生成 IP/BD 输出。
+
+## 2026-09-12 第十七轮：包头保护、业务 DATA 降功率对照（历史实测）
 
 本轮用户希望建立“尽量少丢整包、收到的业务 payload 存在可测误码”的真实 RF 条件，
 用于后续传统编码与语义通信对照。此处不是宣称语义方案已经胜出，也不是继续追求全部数据零误码。
