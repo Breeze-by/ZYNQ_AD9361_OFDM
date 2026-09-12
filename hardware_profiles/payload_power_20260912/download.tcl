@@ -71,6 +71,10 @@ foreach {address expected} {0x40002004 0x101 0x40002008 0x00300000 0x4000200c 63
 }
 if {$mode eq "candidate"} {
     foreach a {0x40000050 0x4000207c} {if {[u32 $a] != 0xa7170002} {error "Matched-LLR candidate signature mismatch"}}
+} else {
+    foreach a {0x40000050 0x4000207c} {
+        if {[u32 $a] == 0xa7170002} {error "D candidate signature remains after original restore"}
+    }
 }
 if {[u32 $gain_addr] != $expected_gain || [u32 $att_addr] != $expected_att} {error "Runtime role parameters changed"}
 puts "STAGE17_LOADED role=$role mode=$mode gain=[u32 $gain_addr] txatt=[u32 $att_addr] plateau=63"
