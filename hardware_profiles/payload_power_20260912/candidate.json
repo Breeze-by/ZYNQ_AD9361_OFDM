@@ -1,0 +1,18 @@
+{
+  "status": "experimental_not_rf_qualified_not_downloaded",
+  "candidate": "D",
+  "signature": "A7170002",
+  "bit_sha256": "56B0FEECCEB8D4784A30C67AB6BE7C703E7DA60B9FC9FF969B946B06729FAE91",
+  "hdf_sha256": "86FCB933D30D4FC98D5C99F4327F13795C0DDDFA74B98DD49779E1931BD24D08",
+  "ps7_init_sha256": "B7703C580B8DC317FF40DAF414101B11D7C7DBBD4548E4E8BB3E9476D1B94D66",
+  "clk_100mhz_setup_ns": 0.250,
+  "clk_100mhz_hold_ns": 0.057,
+  "global_setup_ns": -6.280,
+  "global_hold_ns": -1.721,
+  "llr_unit_valid_cycles": 3780,
+  "full_rx_simulation_passed": false,
+  "reference_waveform": "C short 128-byte payload, 3999 accepted IQ samples",
+  "rf_power_sweep_completed": false,
+  "original_project_modified": false,
+  "flash_or_sd_written": false
+}

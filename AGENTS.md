@@ -96,6 +96,22 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-12 第十七轮（实验进行中）：用户要求物理层/包头保护对照，目标是尽量少丢整包、同时收到的业务 payload 有可测误码，服务于后续语义通信比较；不是继续把全部数据调到零误码。
+  用户已确认天线约0.2m无遮挡、2.2GHz获准使用、两板JTAG在线；已停止发送并释放COM4/COM3。
+  仅在独立 `hardware_profiles/payload_power_20260912` 配方及远端 sibling 工程制作候选，不合并原XPR/BD/IP，不刷Flash/SD，不修改原ELF/平台/BSP。
+  前导码/SIGNAL/前32个BPSK1/2 DATA符号保持原幅度，其后DATA可降幅1/2～1/16；RX做匹配幅度恢复，不能把实现失配伪装成真实RF误码。
+  第一版B已生成但新增TX幅度路径setup=-1.498ns，不得用于误码结论；C改写等价舍入及前导旁路，100MHz setup已+0.233ns；全设计旧时序违例仍存在。
+  D增加匹配LLR权重a²及随样本的功率标签，3780拍解调单元验证通过，硬件已构建，100MHz setup/hold+0.250/+0.057ns；全局旧时序违例仍在。
+  D bit56B0FEEC…/HDF86FCB933…，完整哈希见README；D签名A7170002，不能用B/C签名1作为合格候选。
+  独立DFT确认C发送SIGNAL的48个编码bit正确，不等于RX整链通过。尚无候选上板，正式版本仍第十六轮。
+  发送波形数值检查通过不等于完整PHY仿真通过；首两轮RX仿真失败（测试台原先还把SIGNAL字节计入payload），必须保留失败记录，不能仅凭Vivado退出0判成功，须检查STAGE17_RX_SIM_COMPLETE。
+  默认TX22/RX66、400KiB/s、chunk1024/window1、PC->PS CRC/ACK、无RF重传不变。基线1MiB两轮分别1064/1093、1066/1093，收到payload逐位无误码。
+  第二轮最后短包曾被分析器误记为malformed；原始received_wire.bin独立复核确认缺27包、1022656字节/bit错误0，以离线复核为准。
+  双机原工程完整备份在各机 `%TEMP%/ad9361-diag-20260906/stage17-before-power`，恢复必须用本机备份bit/ELF，不混用角色或旧SMA profile。
+  15:06两机JTAG不再返回APU，重试失败；15:15 Vivado报44-494/jsn1可能被别的hw_server锁定。USB和板卡ping正常，不要认定断电或硬件坏。
+  用户已关闭Vivado/SDK，进程退出后JTAG仍空；未强杀用户进程。仅对已确认Xilinx USB Cable执行一次pnputil重启设备，随后Present枚举暂未见下载器。
+  已请求用户只拔插两机下载器USB，板卡保持上电，等待回复；未重启电脑/板卡、未动串口/网卡。尚无候选上板，备份无需重烧恢复。
+  自动测试回传15003已恢复GUI192.168.1.100:15002且有RXCFG确认，JTAG端口读回因连接问题尚未通过；COM3/4须保持释放。原文件及无关dirty不得覆盖。
 - 2026-09-09第十六轮用户明确要求固化天线TX22/RX66。当前默认按第十六轮执行，不再把第十五轮未固化当现状。
   共享COMMON默认TX22000/RX36；接收电脑src/utils/rf_board_local.h本机覆盖为TX25000/RX66，发送电脑无覆盖。
   本机头文件被Git忽略以保护收发角色，接收模板rf_board_local.h.example已跟踪；新克隆接收工程必须先复制模板再编译。

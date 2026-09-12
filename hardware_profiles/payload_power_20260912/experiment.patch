@@ -1,0 +1,59 @@
+diff --git a/ip_repo/openofdm_tx/src/openofdm_tx.v b/ip_repo/openofdm_tx/src/openofdm_tx.v
+--- a/ip_repo/openofdm_tx/src/openofdm_tx.v
++++ b/ip_repo/openofdm_tx/src/openofdm_tx.v
+@@ -98,1 +98,2 @@
+-dot11_tx dot11_tx (
++assign slv_reg20 = 32'ha7170002;
++dot11_tx dot11_tx (
+@@ -106,2 +107,3 @@
+     .init_pilot_scram_state(slv_reg1[6:0]),
+     .init_data_scram_state(slv_reg2[6:0]),
++    .payload_power_config(slv_reg2),
+diff --git a/ip_repo/openofdm_tx/src/dot11_tx.v b/ip_repo/openofdm_tx/src/dot11_tx.v
+--- a/ip_repo/openofdm_tx/src/dot11_tx.v
++++ b/ip_repo/openofdm_tx/src/dot11_tx.v
+@@ -20,2 +20,3 @@
+   input  wire [6:0]  init_pilot_scram_state,
+   input  wire [6:0]  init_data_scram_state,
++  input  wire [31:0] payload_power_config,
+@@ -830,3 +831,5 @@
+-assign result_i        = state3 == S3_L_STF ? l_stf[31:16] : (state3 == S3_L_LTF ? l_ltf[31:16] : (state3 == S3_HT_STF ? ht_stf[31:16] : (state3 == S3_HT_LTF ? ht_ltf[31:16] : (fifo_turn == PKT_FIFO ? pkt_fifo_odata[31:16] : CP_fifo_odata[31:16]))));
+-assign result_q        = state3 == S3_L_STF ? l_stf[15:0]  : (state3 == S3_L_LTF ? l_ltf[15:0]  : (state3 == S3_HT_STF ? ht_stf[15:0]  : (state3 == S3_HT_LTF ? ht_ltf[15:0]  : (fifo_turn == PKT_FIFO ? pkt_fifo_odata[15:0]  : CP_fifo_odata[15:0]))));
++`include "payload_power_tx.vh"
++assign result_i_unscaled = state3 == S3_L_STF ? l_stf[31:16] : (state3 == S3_L_LTF ? l_ltf[31:16] : (state3 == S3_HT_STF ? ht_stf[31:16] : (state3 == S3_HT_LTF ? ht_ltf[31:16] : (fifo_turn == PKT_FIFO ? pkt_fifo_odata[31:16] : CP_fifo_odata[31:16]))));
++assign result_q_unscaled = state3 == S3_L_STF ? l_stf[15:0]  : (state3 == S3_L_LTF ? l_ltf[15:0]  : (state3 == S3_HT_STF ? ht_stf[15:0]  : (state3 == S3_HT_LTF ? ht_ltf[15:0]  : (fifo_turn == PKT_FIFO ? pkt_fifo_odata[15:0]  : CP_fifo_odata[15:0]))));
+ assign result_iq_valid = state3 == S3_L_STF || state3 == S3_L_LTF || state3 == S3_HT_STF || state3 == S3_HT_LTF ? 1 : (fifo_turn == PKT_FIFO ? pkt_fifo_ovalid : CP_fifo_ovalid);
+diff --git a/ip_repo/openofdm_rx/src/openofdm_rx.v b/ip_repo/openofdm_rx/src/openofdm_rx.v
+--- a/ip_repo/openofdm_rx/src/openofdm_rx.v
++++ b/ip_repo/openofdm_rx/src/openofdm_rx.v
+@@ -146,1 +146,1 @@
+-assign slv_reg31 = `OPENOFDM_RX_GIT_REV;
++assign slv_reg31 = 32'ha7170002;
+@@ -229,1 +229,2 @@
+   .disable_all_smoothing(slv_reg1[4]),
++  .payload_power_config(slv_reg5),
+diff --git a/ip_repo/openofdm_rx/src/dot11.v b/ip_repo/openofdm_rx/src/dot11.v
+--- a/ip_repo/openofdm_rx/src/dot11.v
++++ b/ip_repo/openofdm_rx/src/dot11.v
+@@ -35,1 +35,2 @@
+     input wire disable_all_smoothing,
++    input wire [31:0] payload_power_config,
+@@ -439,1 +440,3 @@
+     .disable_all_smoothing(disable_all_smoothing),
++    .payload_power_config(payload_power_config),
++    .payload_power_legacy_bpsk(!pkt_ht && pkt_rate == 8'h0b),
+diff --git a/ip_repo/openofdm_rx/src/equalizer.v b/ip_repo/openofdm_rx/src/equalizer.v
+--- a/ip_repo/openofdm_rx/src/equalizer.v
++++ b/ip_repo/openofdm_rx/src/equalizer.v
+@@ -15,1 +15,3 @@
+     input wire disable_all_smoothing,
++    input wire [31:0] payload_power_config,
++    input wire payload_power_legacy_bpsk,
+@@ -211,2 +213,3 @@
+ wire div_out_stb;
+ wire norm_out_stb = div_out_stb;
++`include "payload_power_rx.vh"
+@@ -706,2 +709,1 @@
+-                        sample_out <= {norm_i[31], norm_i[14:0],
+-                            norm_q[31], norm_q[14:0]};
++                        sample_out <= uep_normalized;
