@@ -110,6 +110,8 @@ AD9361_test2/tools/pc_sender/video_playback.py
   恢复后1MiB缺seq7～10、长度拒收2；随后32MiB缺seq238/33260、弱BER3.694%，最终PS captures/valid/reject=36042/36040/2，DMA错误/超时0。
   共9轮有效195MiB/212997包，原始捕获独立复核均一致，PC重传0；完整逐轮统计、哈希和限制见results.json/根README，原始记录stage20前缀。
   接收GUI15002已RXCFG与JTAG读回恢复，COM3/4已释放，两板ping正常，自己的hw_server已关闭；不要重新加载本轮候选或回退旧SMA参数。
+  实验记录6d9349434cb9fdb44e74fd4b175913c40fc11e6b已两机同步；sender只暂存本轮自有文件以安全FF，stash 0baed4eb8a27d72a8a079ea815950352ffb21db8保留，不要pop覆盖记录。
+  两机无关dirty仍94/15（接收机RAR保留）。最新push两机均到达认证但wincredman无法持久化/读取GitHub用户名，exit128；不是已push，也不再仅是第十九轮网络超时，不改用户凭据。
 - 2026-09-13第十九轮：用户要求继续降低丢包，同时保持高payload误码目标。本轮只做RX寄存器对比，未重新初始化两板。
   当前接收板保留DC44，即RX reg2=0x002C0000；发送板自身RX reg2仍0x00300000。plateau63、TX16/RX66、guard32/shift4、2.2GHz/40MSPS和时钟全部保留。
   原C/ELF/bit/HDF/PS初始化未改，无RF重传、无人工翻转、无Flash/SD。源码main的POWER_THRES_RF仍48<<16，重新初始化原ELF会回48；不要说已固化44。
