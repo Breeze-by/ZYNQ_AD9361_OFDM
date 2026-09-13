@@ -96,6 +96,28 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-13第二十一轮测试结束：用户要求继续降低整包缺失、保留payload误码，已确认停止发送、天线0.2m位置不变。
+  初始两机HEAD f17b1da、原Stage18 ELF/bit/HDF哈希未变；板内TX16/RX66、DC44/63/guard32/shift4正确，PS累计36042/36040/2，与上轮结束相同。
+  备份各机stage21-before-trace；不合并原工程、不写Flash/SD、不增加RF重传或射频功率。实验脚本loss_trace_20260913。
+  第一轮32MiB缺4986/22533/30776，共3/34953，弱BER7.5734%，保护业务前30字节错误0，独立复核一致；PS有效/UDP/PC增量34950，无新增拒绝/DMA错误。
+  原ILA badheader等待脚本误把timeout单位当秒，实际是分钟，进程后续超时退出；未获得有效失败波形，不能据此声称头无错误。脚本已改timeout3分钟。
+  正向goodheader的1MiB全1093包，弱BER7.9494%，独立捕获分析一致；1024行触发valid/strobe=1、rate11、len1028、样本间隔10个200MHz拍，离线验真通过。
+  原ILA200MHz自身存在setup违例，不把未触发当排除证据。基线结束PS72085/72083/2、UDP72083，未新增拒绝。
+  从原综合网表只读导出stage21-observe-a；2018.3不允许移除HDL实例化ILA，故保留原ILA并增19端口4096深度100MHz观察器，hub亦100MHz，未改RF/PHY功能RTL。
+  首次生成bit被RTSTAT-5单网partial antenna拦住；独立checkpoint只重布该DMA网后DRC零错误，bit9E770191…、LTXEAAEA38B…。
+  修复后100MHz setup/hold +0.003/+0.017ns，新ILA +0.003/+0.043ns；余量极窄，全局约-6.506/-1.722ns仍不签核。
+  接收板observe已上板，发射板未动；正常4096行验证valid/rate11/len1028、state顺序正确，819点I/Q间隔全5拍。
+  observer首1MiB缺7～10、len拒2、弱BER5.156%；随后dc32m全34953、ltf32m缺3798/21993/28061、header32m缺10043/14207，弱BER7.3446/7.3181/7.9546%，独立分析一致。
+  3种失败触发均未取得有效波形；2018.3超时可正常返回空数据，dc/ltf旧wrapper报Missing ILA completion，RF结果仍有效，最终脚本标记NO_VALID_CAPTURE并保留.invalid文件。
+  3轮稳态96MiB缺5/104859，PS有效/UDP/PC增量104854；observer最终PS105945/105943/2，未新增reject，watchdog0/1/DC=0/1/110552；没有证明具体PHY根因。
+  临时quiet ELF仅把复制的net_config.h首2条有效包日志改为0，原源码/对象/ELF不动；AB3F6B72…的首1MiB仍缺7～10、len拒2，弱BER7.7246%，不保留；未排除所有UART/PS原因。
+  quiet链接符号已变，read_state需显式receiver quiet才读候选统计，不得对已恢复原版使用quiet地址。
+  接收板已恢复stage21-before-trace本机原bit/ELF，再写DC44；发送板未重载。接收共3次初始化，BER不可直接跨启动比较。
+  恢复首1MiB仍缺7～10、弱BER8.4046%；随后32MiB缺22428/27244/33674、弱BER7.8872%，全9轮164MiB/179137包缺23，独立捕获复核一致，PC重传0，保护业务前30字节错误0。
+  最终PS36041/36039/2、长度拒2其余0、UDP36039、DMA错误/stall0，watchdog0/1/DC=0/1/37753；原版稳定缺包未改善，具体PHY根因仍未闭环。
+  两机原源码/ELF/bit/LTX/HDF哈希与备份一致，GUI15002已恢复且JTAG读回，COM3/4释放、两板ping正常，自有hw_server19760关闭，最终无Vivado/SDK/XSCT/hw_server遗留。
+  sender首次hold_server被执行策略拦住，后续只读XSCT自动启动临时server并退出，未重置下载器；不得把该设置失败当射频缺包。
+  PC36+捕获4+波形8测试通过，两机无关dirty仍94/15，RAR保留。调试记录待本轮提交同步/push，不能沿用上轮成功状态。
 - 2026-09-13第二十轮已结束：用户授权小幅增强保护区，同时维持弱payload功率；不是固化授权。没有可靠收益，候选不保留。
   两板已恢复各机stage20-before-header-power自己的Stage18 bit/正式ELF，基础签名A7170002，候选能力TX reg31/RX reg29读回0。
   code4仍1/16；新增code5=3/64（不是1/32），RX逆幅度64/3近似和LLR权重9/4096匹配。TX16/code4与TX13.5/code5名义弱区功率近似相同。

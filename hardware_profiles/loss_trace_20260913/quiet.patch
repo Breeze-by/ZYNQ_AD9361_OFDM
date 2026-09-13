@@ -1,0 +1,6 @@
+diff --git a/net_config.h b/net_config.h
+--- a/net_config.h
++++ b/net_config.h
+@@ -53 +53 @@
+-#define NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES 2U
++#define NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES 0U

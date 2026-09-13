@@ -1,0 +1,422 @@
+{
+  "stage": 21,
+  "date": "2026-09-13",
+  "status": "tests_complete_original_receiver_bit_and_elf_restored",
+  "baseline_sdk_commit": "f17b1dab7edc940e33822eac4694b08948d5b37e",
+  "conclusion": "No repeatable improvement selected. Observed steady-state loss and recurrent startup losses are tracked separately; neither has been uniquely tied to a failed PHY event.",
+  "original_source_or_images_overwritten": false,
+  "flash_or_sd_written": false,
+  "rf_retransmission": false,
+  "artificial_payload_bit_flips": false,
+  "rf_power_changed": false,
+  "board_reinitialized": {
+    "sender": 0,
+    "receiver": 3,
+    "reason": [
+      "observer image with original ELF",
+      "same observer image with quiet ELF",
+      "restore own original image and ELF"
+    ]
+  },
+  "link": {
+    "antennas": 2,
+    "distance_m": 0.2,
+    "line_of_sight": true,
+    "frequency_hz": 2200000000,
+    "sample_rate_hz": 40000000,
+    "tx_attenuation_db": 16,
+    "rx_gain_db": 66,
+    "rx_dc_threshold": 44,
+    "plateau": 63,
+    "protected_data_symbols": 32,
+    "weak_data_amplitude": "1/16",
+    "chunk_bytes": 1024,
+    "window": 1,
+    "requested_rate_kib_s": 400,
+    "rf_strict_retry": false
+  },
+  "ber_scope": "Independent comparison against seed 9361320. Returned business payload after first 30 bytes, post PHY decoding. Missing packets excluded from BER. No calibrated SNR or proof of RF-only noise.",
+  "totals": {
+    "test_bytes": 171966464,
+    "sent_packets": 179137,
+    "received_packets": 179114,
+    "missing_packets": 23,
+    "weak_payload_bytes": 166570964,
+    "weak_payload_bit_errors": 101383455,
+    "protected_payload_bit_errors": 0
+  },
+  "observer_steady": {
+    "test_bytes": 100663296,
+    "sent_packets": 104859,
+    "received_packets": 104854,
+    "missing_packets": 5,
+    "weak_payload_bytes": 97512876,
+    "weak_payload_bit_errors": 58812557,
+    "protected_payload_bit_errors": 0
+  },
+  "tests": [
+    {
+      "tag": "stage21-baseline32m-a",
+      "test_bytes": 33554432,
+      "expected_packets": 34953,
+      "received_packets": 34950,
+      "missing_count": 3,
+      "missing": [
+        4986,
+        22533,
+        30776
+      ],
+      "invalid": [],
+      "bad_payloads": 34935,
+      "checked_bytes": 33551552,
+      "bit_errors": 19692783,
+      "received_payload_ber": 0.07336763065386662,
+      "protected_payload_bytes": 1048500,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 32503052,
+      "weak_payload_bit_errors": 19692783,
+      "weak_payload_ber": 0.07573436103784961,
+      "source_sha256": "0878055b3743c7caf49e7668119ba23d823ae80807480c17b88e776a57c8f334",
+      "capture_sha256": "ab568392e17bd249053a38a8493ea1482fd7835fceb1b3f95c71ff30fad5a805"
+    },
+    {
+      "tag": "stage21-good1m-a",
+      "test_bytes": 1048576,
+      "expected_packets": 1093,
+      "received_packets": 1093,
+      "missing_count": 0,
+      "missing": [],
+      "invalid": [],
+      "bad_payloads": 1093,
+      "checked_bytes": 1048576,
+      "bit_errors": 645991,
+      "received_payload_ber": 0.07700812816619873,
+      "protected_payload_bytes": 32790,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 1015786,
+      "weak_payload_bit_errors": 645991,
+      "weak_payload_ber": 0.07949398298460503,
+      "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+      "capture_sha256": "ae055d7574f40c3e486685c9c436bc476a1a4b97d119438e30adf9bb2b6d7027"
+    },
+    {
+      "tag": "stage21-observer-good1m-a",
+      "test_bytes": 1048576,
+      "expected_packets": 1093,
+      "received_packets": 1089,
+      "missing_count": 4,
+      "missing": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "invalid": [],
+      "bad_payloads": 999,
+      "checked_bytes": 1044736,
+      "bit_errors": 417471,
+      "received_payload_ber": 0.04994934126899044,
+      "protected_payload_bytes": 32670,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 1012066,
+      "weak_payload_bit_errors": 417471,
+      "weak_payload_ber": 0.05156173115192092,
+      "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+      "capture_sha256": "19ffffcb713b5d898f3abd54a464bae1686681c675413ed763a54a8bb2f196f2"
+    },
+    {
+      "tag": "stage21-observer-dc32m-a",
+      "test_bytes": 33554432,
+      "expected_packets": 34953,
+      "received_packets": 34953,
+      "missing_count": 0,
+      "missing": [],
+      "invalid": [],
+      "bad_payloads": 34941,
+      "checked_bytes": 33554432,
+      "bit_errors": 19099398,
+      "received_payload_ber": 0.07115080207586288,
+      "protected_payload_bytes": 1048590,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 32505842,
+      "weak_payload_bit_errors": 19099398,
+      "weak_payload_ber": 0.0734460208721866,
+      "source_sha256": "0878055b3743c7caf49e7668119ba23d823ae80807480c17b88e776a57c8f334",
+      "capture_sha256": "43210bbfa6fa92c78b098dc6424e964c248785bf5411d6fcaafbb23abc0997d7"
+    },
+    {
+      "tag": "stage21-observer-ltf32m-a",
+      "test_bytes": 33554432,
+      "expected_packets": 34953,
+      "received_packets": 34950,
+      "missing_count": 3,
+      "missing": [
+        3798,
+        21993,
+        28061
+      ],
+      "invalid": [],
+      "bad_payloads": 34939,
+      "checked_bytes": 33551552,
+      "bit_errors": 19028735,
+      "received_payload_ber": 0.07089364673801081,
+      "protected_payload_bytes": 1048500,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 32503052,
+      "weak_payload_bit_errors": 19028735,
+      "weak_payload_ber": 0.07318057008923347,
+      "source_sha256": "0878055b3743c7caf49e7668119ba23d823ae80807480c17b88e776a57c8f334",
+      "capture_sha256": "47f20bb53c70fc77677d3ea9aa35ff1e2eb62528bbd7e7efcaba92461fa37156"
+    },
+    {
+      "tag": "stage21-observer-header32m-a",
+      "test_bytes": 33554432,
+      "expected_packets": 34953,
+      "received_packets": 34951,
+      "missing_count": 2,
+      "missing": [
+        10043,
+        14207
+      ],
+      "invalid": [],
+      "bad_payloads": 34949,
+      "checked_bytes": 33552512,
+      "bit_errors": 20684424,
+      "received_payload_ber": 0.07705989345894579,
+      "protected_payload_bytes": 1048530,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 32503982,
+      "weak_payload_bit_errors": 20684424,
+      "weak_payload_ber": 0.07954573073539113,
+      "source_sha256": "0878055b3743c7caf49e7668119ba23d823ae80807480c17b88e776a57c8f334",
+      "capture_sha256": "a3884dd70ced8a4b0fa190257ddfbc8ff99e8b8bf64807a4714d9a53f9389eac"
+    },
+    {
+      "tag": "stage21-quiet-good1m-a",
+      "test_bytes": 1048576,
+      "expected_packets": 1093,
+      "received_packets": 1089,
+      "missing_count": 4,
+      "missing": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "invalid": [],
+      "bad_payloads": 1089,
+      "checked_bytes": 1044736,
+      "bit_errors": 625422,
+      "received_payload_ber": 0.07483014847770154,
+      "protected_payload_bytes": 32670,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 1012066,
+      "weak_payload_bit_errors": 625422,
+      "weak_payload_ber": 0.07724570334345784,
+      "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+      "capture_sha256": "4678a389572581e95312b73a7243bbe22da3e1cf9649155967c4ab87589557ab"
+    },
+    {
+      "tag": "stage21-restored-good1m-a",
+      "test_bytes": 1048576,
+      "expected_packets": 1093,
+      "received_packets": 1089,
+      "missing_count": 4,
+      "missing": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "invalid": [],
+      "bad_payloads": 1089,
+      "checked_bytes": 1044736,
+      "bit_errors": 680481,
+      "received_payload_ber": 0.08141781751562117,
+      "protected_payload_bytes": 32670,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 1012066,
+      "weak_payload_bit_errors": 680481,
+      "weak_payload_ber": 0.08404602565445336,
+      "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+      "capture_sha256": "a39b9828277f89bc49ad5ac2b5bd2843a3280705da92d80190dad10fa5345505"
+    },
+    {
+      "tag": "stage21-restored32m-a",
+      "test_bytes": 33554432,
+      "expected_packets": 34953,
+      "received_packets": 34950,
+      "missing_count": 3,
+      "missing": [
+        22428,
+        27244,
+        33674
+      ],
+      "invalid": [],
+      "bad_payloads": 34946,
+      "checked_bytes": 33551552,
+      "bit_errors": 20508750,
+      "received_payload_ber": 0.07640760552596793,
+      "protected_payload_bytes": 1048500,
+      "protected_payload_bit_errors": 0,
+      "weak_payload_bytes": 32503052,
+      "weak_payload_bit_errors": 20508750,
+      "weak_payload_ber": 0.0788724009671461,
+      "source_sha256": "0878055b3743c7caf49e7668119ba23d823ae80807480c17b88e776a57c8f334",
+      "capture_sha256": "c86ffd79d58288b37cc51d6094f19fa10c73d52503dd97af8447b6b16e891759"
+    }
+  ],
+  "pc_retries_per_run": 0,
+  "actual_sender_rate_kib_s": {
+    "stage21-baseline32m-a": 362.90685351695674,
+    "stage21-good1m-a": 366.1381673600896,
+    "stage21-observer-good1m-a": 365.44136344445616,
+    "stage21-observer-dc32m-a": 367.65314986773586,
+    "stage21-observer-ltf32m-a": 364.65724676561564,
+    "stage21-observer-header32m-a": 365.0477646405886,
+    "stage21-quiet-good1m-a": 375.40407998728773,
+    "stage21-restored-good1m-a": 354.40828227518483,
+    "stage21-restored32m-a": 365.70484205226234
+  },
+  "observer": {
+    "bit_sha256": "9E770191A050C19E4277399EA0C4BD21DEBC182955CADAE692B5F7F3DCC155B0",
+    "ltx_sha256": "EAAEA38B0812A0DE03558F5DD97365B0C547E354C99207EC7800CDF4C1C430BB",
+    "ports": 19,
+    "width_bits": 102,
+    "depth": 4096,
+    "clock_hz": 100000000,
+    "original_ila_retained": true,
+    "original_rtl_changed": false,
+    "route_repair": "Re-routed only named S2MM FIFO ram_wr_en_pf net in copied checkpoint after RTSTAT-5 prevented bitgen; no DRC waivers.",
+    "drc_errors_final": 0,
+    "timing_ns": {
+      "clock100_setup": 0.003,
+      "clock100_hold": 0.017,
+      "observer_setup": 0.003,
+      "observer_hold": 0.043,
+      "global_setup": -6.506,
+      "global_hold": -1.722
+    },
+    "timing_caveat": "Very narrow local slack, old debug/cross-domain and AD9361 IO paths still fail globally. Experimental observation, not production signoff."
+  },
+  "trace_validation": {
+    "valid": [
+      {
+        "tag": "stage21-good1m-a",
+        "rows": 1024,
+        "trigger": 768,
+        "rate": 11,
+        "length": 1028,
+        "iq_samples": 102,
+        "spacing_cycles": 10
+      },
+      {
+        "tag": "stage21-observer-good1m-a",
+        "rows": 4096,
+        "trigger": 2048,
+        "rate": 11,
+        "length": 1028,
+        "iq_samples": 819,
+        "spacing_cycles": 5
+      },
+      {
+        "tag": "stage21-quiet-good1m-a",
+        "rows": 4096,
+        "trigger": 2048,
+        "rate": 11,
+        "length": 1028,
+        "iq_samples": 819,
+        "spacing_cycles": 5
+      },
+      {
+        "tag": "stage21-restored-good1m-a",
+        "rows": 1024,
+        "trigger": 768,
+        "rate": 11,
+        "length": 1028,
+        "iq_samples": 102,
+        "spacing_cycles": 10
+      }
+    ],
+    "invalid_attempts": [
+      {
+        "tag": "stage21-baseline32m-a",
+        "mode": "badheader",
+        "reason": "Initial timeout incorrectly treated minutes as seconds; outer wrapper timed out. No valid failed waveform."
+      },
+      {
+        "tag": "stage21-observer-dc32m-a",
+        "mode": "dc_ltf",
+        "reason": "Three-minute wait returned normally without trigger; zero-row export rejected; RF valid despite wrapper failure."
+      },
+      {
+        "tag": "stage21-observer-ltf32m-a",
+        "mode": "ltftimeout",
+        "reason": "Three-minute wait returned normally without trigger; zero-row export rejected; RF valid despite wrapper failure."
+      },
+      {
+        "tag": "stage21-observer-header32m-a",
+        "mode": "badheader",
+        "reason": "Three-minute wait with zero valid rows; NO_VALID_CAPTURE, no failed waveform."
+      }
+    ],
+    "not_proven": "No source missing sequence has been uniquely matched to a PHY event. No direct ADC-loss or stage-by-stage packet counters were added.",
+    "timeout_documentation": "https://docs.amd.com/r/2023.1-English/ug835-vivado-tcl-commands/wait_on_hw_ila"
+  },
+  "quiet_candidate": {
+    "elf_sha256": "AB3F6B72754B8B59CC9F117B699D6614710DB7371D1F3ED5A03FFCC9895FE496",
+    "change": "Only NET_LOOPBACK_S2MM_VALID_LOG_FIRST_FRAMES 2 to 0 in temporary copied net_config.h; separately compiled net_rx.o.",
+    "selected": false,
+    "outcome": "First 1MiB still missed 7-10, with 2 length rejects, as before and after. Does not eliminate all UART/scheduling causes."
+  },
+  "final_state": {
+    "tx_attenuation_db": 16,
+    "rx_gain_db": 66,
+    "rx_dc_threshold": 44,
+    "dc44_persisted_in_elf": false,
+    "gui_target": "192.168.1.100:15002",
+    "gui_target_jtag_verified": true,
+    "com3_free": true,
+    "com4_free": true,
+    "both_boards_ping_ok": true,
+    "receiver_counts": {
+      "captures": 36041,
+      "valid": 36039,
+      "reject": 2,
+      "length_reject": 2,
+      "no_magic": 0,
+      "magic_shift": 0,
+      "header_reject": 0,
+      "udp": 36039,
+      "dma_errors": 0,
+      "stalls": 0
+    },
+    "receiver_watchdog_ungated": [
+      0,
+      1,
+      37753,
+      0,
+      0
+    ],
+    "own_receiver_hw_server_closed": true,
+    "restored_sender_elf_sha256": "D6E5A0AC653F1A1C3E1D374E0B6000F86DE5EACA492C448FC14D20C0BC82C684",
+    "restored_receiver_elf_sha256": "59657C535FEDF0BD713C7F1E98BAC5381C770EE7587B38639474C808F300513D",
+    "restored_sender_bit_sha256": "8FF06CFE0ABD89B9B26E57FC47768DB3B1ADA31C452A053DE8CABC676338F8AC",
+    "restored_receiver_bit_sha256": "E37330850A72545D8957F15BCAA10A726491FA8EF677C2899B1AE6779467A67E"
+  },
+  "validation": {
+    "pc_unit_tests": 36,
+    "payload_analysis_unit_tests": 4,
+    "trace_analysis_unit_tests": 8,
+    "all_rf_captures_independently_verified": true
+  },
+  "preserved_unrelated_dirty_counts": {
+    "sender": 94,
+    "receiver": 15
+  },
+  "git_push": "Pending this stage; do not assume succeeded.",
+  "setup_notes": [
+    "Sender held hw_server script was blocked by execution policy; readback-only XSCT auto-started its own server instead. Receiver held server PID19760 was closed by its own release marker.",
+    "Mid-transfer PS reads are not atomic; only quiescent snapshots were used for count comparisons."
+  ]
+}
