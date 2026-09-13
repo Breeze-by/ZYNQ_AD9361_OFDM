@@ -117,7 +117,9 @@ AD9361_test2/tools/pc_sender/video_playback.py
   最终PS36041/36039/2、长度拒2其余0、UDP36039、DMA错误/stall0，watchdog0/1/DC=0/1/37753；原版稳定缺包未改善，具体PHY根因仍未闭环。
   两机原源码/ELF/bit/LTX/HDF哈希与备份一致，GUI15002已恢复且JTAG读回，COM3/4释放、两板ping正常，自有hw_server19760关闭，最终无Vivado/SDK/XSCT/hw_server遗留。
   sender首次hold_server被执行策略拦住，后续只读XSCT自动启动临时server并退出，未重置下载器；不得把该设置失败当射频缺包。
-  PC36+捕获4+波形8测试通过，两机无关dirty仍94/15，RAR保留。调试记录待本轮提交同步/push，不能沿用上轮成功状态。
+  PC36+捕获4+波形8测试通过，两机无关dirty仍94/15，RAR保留。测试记录4f58797在接收机已提交，后续状态提交及两机bundle同步以HEAD为准。
+  本轮接收机push原代理无法连接，进程内直连Connection was reset，均exit128；未改用户代理/凭据，不要沿用上轮wincredman失败作为本轮唯一原因，也不声称GitHub已更新。
+  sender仅暂存本轮自建profile以安全同步，stash eb17d28459f81ed3d3179064ddd8c132aeddcf1a保留；不要pop覆盖最终记录，历史stash和用户BSP改动均不动。
 - 2026-09-13第二十轮已结束：用户授权小幅增强保护区，同时维持弱payload功率；不是固化授权。没有可靠收益，候选不保留。
   两板已恢复各机stage20-before-header-power自己的Stage18 bit/正式ELF，基础签名A7170002，候选能力TX reg31/RX reg29读回0。
   code4仍1/16；新增code5=3/64（不是1/32），RX逆幅度64/3近似和LLR权重9/4096匹配。TX16/code4与TX13.5/code5名义弱区功率近似相同。

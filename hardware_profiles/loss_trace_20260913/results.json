@@ -414,7 +414,7 @@
     "sender": 94,
     "receiver": 15
   },
-  "git_push": "Pending this stage; do not assume succeeded.",
+  "git_push": "Receiver record commit 4f587970dceebfa849f2bd2d6bf7ca5ab25d310c push failed: configured localhost proxy could not connect; process-only direct retry returned Connection was reset. Both exited 128. No user proxy/credential changes. Cross-PC records sync uses Git bundle, not a successful GitHub push.",
   "setup_notes": [
     "Sender held hw_server script was blocked by execution policy; readback-only XSCT auto-started its own server instead. Receiver held server PID19760 was closed by its own release marker.",
     "Mid-transfer PS reads are not atomic; only quiescent snapshots were used for count comparisons."
