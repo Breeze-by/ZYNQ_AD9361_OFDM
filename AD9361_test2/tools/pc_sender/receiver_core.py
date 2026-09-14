@@ -9,7 +9,7 @@ import socket
 import struct
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -28,6 +28,7 @@ from video_protocol import (
     parse_airv_header,
 )
 from video_receiver_core import VideoStreamAssembler
+from link_quality import LinkQualityTracker, PayloadReference, QualitySnapshot
 from sender_core import (
     ACK_FORMAT,
     ACK_MAGIC,
@@ -69,6 +70,9 @@ class ReceiverConfig:
     idle_finish_s: float = DEFAULT_IDLE_FINISH_S
     progress_interval_s: float = 0.5
     stop_after_save: bool = True
+    ber_reference_path: str = ""
+    ber_reference_mode: str = "airv"
+    ber_skip_bytes: int = 0
 
 
 @dataclass
@@ -134,6 +138,7 @@ class ReceiverStats:
     airv_last_frame_seq: int = -1
     airv_initial_missing_bytes: int = 0
     airv_stream_gap_bytes: int = 0
+    quality: QualitySnapshot = field(default_factory=QualitySnapshot)
 
 
 def parse_args():
@@ -399,6 +404,7 @@ class LoopbackReceiver:
         self._airv_wait_diag_offset = -1
         self._airv_chunk_bytes = 0
         self._rate_samples = deque()
+        self._quality = LinkQualityTracker(skip_bytes=config.ber_skip_bytes)
 
     def stop(self):
         self._stop_requested = True
@@ -462,6 +468,7 @@ class LoopbackReceiver:
         if self._airv_mode:
             self._refresh_airv_stats(stats)
         self._refresh_rates(stats, now)
+        stats.quality = self._quality.snapshot()
         self._emit(callback, "progress", {"stats": stats})
 
     def _raise_socket_bind_error(self, exc: OSError):
@@ -999,6 +1006,15 @@ class LoopbackReceiver:
 
         if status == "OK":
             self._raw_assembler.write(absolute_offset, payload)
+            # Measure complete returned blocks, independently of the sequential
+            # AIR0/AIRV playback parser (which may stop or skip over gaps).
+            block_len = packet["block_payload_len"]
+            if (0 < block_len <= 8176 and stream_offset >= 0 and
+                    0 <= chunk_offset <= block_len and
+                    chunk_offset + payload_len <= block_len and
+                    self._raw_assembler.contiguous_end_from(stream_offset) >= stream_offset + block_len):
+                wire = self._raw_assembler.read_at(stream_offset, block_len)
+                self._quality.observe_wire(wire, stream_offset)
             if absolute_offset + payload_len > stats.highest_end:
                 stats.highest_end = absolute_offset + payload_len
             self._parse_air_stream(stats)
@@ -1147,6 +1163,17 @@ class LoopbackReceiver:
         last_payload_time = 0.0
 
         try:
+            if self.config.ber_reference_path:
+                self._emit(callback, "quality_status", {"message": "Preparing BER reference; wait for RX registration before sending"})
+                self._quality = LinkQualityTracker(
+                    reference=PayloadReference(self.config.ber_reference_path, self.config.ber_reference_mode),
+                    skip_bytes=self.config.ber_skip_bytes)
+                self._emit(callback, "quality_status", {"message": "BER reference ready; only source-matched received business bits are compared"})
+            if self._stop_requested:
+                self._discard_unsaved()
+                self._emit_progress(callback, stats, force=True)
+                self._emit(callback, "done", {"stats": stats})
+                return stats
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 try:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

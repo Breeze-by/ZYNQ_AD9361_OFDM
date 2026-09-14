@@ -96,6 +96,16 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-14 接收 GUI 增加 Link quality 页：包序号累计暂定缺失率、参考源逐 bit 比对的最近1秒业务 BER，保留 Throughput 页。
+  源文件通过 BER Reference 对话框选择：AIRV 为 Sender 真正使用的 H.264 Annex-B（不是 MP4），AIR0 为相同原文件/随机源。
+  源/帧和分片 CRC/长度先核对；无参考/不匹配/无新样本必须 N/A，不把 CRC 失败率当 BER。
+  skip=0 比较全部业务；skip=30 只对应当前 BPSK1/2、guard32 弱区，不能随 PHY 变化仍固定称为弱区。
+  缺失率按0到最高序号、唯一收包统计，可被迟到包修正；坏payload算收到、重复不重复计数，末尾未知。不等于纯空口丢包率或视频丢帧率。
+  SNR 仅明确不可用的面板，尚无真实测量/回传，不要称三条实测曲线均完成；需后续扩展 PL/PS 并验证。
+  本次只改PC端，不改RTL/C/ELF/bit或RF参数，不读取/重载板卡，不启用RF重传；原GUI进程保留，由用户停止后重开。
+  接收电脑独立目录57项测试全通过（含5项Tk和localhost UDP）；本地52通过、5项缺Tcl跳过。没有新的RF性能结果。
+  正式说明仅在根README。接收机备份ad9361-quality-gui-20260914-03c7ec8c290c4966885c425794f8e62b/before。
+  接收机原SDK已安装新版并再次57项测试/文件哈希验证通过，本地同步相同修改，发送机未改；原15项无关dirty保留，提交/push状态以实际结果为准。
 - 2026-09-13第二十一轮测试结束：用户要求继续降低整包缺失、保留payload误码，已确认停止发送、天线0.2m位置不变。
   初始两机HEAD f17b1da、原Stage18 ELF/bit/HDF哈希未变；板内TX16/RX66、DC44/63/guard32/shift4正确，PS累计36042/36040/2，与上轮结束相同。
   备份各机stage21-before-trace；不合并原工程、不写Flash/SD、不增加RF重传或射频功率。实验脚本loss_trace_20260913。

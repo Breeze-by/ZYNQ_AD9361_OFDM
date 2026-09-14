@@ -3,6 +3,8 @@ import queue
 import threading
 import time
 import tkinter as tk
+from dataclasses import replace
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from receiver_core import (
@@ -16,6 +18,7 @@ from receiver_core import (
     ReceiverConfig,
 )
 from sender_gui import Sparkline
+from quality_chart import QualityChart
 from video_protocol import AIRV_FRAME_KEY
 from video_playback import VideoPreviewDecoder
 
@@ -67,6 +70,15 @@ class ReceiverGui:
         self.expected_bytes_var = tk.StringVar(value="0")
         self.idle_finish_var = tk.StringVar(value=str(DEFAULT_IDLE_FINISH_S))
         self.progress_ms_var = tk.StringVar(value="500")
+        self.ber_reference_path_var = tk.StringVar(value="")
+        self.ber_reference_mode_var = tk.StringVar(value="airv")
+        self.ber_skip_var = tk.StringVar(value="0")
+        self.quality_loss_var = tk.StringVar(value="Waiting for AIR0/AIRV packets")
+        self.quality_ber_var = tk.StringVar(value="N/A: select the sender's original source file")
+        self.quality_reference_var = tk.StringVar(value="No reference file")
+        self._quality_epoch = 0
+        self._quality_timestamp = 0.0
+        self.quality_settings_window = None
 
         self.status_var = tk.StringVar(value="Idle")
         self.register_var_text = tk.StringVar(value="N/A")
@@ -221,6 +233,43 @@ class ReceiverGui:
         self.stop_button.pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(action_box, text="Open Preview", command=self._ensure_preview_window).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(action_box, text="Clear Log", command=self._clear_log).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(action_box, text="BER Reference...", command=self._open_quality_settings).pack(side=tk.LEFT, padx=(8, 0))
+
+    def _open_quality_settings(self):
+        if self.quality_settings_window is not None and self.quality_settings_window.winfo_exists():
+            self.quality_settings_window.lift()
+            return
+        window = tk.Toplevel(self.root)
+        self.quality_settings_window = window
+        window.title("Link quality / BER reference")
+        window.geometry("700x310")
+        box = ttk.Frame(window, padding=12)
+        box.pack(fill=tk.BOTH, expand=True)
+        box.columnconfigure(1, weight=1)
+        ttk.Label(box, text="Reference file").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ttk.Entry(box, textvariable=self.ber_reference_path_var).grid(row=0, column=1, sticky="ew")
+
+        def browse():
+            path = filedialog.askopenfilename(parent=window, title="Exact sender source (AIRV: H.264 Annex-B, not MP4)")
+            if path:
+                self.ber_reference_path_var.set(path)
+
+        ttk.Button(box, text="Browse", command=browse).grid(row=0, column=2, padx=(8, 0))
+        ttk.Label(box, text="Protocol").grid(row=1, column=0, sticky="w", pady=8)
+        ttk.Combobox(box, textvariable=self.ber_reference_mode_var, values=("airv", "air0"),
+                     state="readonly", width=12).grid(row=1, column=1, sticky="w")
+        ttk.Label(box, text="Skip business bytes / packet").grid(row=2, column=0, sticky="w")
+        ttk.Combobox(box, textvariable=self.ber_skip_var, values=("0", "30"),
+                     state="readonly", width=12).grid(row=2, column=1, sticky="w")
+        ttk.Label(box, text=(
+            "0 = all business payload. 30 = weak region for the current BPSK 1/2, guard=32 PHY.\n"
+            "AIRV: select the exact .h264/.264 Annex-B file used by Sender (not its MP4 container).\n"
+            "AIR0: select the original file or exact random-test source. Leave blank to disable BER.\n"
+            "Source CRC/size are checked before comparison. Missing packets are excluded from BER.\n"
+            "Changes apply on the next Start. Wait for RX registration before sending.\n"
+            "Payload SNR is unavailable: current firmware supplies no I/Q/noise telemetry."),
+            wraplength=660, justify=tk.LEFT).grid(row=3, column=0, columnspan=3, sticky="w", pady=14)
+        ttk.Button(box, text="Close", command=window.destroy).grid(row=4, column=2, sticky="e")
 
     def _build_metrics(self, parent):
         metrics_box = ttk.LabelFrame(parent, text="Metrics", padding=8)
@@ -281,7 +330,14 @@ class ReceiverGui:
         chart_box = ttk.LabelFrame(parent, text="Charts", padding=12)
         chart_box.pack(fill=tk.BOTH, expand=True)
 
-        grid = ttk.Frame(chart_box)
+        notebook = ttk.Notebook(chart_box)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        quality_tab = ttk.Frame(notebook, padding=4)
+        throughput_tab = ttk.Frame(notebook, padding=4)
+        notebook.add(quality_tab, text="Link quality")
+        notebook.add(throughput_tab, text="Throughput")
+
+        grid = ttk.Frame(throughput_tab)
         grid.pack(fill=tk.BOTH, expand=True)
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
@@ -298,6 +354,29 @@ class ReceiverGui:
         ttk.Label(packet_frame, text="Packets/s (last 1s)").pack(anchor=tk.W)
         self.packet_chart = Sparkline(packet_frame, height=100, line_color="#1976D2", unit="pkt/s")
         self.packet_chart.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+
+        quality_grid = ttk.Frame(quality_tab)
+        quality_grid.pack(fill=tk.BOTH, expand=True)
+        quality_grid.rowconfigure(0, weight=1)
+        for column in range(3):
+            quality_grid.columnconfigure(column, weight=1, uniform="quality")
+        self.loss_chart, self.ber_chart, self.snr_chart = [None] * 3
+        for column, (title, attr, unit, color) in enumerate((
+                ("Packet loss % (cumulative*)", "loss_chart", "%", "#C62828"),
+                ("Payload BER % (last 1s)", "ber_chart", "%", "#7B1FA2"),
+                ("Payload SNR dB (unavailable)", "snr_chart", "dB", "#00796B"))):
+            frame = ttk.Frame(quality_grid)
+            frame.grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column < 2 else 0)
+            ttk.Label(frame, text=title, font=("Consolas", 9)).pack(anchor=tk.W)
+            chart = QualityChart(frame, height=110, unit=unit, color=color)
+            chart.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+            setattr(self, attr, chart)
+        self.snr_chart.message = "No board payload I/Q / noise telemetry\nNot derivable from CRC or BER"
+        self.snr_chart.redraw()
+        ttk.Label(quality_tab, textvariable=self.quality_loss_var, wraplength=900).pack(anchor=tk.W)
+        ttk.Label(quality_tab, textvariable=self.quality_ber_var, wraplength=900).pack(anchor=tk.W)
+        ttk.Label(quality_tab, textvariable=self.quality_reference_var, wraplength=900,
+                  foreground="#555555").pack(anchor=tk.W)
 
     def _build_log(self, parent):
         log_box = ttk.LabelFrame(parent, text="Event Log", padding=12)
@@ -384,6 +463,9 @@ class ReceiverGui:
 
     def _build_config_object(self) -> ReceiverConfig:
         progress_ms = int(self.progress_ms_var.get().strip())
+        reference_path = self.ber_reference_path_var.get().strip()
+        if reference_path and not Path(reference_path).is_file():
+            raise ValueError("BER reference file does not exist on this receiving PC")
         return ReceiverConfig(
             bind_ip=self.bind_ip_var.get().strip(),
             bind_port=int(self.bind_port_var.get().strip()),
@@ -399,6 +481,9 @@ class ReceiverGui:
             expected_bytes=int(self.expected_bytes_var.get().strip()),
             idle_finish_s=float(self.idle_finish_var.get().strip()),
             progress_interval_s=max(progress_ms, 50) / 1000.0,
+            ber_reference_path=reference_path,
+            ber_reference_mode=self.ber_reference_mode_var.get(),
+            ber_skip_bytes=int(self.ber_skip_var.get()),
         )
 
     def _start_receiver(self):
@@ -427,6 +512,11 @@ class ReceiverGui:
             f"ipcfg={config.configure_board_ip} mask={config.board_netmask} gateway={config.board_gateway} "
             f"register={config.register_with_board} raw_expected={config.expected_bytes} output={config.output_dir}"
         )
+        self._append_log(
+            f"QUALITY loss=missing/(highest_seq+1), provisional, includes initial gaps, trailing losses unknown; "
+            f"BER=post-FEC received business bits, window=1s, skip={config.ber_skip_bytes}, "
+            f"reference={config.ber_reference_path or 'none'}; payload SNR=N/A (no PHY telemetry)"
+        )
         self.receiver_thread = threading.Thread(target=self._worker_run, daemon=True)
         self.receiver_thread.start()
 
@@ -443,6 +533,10 @@ class ReceiverGui:
             self.event_queue.put(("error", {"message": str(exc)}))
 
     def _receiver_callback(self, event_name: str, payload: dict):
+        # The worker reuses ReceiverStats. Snapshot before queueing so history
+        # charts don't plot a newer mutable stats object for every old event.
+        if "stats" in payload:
+            payload = dict(payload, stats=replace(payload["stats"]))
         self.event_queue.put((event_name, payload))
 
     def _reset_runtime_state(self):
@@ -487,6 +581,16 @@ class ReceiverGui:
         self._set_preview_message(self.video_decoder.status_text(), clear_image=True)
         self.rate_chart.reset()
         self.packet_chart.reset()
+        self.loss_chart.reset()
+        self.ber_chart.reset()
+        self.snr_chart.reset()
+        self.snr_chart.message = "No board payload I/Q / noise telemetry"
+        self.snr_chart.redraw()
+        self._quality_epoch = 0
+        self._quality_timestamp = 0.0
+        self.quality_loss_var.set("Waiting for AIR0/AIRV packets")
+        self.quality_ber_var.set("BER requires a matching source file; no samples = N/A")
+        self.quality_reference_var.set("No reference file" if not self.ber_reference_path_var.get().strip() else "Preparing reference")
         self.last_summary_log_time = 0.0
         self.last_preview_log_time = 0.0
         self.last_preview_summary_log_time = 0.0
@@ -613,6 +717,29 @@ class ReceiverGui:
         self.file_crc_var.set("OK" if stats.air_file_crc_ok else ("pending" if stats.air_mode else "N/A"))
         self.rate_chart.add_point(stats.rate_kib_s)
         self.packet_chart.add_point(stats.packet_rate_s)
+        self._update_quality(stats.quality)
+
+    def _update_quality(self, quality):
+        if quality.timestamp <= self._quality_timestamp:
+            return
+        if quality.epoch != self._quality_epoch:
+            for chart in (self.loss_chart, self.ber_chart, self.snr_chart):
+                chart.reset()
+            self._quality_epoch = quality.epoch
+        self._quality_timestamp = quality.timestamp
+        self.loss_chart.add_point(quality.timestamp, quality.loss_pct, "Waiting for valid AIR0/AIRV headers")
+        self.ber_chart.add_point(quality.timestamp, quality.ber_pct,
+                                 quality.reference_status if quality.compared_bits == 0 else "No matched samples in last 1s / reference mismatch")
+        self.snr_chart.add_point(quality.timestamp, quality.snr_db, quality.snr_status)
+        loss = f"{quality.loss_pct:.4f}%" if quality.loss_pct is not None else "N/A"
+        self.quality_loss_var.set(
+            f"Missing {quality.missing_packets} / {quality.expected_so_far} ({loss}); "
+            f"unique received={quality.received_packets}. *Provisional, through highest sequence; trailing loss unknown.")
+        ber = f"{quality.ber_total_pct:.6f}%" if quality.ber_total_pct is not None else "N/A"
+        self.quality_ber_var.set(
+            f"BER total={ber}, errors/bits={quality.error_bits}/{quality.compared_bits}; "
+            f"skip first {quality.ber_skip_bytes} business bytes per packet. Missing packets excluded.")
+        self.quality_reference_var.set(f"Reference: {quality.reference_status}; skipped reference comparisons={quality.reference_skips}. SNR: no board telemetry.")
 
     def _display_preview_image(self, image):
         try:
@@ -748,6 +875,10 @@ class ReceiverGui:
         self._set_preview_message("Decoding AIRV frames")
 
     def _handle_event(self, event_name: str, payload: dict):
+        if event_name == "quality_status":
+            self.quality_reference_var.set(payload["message"])
+            self._append_log(f"QUALITY {payload['message']}")
+            return
         if event_name == "start":
             self.status_var.set("Listening")
             return
