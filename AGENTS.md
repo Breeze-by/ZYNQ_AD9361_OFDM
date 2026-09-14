@@ -99,14 +99,24 @@ AD9361_test2/tools/pc_sender/video_playback.py
 - 2026-09-15 用户要求修复SNR，并确认停止Sender/关闭两机Vivado SDK/释放COM3 COM4；允许本轮备份、重建、下载和有界RF验证，不写Flash/SD。
   已定位dot11门控误用pkt_header_valid脉冲，S_DECODE_DATA清零后弱区样本一直0；不是噪声校准或门槛问题。
   新snr_packet_valid锁存合法BPSK1/2头，FCS结束/复位/新LTF/停长同步清除，原弱符号范围和4096样本门槛不变；IP122→123。
-  两机原工程已合入并正在全量构建；尚未下载新bit，不能称曲线修复已上板验收。C/ELF/RF/时钟/CRC/重传均不改。
+  两机原工程已合入并完成构建/配套导出；RX已上板。C/ELF/RF/时钟/CRC/重传均不改；只重载RX，不动TX运行态。
   真实门控旧版首弱符号失败，新版190检查、真实monitor计数64/power1600通过；两机gate/monitor/AXI仿真及各86 PC测试通过。
   不是完整RX PHY仿真；全局时序遗留问题仍须报告。build.tcl旧118候选配方已加同一修复，两配方等价验证通过。
   新备份RX TEMP/ad9361-snr-gate-fix-3ed3da5706444d12afc8d17965110d53，TX TEMP/ad9361-snr-gate-fix-026932ad76784c87b66d64f83a60b0a9。
   before核验1293/1292文件差异0，不能拿上轮merge的before旧Stage18当本轮恢复版本。
   本轮原板读回DC48/63/guard32/shift4，TX16/RX66、40MSPS和四时钟正确；SNR函数8条机器码与现ELF吻合后才读RAM（非全RAM镜像一致证明）。
   read_state.tcl已处理XSCT Tcl32位scan符号扩展；最初同机器码报不一致是工具比较错误，不是板内版本变化。
-  本地仅改源IP和可复现脚本，尚无新构建产物；最新实际进展/结果以根README及本轮日志为准。
+  RX bit BF40B3EC…/HDF57B822EC…，ELF仍78C7914C…；PS初始化/BSP不变。100MHz+0.535/+0.053，monitor from/to+4.790/+1.603，hold+0.157；全局-7.291/-1.721仍不签核。
+  TX bit D954E8FD…/HDF5C867861…，ELF仍9AC341A5…；独立检查同样时序数值，磁盘更新但不重载TX。最后RX96/TX95个应用源码/Debug文件与备份一致。
+  旧1MiB1088/1093且SNR样本0；新1MiB1086/1093、21,680,320样本、14点；新8MiB8711/8739、中途遥测48点，隐藏实际GUI曲线可用、停发约1s后N/A。
+  三轮独立捕获复核一致，弱BER0.233796/0.034121/0.072520%，保护前30B错误0/PC重传0；两新轮PS有效/UDP/PC均9797，拒7（len2/no_magic5），DMA/stall0。不能当丢包改善因果。
+  绝对SNR未验收：当前宽带估计约-13.6~-9.1dB，Pn约7.09e6。三短窗静默IQ约93.5~95.6%能量来自均值、均值方向变化，支持强慢变/近直流背景，未证明具体器件或TX泄漏根因。
+  200MHz旧ILA有违例，三1024行/102样本/strobe后两行稳定/10拍间隔通过仅为诊断；不将短窗去均值功率替代Pn，也不由BER反推SNR。
+  PC只补充wideband/quiet background/DC tones提示，原算法/窗口/门槛不改，各86测试再次通过；用户原GUI不重启，需用户自己停后重开。
+  下一阶段有效payload子载波SNR需另行设计并验证去直流/窄带背景测量，不能把本轮曲线恢复当准确SNR完成。
+  功能提交cb7707f已两机同步，TX仅stash本轮11自有文件12bf1084…后FF，无关dirty94/15保留。push本轮Connection aborted，尚未成功。
+  本地已同步源IP、脚本和发送角色SDK新bit/HDF，HDF内bit/6个PS初始化核验，ELF不变；TEMP/ad9361-snr-gate-local-2e2d51bd1f054608a8fe9a92a154ab01/sdk-before保留旧产物。
+  本地XPR/BD/runs未原生刷新，重建须刷新IP/升级RX123/重生成BD，远端两机原生完成。接收GUI目标JTAG读回192.168.1.100:15002，两板ping正常、COM3/4释放、自有hw_server关闭。
 - 2026-09-14 用户授权SNR更新原工程/固化；本轮不写Flash/SD、不改变RF默认值、不增加重传。
   两机原RX IP已合并候选同一补丁并升级revision122，原工程已全量构建和安装硬件导出；原net_rx.c加3个接入点和payload_snr_service.h。
   原SDK make已完成：RX ELF78C7914C…、TX ELF9AC341A5…，与上一轮候选457C74F7…不同。

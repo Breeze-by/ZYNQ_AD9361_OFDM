@@ -63,6 +63,8 @@ class SNRTests(unittest.TestCase):
         self.assertAlmostEqual(result.db, 10 * math.log10(2))  # (6-2)/2
         self.assertEqual(result.noise_power, 2)
         self.assertEqual(result.signal_plus_noise, 6)
+        self.assertIn('wideband', result.status)
+        self.assertIn('DC/tones', result.status)
 
     def test_negative_db_is_valid(self):
         tracker = SNRTracker()

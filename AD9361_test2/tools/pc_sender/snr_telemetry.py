@@ -4,6 +4,9 @@ The receiver PL supplies unscaled I/Q moments; the PS keeps an explicitly
 calibrated quiet reference. The PC subtracts DC and noise in LINEAR power.
 Only detected BPSK 1/2 packets contribute; this is not Eb/N0 or calibrated RF
 input power. The payload time windows include OFDM pilots, not just data bins.
+The quiet reference can contain drifting DC, tones or interference. Removing
+one window-wide mean does not remove those components; the aggregate moments
+cannot identify their spectrum or certify an effective data-subcarrier SNR.
 """
 import binascii
 import math
@@ -206,7 +209,8 @@ class SNRTracker:
         if noise is None or noise <= 0 or received is None or received <= noise:
             return SNRPoint(**info, status="Measured power <= noise floor; SNR unresolved")
         db = 10 * math.log10((received - noise) / noise)
-        return SNRPoint(**info, db=db, status="Measured weak DATA I/Q; ~1s, quiet-noise reference")
+        return SNRPoint(**info, db=db,
+                        status="Measured wideband weak DATA / quiet background; ~1s (DC/tones may bias SNR)")
 
 
 def monitor(bind_ip, board_ip, board_port, stop_event, callback):
