@@ -24,6 +24,85 @@ PC UDP sender
 
 当前仓库只保留这一份 README。以后更新项目说明、协议、构建步骤、PC 工具用法或调参结论，都直接更新根目录 `README.md`，不要在子目录新增 README。
 
+## 2026-09-14 SNR 合并回原工程
+
+用户已授权将最新 SNR 实现更新并固化到工程。两台电脑的原工程路径均为
+`E:/by2025/AD9361_test_board/AD9361_test2`，不是此前的独立候选目录。
+本轮“固化”指源码、原工程构建和配套硬件导出，**不写 Flash/SD，不保存某次环境的噪声校准值**。
+板级下载、真实噪声校准及SNR/收包性能验收尚未进行；完成编译不等于测量数值已可信。
+
+已合并的源码：
+
+- PL：原 `ip_repo/openofdm_rx` 的 `sync_long.v`、`dot11.v`、`openofdm_rx.v`、`openofdm_rx_s_axi.v`，
+  新增 `payload_snr_monitor.v`，component revision升为122；原BD升级RX IP并核对生成副本一致。
+  只接入旁路测量、弱区门控和快照寄存器，没有修改TX调制、RX译码/CRC处理、接口地址或搬运时钟。
+- PS：原 `src/drivers/net/net_rx.c` 增加服务include、UDP请求分流和S2MM重装后的非阻塞校准poll，
+  新增 `payload_snr_service.h`；两端均已用各自原SDK正常make编译，不复制另一台的ELF。
+- PC：两台SDK已同步新版丢包/BER/SNR GUI及校准接口。发送电脑从bcd1e5b安全快进到3003287基线，
+  原94项无关dirty保留；接收原15项无关dirty保留。本轮功能提交 `f9dd4be` 已在两机同步。
+
+`COMMON.c`、`app_config.h`、`main.c`及本机射频角色配置未修改：TX16 dB/RX36 dB为发送工程，
+接收工程本地override为TX25 dB/RX66 dB；guard32/弱区1/16、plateau63、2.2 GHz、采样及搬运时钟保持。
+注意历史接收板运行时DC门限44**仍未固化**，源码的RF DC门限仍为48，重新初始化ELF会回48；
+这不是本次新增SNR控制，也不能把本轮说成固化了所有历史临时寄存器。
+原噪声参考只在PS RAM中保存，重新启动板卡后需要停止发射并重新点击 `Calibrate SNR noise...`。
+
+备份和构建记录分别在：
+
+- 接收电脑 `%TEMP%/ad9361-snr-merge-eaa583bf63024bc6aaf01c1f711b7386/`
+- 发送电脑 `%TEMP%/ad9361-snr-merge-f31710dd97674268a699d5ae974b0dd0/`
+
+`before/`保存原XPR、srcs、IP、PS源码/Debug、PC工具、BSP和平台；原文件哈希复核分别1291/1290项。
+首次备份的Git diff输出参数错误，原文件复制已完成；修正参数后补存diff并再次核对全部原文件，未跳过备份检查。
+工具在 `hardware_profiles/payload_snr_20260914/`：`backup_merge.ps1`、`merge_into_project.tcl`、
+`install_sources.ps1`、`install_hardware.ps1`；都拒绝覆盖已有记录/重复补丁，安装前对比备份保留用户修改。
+`download_defaults.tcl`从每台正式ELF重新解析符号并校验新能力签名A7220001，不写Flash/SD；本轮尚未执行。
+已经合并SNR后应正常编译原SDK，不要再执行旧候选 `build_elf.ps1` 重复插入服务。
+
+两端原SDK ELF已编译成功、make检查为最新且包含SNR服务符号：
+
+- RX ELF SHA256 `78C7914CA1C87DEB065601A14F39F24C426C41E1D9E3D21A45BC49D9D0663544`
+- TX ELF SHA256 `9AC341A57A61ED7CE7D286473B311ADBDC4F017A1D4B24F08108C940EDDBB49C`
+
+两台原PC目录各86项测试全部通过（含10项Tk），本地76通过/10缺Tcl跳过。
+两台合并后的原RX AXI寄存器与测量器联合仿真均出现 `SNR_AXI_SIM_COMPLETE`（2790ns）；
+这不是完整RX PHY仿真，也没有验证真实空口SNR或增加遥测后的丢包性能。
+两台远端原工程均完成综合、实现、生成bit和导出HDF，已更新各机原SDK硬件平台：
+
+- RX bit SHA256 `CA0EF5313E871A700E98EC426DD88F110BF1FBD754EF5CC6CEE50B9A5190261F`
+- RX HDF SHA256 `5BB2818139465CCCA1233E760DF20DA8EE615FB3A458142BF5F7E2034B743BBC`
+- TX bit SHA256 `80343EF247127D8CB5FFCE781589BAF87AEB499385498028F26E773E3CF3045D`
+- TX HDF SHA256 `74428866BB45E71A1F2A13E8D3FBAF8B826465173E9F064902EDFFC417051FCC`
+
+每台HDF内嵌bit、实现目录bit和SDK bit逐字节一致；6个PS初始化文件及BSP与各自备份一致。
+两端布局布线时序结果相同：100MHz setup/hold为+0.518/+0.052ns；测量器from/to setup为
++4.396/+1.625ns，hold均+0.055ns，974个时序单元，AXI测量时钟连接FCLK0（100MHz）已核对。
+**全工程仍未通过时序签核**：200MHz setup为−1.715ns，全局WNS/WHS为−7.177/−1.721ns。
+没有修改约束来隐藏违例；新增测量器的正余量不能证明全链路可靠性，仍需板级回归。
+
+本地工作区同步RX IP/PS源代码，并配套同步发送端新版SDK bit/HDF/ELF；不是接收端角色的ELF。
+本地没有Vivado/SDK构建环境，XPR/BD生成缓存没有原生刷新；若从本地重新构建，须在Vivado中
+刷新IP Catalog、升级openofdm_rx至revision122并重新生成BD输出，确认引用新版测量器后再生成bit。
+远端两台原工程已经完成这些步骤，可直接使用各自本轮正式产物。
+**本轮没有向板卡下载，也未核验当前板内版本。** 读板内PS变量前必须先确认运行版本；
+若仍为本轮开始时的版本，应使用`before/sdk/AD9361_test2/Debug/AD9361_test2.elf`的旧符号，
+不能用已经更新的磁盘ELF地址解释旧程序的RAM。用户若自行重新下载过，应重新确定基线。
+
+上板使用须同时更新各机自己的 `System_wrapper_hw_platform_0/System_wrapper.bit` 与
+`AD9361_test2/Debug/AD9361_test2.elf`，并使用该硬件平台内配套 `ps7_init.tcl`；不要混用收发ELF，
+也不要重新下载早期 `sma_20260906` 或SNR候选目录的旧产物。关闭并重开GUI才能加载新PC代码。
+待板上验证后，正常校准流程为：Sender停止、Receiver停止，接收GUI的 `BER Reference...` 中点击
+`Calibrate SNR noise...`，确认静默并等校准成功，再先Start Receiver、后Start Sender。
+SNR不需要BER参考文件；BER曲线仍需要与发送数据匹配的参考文件。无校准、失效、无有效弱区样本时显示N/A。
+
+功能提交 `f9dd4be68aeeec1ca50444bcdb29df1bb68225f9` 已两机同步；发送端为安全快进仅暂存本轮11个自有文件，
+stash `0949f211232ed05183b750042d6d34ca6a0660e5`保留，不要pop覆盖最终代码。原无关dirty仍RX15/TX94。
+本轮GitHub push默认连接aborted、进程内直连reset，均exit128；未修改用户代理/凭据，也未声称远程仓库已更新。
+本地旧下载文件保存在 `%TEMP%/ad9361-snr-merge-local-0f04a8669b0d4b60b3c44097836ea4c1/local-sdk-before/`，
+新文件从发送电脑复制，SHA256与上述TX记录一致，HDF内6个PS初始化文件与本地原平台一致。
+
+以下候选实现记录保留其历史验证边界，不将候选bit/ELF路径当成原工程的新正式产物。
+
 ## 2026-09-14 payload SNR 测量候选：已构建，尚未上板验证
 
 后续按用户要求实现真实 I/Q 功率遥测，代码在 `hardware_profiles/payload_snr_20260914/`，

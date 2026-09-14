@@ -96,6 +96,21 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-14 用户授权SNR更新原工程/固化；本轮不写Flash/SD、不改变RF默认值、不增加重传。
+  两机原RX IP已合并候选同一补丁并升级revision122，原工程已全量构建和安装硬件导出；原net_rx.c加3个接入点和payload_snr_service.h。
+  原SDK make已完成：RX ELF78C7914C…、TX ELF9AC341A5…，与上一轮候选457C74F7…不同。
+  两机PC源码同步到3003287基线并各86项全过；功能f9dd4be已两机同步，本地RX IP/PS源码及发送角色SDK产物同步。
+  本地无Xilinx构建环境、XPR/BD缓存未原生刷新，本地重建须先刷新IP/升级RX122/重新生成BD输出；远端均已做完。
+  main/COMMON/app_config/role未改，DC44仍是历史运行时覆盖，重新初始化本轮ELF仍回48；不声称固化了44。
+  备份/构建根：RX TEMP/ad9361-snr-merge-eaa583bf63024bc6aaf01c1f711b7386，TX TEMP/ad9361-snr-merge-f31710dd97674268a699d5ae974b0dd0。
+  before含XPR/srcs/IP/sdk源码Debug/PC/BSP/平台，复核1291/1290文件；首次diff参数错误已补存并全部重新核对。
+  尚未下载/操作JTAG/串口/进行RF或SNR实测；用户尚未回复本轮停发及释放工具确认，本轮未核验当前板内版本。
+  磁盘ELF已更新；读RAM先确认运行版本。若仍为轮初版须用before旧ELF解析符号；用户若自行下载则重新定基线，不能用新ELF地址读旧运行态。
+  新RX bit CA0EF531…/HDF5BB28181…，TX bit80343EF2…/HDF74428866…；各机HDF内bit/实现bit/SDK bit一致，6个PS初始化及BSP不变。
+  两机实际原AXI联合仿真均2790ns SNR_AXI_SIM_COMPLETE；不是完整RX PHY仿真。两机100MHz +0.518/+0.052ns，monitor from/to setup +4.396/+1.625，hold +0.055。
+  全局WNS/WHS -7.177/-1.721ns、200MHz setup -1.715，仍未签核；不能将老候选8AFBCCB1…或旧时序数值当新原工程结果。
+  新helper下载脚本已准备但未执行；两机代码功能提交f9dd4be，sender仅stash本轮11自有文件0949f211…后安全FF，无关dirty仍94/15。
+  本轮push默认Connection aborted/进程内直连Connection reset，均128，未改凭据/代理；未push成功，历史认证失败不作为本轮唯一原因。
 - 2026-09-14 SNR新增候选实现payload_snr_20260914，尚未上板/固化，不把完成构建说成曲线已实测可用。
   原XPR/BD/IP和C/正式bit/ELF/HDF保持；build.tcl只改独立副本，build_elf.ps1只生成候选net_rx对象/ELF。
   GUI用snr_telemetry独立控制socket，4Hz查询原始I/Q矩，约1秒样本加权；BER/缺包曲线不覆盖SNR。
