@@ -96,6 +96,20 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-14 SNR新增候选实现payload_snr_20260914，尚未上板/固化，不把完成构建说成曲线已实测可用。
+  原XPR/BD/IP和C/正式bit/ELF/HDF保持；build.tcl只改独立副本，build_elf.ps1只生成候选net_rx对象/ELF。
+  GUI用snr_telemetry独立控制socket，4Hz查询原始I/Q矩，约1秒样本加权；BER/缺包曲线不覆盖SNR。
+  噪声明确要求Sender静默校准10+200ms，手动固定增益；DC去均值后线性扣噪，Pr<=Pn无效，不从BER/RSSI推导。
+  弱DATA从sync_long原RAM输出、FFT/×16恢复前取样，跳guard32和额外1个过渡符号，含导频，只统计有效BPSK1/2 PHY头，不要求FCS正确。
+  校准期间合法PHY头/测点削顶/增益模式BW采样率LO配置变化/30分钟过期无效；无包不是无信号，16位检查不排除模拟或早级ADC饱和。
+  RX新reg6控制/22快照序号/28数据/29能力A7220001，reg31仍A7170002、reg19不变；绝不可对原bit套新寄存器解释。
+  SNRQ请求20B/SNR1回复260B，独立CRC/requestID，不改RXCFG peer或视频40B头；校准poll在S2MM重装后，开销仍待RF验证。
+  接收PC阶段86项含10Tk全过，本地76过10缺Tcl跳；计数器sim-b和实际候选AXI联合仿真通过，非完整RX仿真。
+  独立硬件E:/by2025/AD9361_test_board/ad9361_snr_20260914_a：bit8AFBCCB1…，HDF2D44FE24…；候选ELF457C74F7…。
+  新计数器from/to setup+3.404/+2.085ns、hold+0.070，旧200MHz仍-1.772ns，不是全局时序签核。
+  原备份/日志/elf-a/pc-stage在接收TEMP/ad9361-snr-20260914-b3832309dbb14084b1890fd131fc652a。
+  没有新板级SNR/RF结果、JTAG重载或Flash/SD写入；板级验证仍需用户确认停发、工具释放及天线配置，保留原Stage18基线。
+  本地/接收原SDK已更新4个PC源码测试文件，安装目录86项再次全过；运行GUI不重启，旧bit/ELF仍无SNR。无关dirty接收15/发送94保留。
 - 2026-09-14 用户要求丢包率也使用最近1秒窗口：当前 loss_pct 已改为序号范围发现时间 `(t-1s,t]` 的暂定缺失率，
   loss_total_pct 和原累计 missing/expected/received 保留；GUI 标题 last 1s、下方同时列窗口和累计值。
   缺包按推进最高序号时的新范围归属，不知道真实发送时间；活跃范围迟到修正，过期范围迟到仅修正累计，重复不刷新窗口。

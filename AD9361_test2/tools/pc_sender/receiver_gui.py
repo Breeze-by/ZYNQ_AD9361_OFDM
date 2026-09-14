@@ -19,6 +19,7 @@ from receiver_core import (
 )
 from sender_gui import Sparkline
 from quality_chart import QualityChart
+from snr_telemetry import SNRClient, SNRPoint, monitor as monitor_snr
 from video_protocol import AIRV_FRAME_KEY
 from video_playback import VideoPreviewDecoder
 
@@ -39,6 +40,10 @@ class ReceiverGui:
         self.event_queue = queue.Queue()
         self.receiver_thread = None
         self.receiver = None
+        self.snr_thread = None
+        self.snr_stop = threading.Event()
+        self.snr_generation = 0
+        self.snr_calibrating = False
         self.last_summary_log_time = 0.0
         self.last_preview_log_time = 0.0
         self.last_preview_summary_log_time = 0.0
@@ -79,6 +84,8 @@ class ReceiverGui:
         self._quality_epoch = 0
         self._quality_timestamp = 0.0
         self.quality_settings_window = None
+        self.snr_enabled_var = tk.BooleanVar(value=True)
+        self.quality_snr_var = tk.StringVar(value="SNR: requires new RX bit/ELF and quiet noise calibration")
 
         self.status_var = tk.StringVar(value="Idle")
         self.register_var_text = tk.StringVar(value="N/A")
@@ -241,8 +248,8 @@ class ReceiverGui:
             return
         window = tk.Toplevel(self.root)
         self.quality_settings_window = window
-        window.title("Link quality / BER reference")
-        window.geometry("700x310")
+        window.title("Link quality / BER reference / SNR calibration")
+        window.geometry("700x390")
         box = ttk.Frame(window, padding=12)
         box.pack(fill=tk.BOTH, expand=True)
         box.columnconfigure(1, weight=1)
@@ -267,9 +274,88 @@ class ReceiverGui:
             "AIR0: select the original file or exact random-test source. Leave blank to disable BER.\n"
             "Source CRC/size are checked before comparison. Missing packets are excluded from BER.\n"
             "Changes apply on the next Start. Wait for RX registration before sending.\n"
-            "Payload SNR is unavailable: current firmware supplies no I/Q/noise telemetry."),
+            "SNR uses a separate control socket; it does not change the video RX target."),
             wraplength=660, justify=tk.LEFT).grid(row=3, column=0, columnspan=3, sticky="w", pady=14)
-        ttk.Button(box, text="Close", command=window.destroy).grid(row=4, column=2, sticky="e")
+        ttk.Checkbutton(box, text="SNR telemetry (requires matching new receiver bit/ELF)",
+                        variable=self.snr_enabled_var).grid(row=4, column=0, columnspan=3, sticky="w")
+        ttk.Button(box, text="Calibrate SNR noise...", command=self._calibrate_snr).grid(row=5, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Label(box, text="Stop Sender first. Recalibrate after changing gain, bandwidth, LO or the RF environment.",
+                  wraplength=660).grid(row=6, column=0, columnspan=3, sticky="w")
+        ttk.Button(box, text="Close", command=window.destroy).grid(row=5, column=2, sticky="e")
+
+    def _stop_snr_worker(self):
+        self.snr_generation += 1
+        self.snr_stop.set()
+        if self.snr_thread is not None:
+            self.snr_thread.join(timeout=0.1)
+        self.snr_thread = None
+        self.snr_calibrating = False
+
+    def _start_snr_worker(self):
+        self._stop_snr_worker()
+        if (not self.snr_enabled_var.get() or self.receiver is None or
+                self.status_var.get() == "Stopping"):
+            return
+        config = self.receiver.config
+        self.snr_stop = threading.Event()
+        generation = self.snr_generation
+        def report(point):
+            self.event_queue.put(("snr", {"generation": generation, "point": point}))
+        self.snr_thread = threading.Thread(target=monitor_snr,
+            args=(config.bind_ip, config.board_ip, config.board_port, self.snr_stop, report), daemon=True)
+        self.snr_thread.start()
+
+    def _calibrate_snr(self):
+        if self.receiver is not None or self.snr_calibrating:
+            messagebox.showinfo("SNR calibration", "Stop Receiver first; stop Sender as well before calibration.")
+            return
+        if not messagebox.askyesno("Quiet noise calibration",
+            "Is Sender stopped, with no RF data being transmitted?\n"
+            "Keep the antennas and receiver gain unchanged.\n"
+            "A missed/undecodable packet is NOT a quiet interval.\n\n"
+            "Measure a new noise reference now?"):
+            return
+        try:
+            bind_ip = self.bind_ip_var.get().strip()
+            board_ip = self.board_ip_var.get().strip()
+            board_port = int(self.board_port_var.get())
+            if not 1 <= board_port <= 65535:
+                raise ValueError("Invalid board port")
+        except ValueError as exc:
+            messagebox.showerror("SNR calibration", str(exc))
+            return
+        self._stop_snr_worker()
+        self.snr_stop = threading.Event()
+        stop_event = self.snr_stop
+        generation = self.snr_generation
+        self.snr_calibrating = True
+        self.start_button.configure(state=tk.DISABLED)
+        self.quality_snr_var.set("SNR: calibrating noise; keep Sender stopped")
+        def calibrate():
+            client = None
+            try:
+                client = SNRClient(bind_ip, board_ip, board_port)
+                result = client.calibrate(stop_event)
+                text = (f"Noise calibrated: power={result.noise.variance():.6g} count^2, "
+                        f"samples={result.noise.count}, RX gain={result.context[0]} dB. Ready to Start.")
+            except Exception as exc:
+                text = f"Noise calibration failed: {exc}"
+            finally:
+                if client is not None:
+                    client.close()
+            self.event_queue.put(("snr_calibrated", {"generation": generation, "message": text}))
+        self.snr_thread = threading.Thread(target=calibrate, daemon=True)
+        self.snr_thread.start()
+
+    def _update_snr(self, point):
+        self.snr_chart.add_point(point.timestamp, point.db, point.status)
+        value = f"{point.db:.2f} dB" if point.db is not None else "N/A"
+        detail = ""
+        if point.noise_power is not None:
+            received = f"{point.signal_plus_noise:.6g}" if point.signal_plus_noise is not None else "N/A"
+            detail = (f"; Pr={received}, Pn={point.noise_power:.6g} count^2; "
+                      f"samples={point.samples}, noise age={point.noise_age_ms/1000:.1f}s")
+        self.quality_snr_var.set(f"SNR={value}: {point.status}{detail}")
 
     def _build_metrics(self, parent):
         metrics_box = ttk.LabelFrame(parent, text="Metrics", padding=8)
@@ -364,17 +450,18 @@ class ReceiverGui:
         for column, (title, attr, unit, color) in enumerate((
                 ("Packet loss % (last 1s*)", "loss_chart", "%", "#C62828"),
                 ("Payload BER % (last 1s)", "ber_chart", "%", "#7B1FA2"),
-                ("Payload SNR dB (unavailable)", "snr_chart", "dB", "#00796B"))):
+                ("Weak payload SNR dB (~1s)", "snr_chart", "dB", "#00796B"))):
             frame = ttk.Frame(quality_grid)
             frame.grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column < 2 else 0)
             ttk.Label(frame, text=title, font=("Consolas", 9)).pack(anchor=tk.W)
             chart = QualityChart(frame, height=110, unit=unit, color=color)
             chart.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
             setattr(self, attr, chart)
-        self.snr_chart.message = "No board payload I/Q / noise telemetry\nNot derivable from CRC or BER"
+        self.snr_chart.message = "Requires new RX bit/ELF\nand explicit quiet noise calibration"
         self.snr_chart.redraw()
         ttk.Label(quality_tab, textvariable=self.quality_loss_var, wraplength=900).pack(anchor=tk.W)
         ttk.Label(quality_tab, textvariable=self.quality_ber_var, wraplength=900).pack(anchor=tk.W)
+        ttk.Label(quality_tab, textvariable=self.quality_snr_var, wraplength=900).pack(anchor=tk.W)
         ttk.Label(quality_tab, textvariable=self.quality_reference_var, wraplength=900,
                   foreground="#555555").pack(anchor=tk.W)
 
@@ -416,6 +503,7 @@ class ReceiverGui:
         self.preview_photo = None
 
     def _on_root_close(self):
+        self._stop_snr_worker()
         if self.receiver is not None:
             self.receiver.stop()
         self._stop_preview_worker()
@@ -487,6 +575,8 @@ class ReceiverGui:
         )
 
     def _start_receiver(self):
+        if self.snr_calibrating:
+            return
         try:
             config = self._build_config_object()
         except Exception as exc:
@@ -513,14 +603,15 @@ class ReceiverGui:
             f"register={config.register_with_board} raw_expected={config.expected_bytes} output={config.output_dir}"
         )
         self._append_log(
-            f"QUALITY loss=missing/(highest_seq+1), provisional, includes initial gaps, trailing losses unknown; "
+            f"QUALITY loss=last 1s sequence-discovery window, cumulative retained, trailing losses unknown; "
             f"BER=post-FEC received business bits, window=1s, skip={config.ber_skip_bytes}, "
-            f"reference={config.ber_reference_path or 'none'}; payload SNR=N/A (no PHY telemetry)"
+            f"reference={config.ber_reference_path or 'none'}; SNR=measured weak DATA, requires quiet calibration/new RX bit+ELF"
         )
         self.receiver_thread = threading.Thread(target=self._worker_run, daemon=True)
         self.receiver_thread.start()
 
     def _stop_receiver(self):
+        self._stop_snr_worker()
         if self.receiver is not None:
             self.receiver.stop()
             self.status_var.set("Stopping")
@@ -540,6 +631,7 @@ class ReceiverGui:
         self.event_queue.put((event_name, payload))
 
     def _reset_runtime_state(self):
+        self._stop_snr_worker()
         self.register_var_text.set("N/A")
         self.rx_bytes_var.set("0")
         self.highest_var.set("0")
@@ -584,7 +676,8 @@ class ReceiverGui:
         self.loss_chart.reset()
         self.ber_chart.reset()
         self.snr_chart.reset()
-        self.snr_chart.message = "No board payload I/Q / noise telemetry"
+        self.snr_chart.message = "Waiting for measured SNR telemetry / quiet calibration"
+        self.quality_snr_var.set("SNR: waiting for new hardware telemetry")
         self.snr_chart.redraw()
         self._quality_epoch = 0
         self._quality_timestamp = 0.0
@@ -596,6 +689,7 @@ class ReceiverGui:
         self.last_preview_summary_log_time = 0.0
 
     def _on_done(self):
+        self._stop_snr_worker()
         self.start_button.configure(state=tk.NORMAL)
         self.stop_button.configure(state=tk.DISABLED)
         self._stop_preview_worker()
@@ -723,14 +817,16 @@ class ReceiverGui:
         if quality.timestamp <= self._quality_timestamp:
             return
         if quality.epoch != self._quality_epoch:
-            for chart in (self.loss_chart, self.ber_chart, self.snr_chart):
+            for chart in (self.loss_chart, self.ber_chart):
                 chart.reset()
             self._quality_epoch = quality.epoch
         self._quality_timestamp = quality.timestamp
         self.loss_chart.add_point(quality.timestamp, quality.loss_pct, "No new sequence range in last 1s")
         self.ber_chart.add_point(quality.timestamp, quality.ber_pct,
                                  quality.reference_status if quality.compared_bits == 0 else "No matched samples in last 1s / reference mismatch")
-        self.snr_chart.add_point(quality.timestamp, quality.snr_db, quality.snr_status)
+        # SNR is updated only by its independent measured telemetry events.
+        if not self.snr_chart.points:
+            self.snr_chart.add_point(quality.timestamp, None, "Waiting for SNR telemetry / quiet calibration")
         loss = f"{quality.loss_pct:.4f}%" if quality.loss_pct is not None else "N/A"
         loss_total = f"{quality.loss_total_pct:.4f}%" if quality.loss_total_pct is not None else "N/A"
         self.quality_loss_var.set(
@@ -741,7 +837,7 @@ class ReceiverGui:
         self.quality_ber_var.set(
             f"BER total={ber}, errors/bits={quality.error_bits}/{quality.compared_bits}; "
             f"skip first {quality.ber_skip_bytes} business bytes per packet. Missing packets excluded.")
-        self.quality_reference_var.set(f"Reference: {quality.reference_status}; skipped reference comparisons={quality.reference_skips}. SNR: no board telemetry.")
+        self.quality_reference_var.set(f"Reference: {quality.reference_status}; skipped reference comparisons={quality.reference_skips}.")
 
     def _display_preview_image(self, image):
         try:
@@ -877,6 +973,18 @@ class ReceiverGui:
         self._set_preview_message("Decoding AIRV frames")
 
     def _handle_event(self, event_name: str, payload: dict):
+        if event_name in ("snr", "snr_calibrated"):
+            if payload["generation"] != self.snr_generation:
+                return
+            if event_name == "snr":
+                self._update_snr(payload["point"])
+            else:
+                self.snr_calibrating = False
+                self.snr_thread = None
+                self.start_button.configure(state=tk.NORMAL)
+                self.quality_snr_var.set(payload["message"])
+                self._append_log(f"SNR {payload['message']}")
+            return
         if event_name == "quality_status":
             self.quality_reference_var.set(payload["message"])
             self._append_log(f"QUALITY {payload['message']}")
@@ -912,6 +1020,7 @@ class ReceiverGui:
             return
 
         if event_name == "registered":
+            self._start_snr_worker()
             self.register_var_text.set("OK")
             self._append_log(
                 f"RX target registered at board {payload['board_ip']}:{payload['board_port']} "

@@ -1,11 +1,13 @@
 import math
 import tkinter as tk
 import unittest
+from unittest.mock import patch
 
 from link_quality import QualitySnapshot
 from quality_chart import QualityChart
 from receiver_core import ReceiverStats
 from receiver_gui import ReceiverGui
+from snr_telemetry import SNRPoint
 
 
 class QualityGuiTests(unittest.TestCase):
@@ -85,6 +87,64 @@ class QualityGuiTests(unittest.TestCase):
         gui._open_quality_settings()
         gui.quality_settings_window.withdraw()
         self.assertTrue(gui.quality_settings_window.winfo_exists())
+
+    def test_measured_snr_is_independent_of_ber_and_loss_epochs(self):
+        gui = ReceiverGui(self.root)
+        point = SNRPoint(100, -2.5, "Measured", 156.234, 100, 20000, 7500)
+        gui._handle_event("snr", {"generation": gui.snr_generation, "point": point})
+        gui._update_quality(QualitySnapshot(timestamp=101, epoch=1))
+        gui._update_quality(QualitySnapshot(timestamp=102, epoch=2))
+        self.assertEqual(list(gui.snr_chart.points), [(100, -2.5)])
+        self.assertIn("SNR=-2.50 dB", gui.quality_snr_var.get())
+        self.assertIn("noise age=7.5s", gui.quality_snr_var.get())
+        gui._update_snr(SNRPoint(103, status="No new samples"))
+        self.assertIsNone(gui.snr_chart.points[-1][1])
+        self.assertIn("SNR=N/A", gui.quality_snr_var.get())
+
+    def test_stale_snr_worker_events_cannot_update_new_session(self):
+        gui = ReceiverGui(self.root)
+        old_generation = gui.snr_generation
+        gui._stop_snr_worker()
+        gui._handle_event("snr", {"generation": old_generation, "point": SNRPoint(100, 99)})
+        gui._handle_event("snr_calibrated", {"generation": old_generation, "message": "stale"})
+        self.assertFalse(gui.snr_chart.points)
+        self.assertNotEqual(gui.quality_snr_var.get(), "stale")
+
+    def test_noise_calibration_requires_stopped_receiver_and_confirmation(self):
+        gui = ReceiverGui(self.root)
+        with patch("receiver_gui.SNRClient") as client, \
+                patch("receiver_gui.messagebox.showinfo") as info, \
+                patch("receiver_gui.messagebox.askyesno", return_value=False) as ask:
+            gui.receiver = object()
+            gui._calibrate_snr()
+            info.assert_called_once()
+            ask.assert_not_called()
+            gui.receiver = None
+            gui._calibrate_snr()
+            ask.assert_called_once()
+            client.assert_not_called()
+            self.assertFalse(gui.snr_calibrating)
+
+    def test_snr_does_not_start_for_disabled_or_stopping_receiver(self):
+        gui = ReceiverGui(self.root)
+        gui.receiver = object()
+        with patch("receiver_gui.threading.Thread") as thread:
+            gui.snr_enabled_var.set(False)
+            gui._start_snr_worker()
+            gui.snr_enabled_var.set(True)
+            gui.status_var.set("Stopping")
+            gui._start_snr_worker()
+            thread.assert_not_called()
+
+    def test_calibration_completion_reenables_start_and_records_result(self):
+        gui = ReceiverGui(self.root)
+        gui.snr_calibrating = True
+        gui.start_button.configure(state=tk.DISABLED)
+        gui._handle_event("snr_calibrated", {"generation": gui.snr_generation,
+                                           "message": "Noise calibrated"})
+        self.assertFalse(gui.snr_calibrating)
+        self.assertEqual(str(gui.start_button["state"]), tk.NORMAL)
+        self.assertEqual(gui.quality_snr_var.get(), "Noise calibrated")
 
 
 if __name__ == "__main__":
