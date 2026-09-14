@@ -103,6 +103,8 @@ wire slv_reg_wren_signal;}]
     set updated [string map [list $anchor $extra] $s]
     if {$s eq $updated} {error "Missing IP file group"}
     write_text $p $updated
+    source [file join $here fix_gate_patch.tcl]
+    snr_gate_fix::patch $project
     puts SNR_CANDIDATE_PATCHED
 }
 set template [read_text [file join $source_project AD9361_test2.sdk hardware_profiles sma_20260906 rebuild.tcl]]

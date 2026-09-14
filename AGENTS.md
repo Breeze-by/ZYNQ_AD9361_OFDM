@@ -96,6 +96,17 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-15 用户要求修复SNR，并确认停止Sender/关闭两机Vivado SDK/释放COM3 COM4；允许本轮备份、重建、下载和有界RF验证，不写Flash/SD。
+  已定位dot11门控误用pkt_header_valid脉冲，S_DECODE_DATA清零后弱区样本一直0；不是噪声校准或门槛问题。
+  新snr_packet_valid锁存合法BPSK1/2头，FCS结束/复位/新LTF/停长同步清除，原弱符号范围和4096样本门槛不变；IP122→123。
+  两机原工程已合入并正在全量构建；尚未下载新bit，不能称曲线修复已上板验收。C/ELF/RF/时钟/CRC/重传均不改。
+  真实门控旧版首弱符号失败，新版190检查、真实monitor计数64/power1600通过；两机gate/monitor/AXI仿真及各86 PC测试通过。
+  不是完整RX PHY仿真；全局时序遗留问题仍须报告。build.tcl旧118候选配方已加同一修复，两配方等价验证通过。
+  新备份RX TEMP/ad9361-snr-gate-fix-3ed3da5706444d12afc8d17965110d53，TX TEMP/ad9361-snr-gate-fix-026932ad76784c87b66d64f83a60b0a9。
+  before核验1293/1292文件差异0，不能拿上轮merge的before旧Stage18当本轮恢复版本。
+  本轮原板读回DC48/63/guard32/shift4，TX16/RX66、40MSPS和四时钟正确；SNR函数8条机器码与现ELF吻合后才读RAM（非全RAM镜像一致证明）。
+  read_state.tcl已处理XSCT Tcl32位scan符号扩展；最初同机器码报不一致是工具比较错误，不是板内版本变化。
+  本地仅改源IP和可复现脚本，尚无新构建产物；最新实际进展/结果以根README及本轮日志为准。
 - 2026-09-14 用户授权SNR更新原工程/固化；本轮不写Flash/SD、不改变RF默认值、不增加重传。
   两机原RX IP已合并候选同一补丁并升级revision122，原工程已全量构建和安装硬件导出；原net_rx.c加3个接入点和payload_snr_service.h。
   原SDK make已完成：RX ELF78C7914C…、TX ELF9AC341A5…，与上一轮候选457C74F7…不同。
