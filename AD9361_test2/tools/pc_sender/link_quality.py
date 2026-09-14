@@ -1,8 +1,9 @@
 """Receiver-side measurements. Never infer BER/SNR from a CRC failure count.
 
-Loss is the provisional missing fraction in [0, highest AIR packet sequence].
-It includes all failures before this receiver, is corrected by late packets,
-and cannot detect an unobserved trailing loss. BER is post-FEC business data
+Loss uses sequence ranges first revealed during the last second, with a
+separate cumulative fraction in [0, highest AIR packet sequence]. It includes
+all failures before this receiver, is corrected by late packets, and cannot
+detect an unobserved trailing loss. BER is post-FEC business data
 compared with an explicit source file, excluding headers, padding and losses.
 The current board protocol does NOT supply payload SNR telemetry.
 """
@@ -29,6 +30,10 @@ class QualitySnapshot:
     expected_so_far: int = 0
     missing_packets: int = 0
     loss_pct: Optional[float] = None
+    loss_total_pct: Optional[float] = None
+    window_expected_packets: int = 0
+    window_received_packets: int = 0
+    window_missing_packets: int = 0
     ber_pct: Optional[float] = None
     ber_total_pct: Optional[float] = None
     compared_bits: int = 0
@@ -78,6 +83,14 @@ class PayloadReference:
         return expected
 
 
+@dataclass
+class _LossRange:
+    timestamp: float
+    first: int
+    last: int
+    received: int = 1
+
+
 class LinkQualityTracker:
     WINDOW_S = 1.0
 
@@ -92,6 +105,7 @@ class LinkQualityTracker:
         self._seen = set()
         self._highest = -1
         self._samples = deque()
+        self._loss_ranges = deque()
         self._bits = 0
         self._errors = 0
         self._reference_skips = 0
@@ -108,6 +122,7 @@ class LinkQualityTracker:
         self._epoch += 1
         self._seen.clear()
         self._samples.clear()
+        self._loss_ranges.clear()
         self._highest = -1
         self._bits = self._errors = self._reference_skips = 0
         self._reference_status = "Waiting for matching packets" if self.reference else "No reference file"
@@ -150,11 +165,28 @@ class LinkQualityTracker:
                 return
             if not self._select_stream(stream):
                 return
+            self._expire(now)
             if header.packet_seq not in self._seen:
                 self._seen.add(header.packet_seq)
-                self._highest = max(self._highest, header.packet_seq)
+                self._observe_sequence(header.packet_seq, now)
                 self._compare(mode, header, chunk[64:64 + length], now)
             cursor += header.chunk_bytes
+
+    def _observe_sequence(self, seq, now):
+        # Timestamp the newly revealed sequence range, not the unknown TX
+        # times of its missing packets. Keep gaps as ranges: a large first
+        # sequence must not allocate one entry per missing packet.
+        if seq > self._highest:
+            self._loss_ranges.append(_LossRange(now, self._highest + 1, seq))
+            self._highest = seq
+        else:
+            # Unique late arrival: correct its ORIGINAL discovery cohort if
+            # still inside the window. An expired cohort only changes totals;
+            # never subtract old loss from a new window or create negative loss.
+            for cohort in reversed(self._loss_ranges):
+                if cohort.first <= seq <= cohort.last:
+                    cohort.received += 1
+                    break
 
     def _compare(self, mode, header, payload, now):
         if self.reference is None:
@@ -183,6 +215,8 @@ class LinkQualityTracker:
     def _expire(self, now):
         while self._samples and self._samples[0][0] <= now - self.WINDOW_S:
             self._samples.popleft()
+        while self._loss_ranges and self._loss_ranges[0].timestamp <= now - self.WINDOW_S:
+            self._loss_ranges.popleft()
 
     def snapshot(self, now=None):
         if now is None:
@@ -191,13 +225,19 @@ class LinkQualityTracker:
         expected = self._highest + 1
         received = len(self._seen)
         missing = expected - received
+        window_expected = sum(cohort.last - cohort.first + 1 for cohort in self._loss_ranges)
+        window_received = sum(cohort.received for cohort in self._loss_ranges)
+        window_missing = window_expected - window_received
         bits = sum(sample[1] for sample in self._samples)
         errors = sum(sample[2] for sample in self._samples)
         matched = self._reference_status == "Matched source (post-FEC)"
         return QualitySnapshot(
             timestamp=now, epoch=self._epoch, received_packets=received,
             expected_so_far=expected, missing_packets=missing,
-            loss_pct=100.0 * missing / expected if expected else None,
+            loss_pct=100.0 * window_missing / window_expected if window_expected else None,
+            loss_total_pct=100.0 * missing / expected if expected else None,
+            window_expected_packets=window_expected, window_received_packets=window_received,
+            window_missing_packets=window_missing,
             ber_pct=100.0 * errors / bits if bits and matched else None,
             ber_total_pct=100.0 * self._errors / self._bits if self._bits else None,
             compared_bits=self._bits, error_bits=self._errors,

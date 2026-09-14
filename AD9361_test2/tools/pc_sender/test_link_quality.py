@@ -1,4 +1,5 @@
 import unittest
+import random
 import socket
 import struct
 import threading
@@ -57,6 +58,118 @@ class LinkQualityTests(unittest.TestCase):
         result = tracker.snapshot(1)
         self.assertEqual(result.expected_so_far, 1)
         self.assertEqual(result.missing_packets, 0)
+
+    def test_loss_window_is_not_cumulative_and_requires_no_ber_reference(self):
+        tracker = LinkQualityTracker()
+        tracker.observe_wire(self.chunks[1], 1024, now=1)
+        self.assertEqual(tracker.snapshot(1).loss_pct, 50)
+        tracker.observe_wire(self.chunks[2], 2048, now=2.1)
+        result = tracker.snapshot(2.1)
+        self.assertEqual(result.loss_pct, 0)
+        self.assertAlmostEqual(result.loss_total_pct, 100 / 3)
+        self.assertEqual((result.window_missing_packets, result.window_expected_packets), (0, 1))
+        self.assertEqual(result.window_received_packets, 1)
+
+    def test_loss_idle_expires_at_exact_boundary_but_keeps_total(self):
+        tracker = self.tracker()
+        tracker.observe_wire(self.chunks[2], 2048, now=1)
+        self.assertIsNotNone(tracker.snapshot(1.999).loss_pct)
+        result = tracker.snapshot(2)
+        self.assertIsNone(result.loss_pct)
+        self.assertEqual(result.window_expected_packets, 0)
+        self.assertEqual(result.window_missing_packets, 0)
+        self.assertEqual(result.window_received_packets, 0)
+        self.assertAlmostEqual(result.loss_total_pct, 200 / 3)
+        self.assertEqual(result.missing_packets, 2)
+
+    def test_loss_window_moves_by_packet_time_not_progress_updates(self):
+        tracker = self.tracker()
+        tracker.observe_wire(self.chunks[0], 0, now=1)
+        tracker.observe_wire(self.chunks[2], 2048, now=1.8)
+        self.assertAlmostEqual(tracker.snapshot(1.9).loss_pct, 100 / 3)
+        result = tracker.snapshot(2)
+        self.assertEqual(result.loss_pct, 50)
+        self.assertEqual(result.window_expected_packets, 2)
+        self.assertAlmostEqual(result.loss_total_pct, 100 / 3)
+
+    def test_late_packet_corrects_its_active_discovery_range(self):
+        tracker = self.tracker()
+        tracker.observe_wire(self.chunks[0], 0, now=1)
+        tracker.observe_wire(self.chunks[2], 2048, now=1.8)
+        tracker.observe_wire(self.chunks[1], 1024, now=2.1)
+        result = tracker.snapshot(2.1)
+        self.assertEqual(result.loss_pct, 0)
+        self.assertEqual(result.window_expected_packets, 2)
+        self.assertEqual(result.window_received_packets, 2)
+
+    def test_old_late_packet_only_corrects_total_not_new_window(self):
+        tracker = self.tracker()
+        tracker.observe_wire(self.chunks[1], 1024, now=1)
+        tracker.observe_wire(self.chunks[2], 2048, now=2.1)
+        tracker.observe_wire(self.chunks[0], 0, now=2.2)
+        result = tracker.snapshot(2.2)
+        self.assertEqual(result.loss_pct, 0)
+        self.assertEqual(result.loss_total_pct, 0)
+        self.assertEqual(result.window_expected_packets, 1)
+        self.assertEqual(result.window_received_packets, 1)
+        self.assertEqual(result.window_missing_packets, 0)
+
+    def test_duplicate_does_not_refresh_old_loss_window(self):
+        tracker = self.tracker()
+        tracker.observe_wire(self.chunks[2], 2048, now=1)
+        tracker.observe_wire(self.chunks[2], 2048, now=1.8)
+        self.assertEqual(tracker.snapshot(1.8).window_received_packets, 1)
+        self.assertIsNone(tracker.snapshot(2).loss_pct)
+
+    def test_late_packet_without_new_ranges_leaves_loss_unavailable(self):
+        tracker = self.tracker()
+        tracker.observe_wire(self.chunks[2], 2048, now=1)
+        tracker.observe_wire(self.chunks[0], 0, now=2.1)
+        result = tracker.snapshot(2.1)
+        self.assertIsNone(result.loss_pct)
+        self.assertAlmostEqual(result.loss_total_pct, 100 / 3)
+        self.assertIsNotNone(result.ber_pct)  # BER uses actual comparison time.
+
+    def test_window_matches_per_sequence_oracle_with_reordering(self):
+        rng = random.Random(20260914)
+        tracker = LinkQualityTracker()
+        discovered = {}
+        received = set()
+        now = 0
+        for seq in [rng.randrange(max(1, n - 20), n + 4) for n in range(1, 250)]:
+            now += rng.choice((0.01, 0.07, 0.3))
+            packet = build_air_packet(b'x' * 960, session_id=1, file_id=2,
+                                      packet_seq=seq, total_packets=300,
+                                      file_offset=seq * 960, chunk_bytes=1024,
+                                      file_size=300 * 960, file_crc32=0)
+            for newly_known in range(len(discovered), seq + 1):
+                discovered[newly_known] = now
+            received.add(seq)
+            tracker.observe_wire(packet, seq * 1024, now=now)
+            result = tracker.snapshot(now)
+            active = {n for n, timestamp in discovered.items() if timestamp > now - 1}
+            missing = active - received
+            self.assertEqual(result.window_expected_packets, len(active))
+            self.assertEqual(result.window_missing_packets, len(missing))
+            self.assertEqual(result.window_received_packets, len(active & received))
+            if active:
+                self.assertAlmostEqual(result.loss_pct, 100 * len(missing) / len(active))
+            else:
+                self.assertIsNone(result.loss_pct)
+            self.assertEqual(result.missing_packets, len(discovered) - len(received))
+
+    def test_large_sequence_gap_uses_one_range_not_one_entry_per_loss(self):
+        seq = 1000000
+        packet = build_air_packet(b'x' * 960, session_id=1, file_id=2,
+                                  packet_seq=seq, total_packets=seq + 1,
+                                  file_offset=seq * 960, chunk_bytes=1024,
+                                  file_size=(seq + 1) * 960, file_crc32=0)
+        tracker = LinkQualityTracker()
+        tracker.observe_wire(packet, seq * 1024, now=1)
+        self.assertEqual(len(tracker._loss_ranges), 1)
+        self.assertEqual(tracker.snapshot(1).window_missing_packets, seq)
+        tracker.snapshot(2)
+        self.assertFalse(tracker._loss_ranges)
 
     def test_bad_payload_crc_is_received_and_exact_bit_errors_counted(self):
         tracker = self.tracker()
@@ -130,6 +243,9 @@ class LinkQualityTests(unittest.TestCase):
         self.assertEqual(result.epoch, 2)
         self.assertEqual(result.received_packets, 1)
         self.assertEqual(result.missing_packets, 0)
+        self.assertEqual(result.window_expected_packets, 1)
+        self.assertEqual(result.window_missing_packets, 0)
+        self.assertEqual(result.loss_total_pct, 0)
 
     def test_reference_requires_annexb_for_video(self):
         self.path.write_bytes(b"not MP4 or a valid Annex-B source")

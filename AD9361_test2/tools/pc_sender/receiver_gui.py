@@ -362,7 +362,7 @@ class ReceiverGui:
             quality_grid.columnconfigure(column, weight=1, uniform="quality")
         self.loss_chart, self.ber_chart, self.snr_chart = [None] * 3
         for column, (title, attr, unit, color) in enumerate((
-                ("Packet loss % (cumulative*)", "loss_chart", "%", "#C62828"),
+                ("Packet loss % (last 1s*)", "loss_chart", "%", "#C62828"),
                 ("Payload BER % (last 1s)", "ber_chart", "%", "#7B1FA2"),
                 ("Payload SNR dB (unavailable)", "snr_chart", "dB", "#00796B"))):
             frame = ttk.Frame(quality_grid)
@@ -727,14 +727,16 @@ class ReceiverGui:
                 chart.reset()
             self._quality_epoch = quality.epoch
         self._quality_timestamp = quality.timestamp
-        self.loss_chart.add_point(quality.timestamp, quality.loss_pct, "Waiting for valid AIR0/AIRV headers")
+        self.loss_chart.add_point(quality.timestamp, quality.loss_pct, "No new sequence range in last 1s")
         self.ber_chart.add_point(quality.timestamp, quality.ber_pct,
                                  quality.reference_status if quality.compared_bits == 0 else "No matched samples in last 1s / reference mismatch")
         self.snr_chart.add_point(quality.timestamp, quality.snr_db, quality.snr_status)
         loss = f"{quality.loss_pct:.4f}%" if quality.loss_pct is not None else "N/A"
+        loss_total = f"{quality.loss_total_pct:.4f}%" if quality.loss_total_pct is not None else "N/A"
         self.quality_loss_var.set(
-            f"Missing {quality.missing_packets} / {quality.expected_so_far} ({loss}); "
-            f"unique received={quality.received_packets}. *Provisional, through highest sequence; trailing loss unknown.")
+            f"Loss last 1s={loss} ({quality.window_missing_packets}/{quality.window_expected_packets}); "
+            f"total={loss_total} ({quality.missing_packets}/{quality.expected_so_far}), "
+            f"unique received={quality.received_packets}. *Sequence-discovery window; provisional, trailing loss unknown.")
         ber = f"{quality.ber_total_pct:.6f}%" if quality.ber_total_pct is not None else "N/A"
         self.quality_ber_var.set(
             f"BER total={ber}, errors/bits={quality.error_bits}/{quality.compared_bits}; "

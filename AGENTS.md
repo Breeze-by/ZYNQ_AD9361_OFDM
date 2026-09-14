@@ -96,6 +96,15 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-14 用户要求丢包率也使用最近1秒窗口：当前 loss_pct 已改为序号范围发现时间 `(t-1s,t]` 的暂定缺失率，
+  loss_total_pct 和原累计 missing/expected/received 保留；GUI 标题 last 1s、下方同时列窗口和累计值。
+  缺包按推进最高序号时的新范围归属，不知道真实发送时间；活跃范围迟到修正，过期范围迟到仅修正累计，重复不刷新窗口。
+  无新范围约1秒后 N/A，不是0/100%；尾部未知/全丢窗口需后续序号才能发现，不能称纯RF或严格发送秒丢包率。
+  仍将坏payload视为收到，不改变BER窗口或原视频组帧/解码；只改PC端，板卡/GUI运行进程不动。
+  静默/弱区功率法SNR仅说明：同测点同增益带宽的 mean(I²+Q²)，线性扣噪后取10log10；无包不等于无信号。
+  强保护区和弱payload分开；缩放/DC/干扰/削顶需处理，PL/PS测量遥测尚未实现，SNR仍N/A。
+  共66项测试在接收电脑独立目录及安装目录全部通过，本地61通过/5缺Tcl跳过；接收机及本地已更新，发送机未改。
+  接收机六文件备份ad9361-loss-window-e0264d13eaa04e51b7e065726172a2ee/before，无关15项dirty保留。
 - 2026-09-14 接收 GUI 增加 Link quality 页：包序号累计暂定缺失率、参考源逐 bit 比对的最近1秒业务 BER，保留 Throughput 页。
   源文件通过 BER Reference 对话框选择：AIRV 为 Sender 真正使用的 H.264 Annex-B（不是 MP4），AIR0 为相同原文件/随机源。
   源/帧和分片 CRC/长度先核对；无参考/不匹配/无新样本必须 N/A，不把 CRC 失败率当 BER。

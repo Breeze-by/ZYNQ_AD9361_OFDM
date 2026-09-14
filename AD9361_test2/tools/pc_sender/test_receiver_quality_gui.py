@@ -40,15 +40,25 @@ class QualityGuiTests(unittest.TestCase):
         gui = ReceiverGui(self.root)
         sample = QualitySnapshot(timestamp=100, epoch=1, received_packets=997,
                                  expected_so_far=1000, missing_packets=3,
-                                 loss_pct=0.3, ber_pct=7.5, ber_total_pct=7.5,
+                                 loss_pct=1, loss_total_pct=0.3,
+                                 window_expected_packets=100, window_received_packets=99,
+                                 window_missing_packets=1, ber_pct=7.5, ber_total_pct=7.5,
                                  compared_bits=8000, error_bits=600)
         gui._update_stats(ReceiverStats(quality=sample))
-        self.assertEqual(gui.loss_chart.points[-1][1], 0.3)
+        self.assertEqual(gui.loss_chart.points[-1][1], 1)
+        self.assertIn("Loss last 1s=1.0000% (1/100)", gui.quality_loss_var.get())
+        self.assertIn("total=0.3000% (3/1000)", gui.quality_loss_var.get())
         self.assertEqual(gui.ber_chart.points[-1][1], 7.5)
         self.assertIsNone(gui.snr_chart.points[-1][1])
         gui._update_stats(ReceiverStats(quality=sample))
         self.assertEqual(len(gui.loss_chart.points), 1)
-        gui._update_quality(QualitySnapshot(timestamp=101, epoch=2))
+        gui._update_quality(QualitySnapshot(timestamp=101, epoch=1,
+                                           received_packets=997, expected_so_far=1000,
+                                           missing_packets=3, loss_total_pct=0.3))
+        self.assertIsNone(gui.loss_chart.points[-1][1])
+        self.assertIn("Loss last 1s=N/A", gui.quality_loss_var.get())
+        self.assertIn("total=0.3000% (3/1000)", gui.quality_loss_var.get())
+        gui._update_quality(QualitySnapshot(timestamp=102, epoch=2))
         self.assertEqual(len(gui.loss_chart.points), 1)
         self.assertIsNone(gui.loss_chart.points[-1][1])
         gui._reset_runtime_state()
