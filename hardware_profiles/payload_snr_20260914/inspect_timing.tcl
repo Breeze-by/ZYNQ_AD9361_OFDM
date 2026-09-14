@@ -1,9 +1,11 @@
 # Read-only check of the independent candidate, not timing signoff.
-if {$argc != 1} {error "Expected candidate project directory"}
+if {$argc ni {1 2}} {error "Expected project directory and optional reports directory"}
 set project [file normalize [lindex $argv 0]]
 open_project [file join $project AD9361_test2.xpr]
 open_run impl_1
 set out [file join $project build_reports]
+if {$argc==2} {set out [file normalize [lindex $argv 1]]}
+if {![file isdirectory $out]} {error "Reports directory missing"}
 foreach name {clk_fpga_0 clk_fpga_1 clk_fpga_2 clk_fpga_3} {
     set clk [get_clocks -quiet $name]
     if {[llength $clk]!=1} {error "Missing $name"}

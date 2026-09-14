@@ -7,7 +7,7 @@ if(!(Select-String -LiteralPath (Join-Path $src 'openofdm_rx_s_axi.v') -Pattern 
 New-Item -ItemType Directory -Path $Out | Out-Null
 Push-Location -LiteralPath $Out
 try {
-    $bin='D:\Xilinx\Vivado\2018.3\bin'
+    $bin=if(Test-Path -LiteralPath 'D:\Xilinx\Vivado\2018.3\bin'){'D:\Xilinx\Vivado\2018.3\bin'}else{'D:\vivado2018\Vivado\2018.3\bin'}
     & "$bin\xvlog.bat" (Join-Path $src 'openofdm_rx_s_axi.v') (Join-Path $src 'payload_snr_monitor.v') (Join-Path $PSScriptRoot 'axi_tb.v')
     if($LASTEXITCODE){throw 'xvlog failed'}
     & "$bin\xelab.bat" axi_tb -s snr_axi

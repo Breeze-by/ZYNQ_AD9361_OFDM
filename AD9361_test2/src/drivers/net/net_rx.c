@@ -1977,6 +1977,8 @@ static void net_check_agg_timeout(void)
     }
 }
 
+#include "payload_snr_service.h"
+
 static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     const ip_addr_t *addr, u16_t port)
 {
@@ -1995,6 +1997,8 @@ static void net_udp_receive_callback(void *arg, struct udp_pcb *pcb, struct pbuf
     if (p == NULL) {
         return;
     }
+
+    if (net_snr_request(p, addr, port)) return;
 
     NetStats_OnRxPacket((uint32_t)p->tot_len,
         (p->tot_len >= sizeof(header)) ? ((uint32_t)p->tot_len - (uint32_t)sizeof(header)) : 0U);
@@ -2427,6 +2431,7 @@ void Net_RxPoll(void)
     net_check_ack_timeout();
     net_loopback_poll_s2mm();
     net_loopback_ensure_s2mm();
+    net_snr_poll();
     net_loopback_print_rx_status();
     /*
      * Periodic UART statistics are also deferred until S2MM is armed, so a

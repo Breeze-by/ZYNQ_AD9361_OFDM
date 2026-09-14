@@ -6,6 +6,7 @@ $bsp=Join-Path $repo 'AD9361_test2_bsp\ps7_cortexa9_0'
 if(Test-Path -LiteralPath $Out){throw 'Preserve existing candidate ELF'}
 New-Item -ItemType Directory -Path $Out | Out-Null
 $code=Get-Content -LiteralPath "$app\src\drivers\net\net_rx.c" -Encoding UTF8 -Raw
+if($code.Contains('#include "payload_snr_service.h"')){throw 'SNR is already merged; use the normal SDK application build'}
 function Replace-Once([string]$s,[string]$a,[string]$b){
     $n=$s.IndexOf($a)
     if($n -lt 0 -or $s.IndexOf($a,$n+$a.Length) -ge 0){throw "Expected one anchor: $a"}
