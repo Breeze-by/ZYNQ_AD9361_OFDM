@@ -1,0 +1,441 @@
+{
+  "date": "2026-09-15",
+  "baseline_commit": "22233d557028ee33dca825c528444b611253276f",
+  "campaign": "file_campaign.json",
+  "definition": "Post-decoder whole business payload BER; all packets present; original errors retained.",
+  "selection": "First chronologically eligible individual trial per source and target, including nonzero bit errors and zero missing packets; all attempts retained.",
+  "valid_trials": 24,
+  "invalid_acquisition_attempts": 1,
+  "valid_trials_expected_packets": 17922,
+  "valid_trials_received_packets": 17916,
+  "valid_trials_missing_packets": 6,
+  "trials": [
+    {
+      "tag": "h265-s2-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 0,
+      "ber": 0,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 0,
+      "missing": 188,
+      "bit_errors": 0,
+      "ber": null,
+      "invalid_reason": "Acquisition orchestration error: receiver finished at 14:39:08 UTC before sender began at 14:39:32 UTC. The empty capture is not evidence of 188 RF packet losses."
+    },
+    {
+      "tag": "h265-s2-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 0,
+      "ber": 0,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a17p5-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 31,
+      "ber": 0.000021477425147709258,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a17p5-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 19,
+      "ber": 0.000013163583155047611,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 42,
+      "ber": 0.00002909844697431577,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18p25-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 2,
+      "ber": 0.000001385640332110275,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18p25-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18p25-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 186,
+      "missing": 2,
+      "bit_errors": 61,
+      "ber": 0.00004271660821727487,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18p5-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 38,
+      "ber": 0.000026327166310095223,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18p5-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 80,
+      "ber": 0.00005542561328441099,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a18p75-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 80,
+      "ber": 0.00005542561328441099,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s2-a19p25-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 64,
+      "ber": 0.0000443404906275288,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s3-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 468,
+      "ber": 0.0003242398377138043,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s3-a14-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 47,
+      "ber": 0.00003256254780459146,
+      "invalid_reason": null
+    },
+    {
+      "tag": "h265-s3-a15-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "bit_errors": 157,
+      "ber": 0.00010877276607065657,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "bit_errors": 0,
+      "ber": 0,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a15-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "bit_errors": 19,
+      "ber": 0.0000014751113010295344,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a16-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "bit_errors": 78,
+      "ber": 0.000006055720077910721,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a17-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "bit_errors": 110,
+      "ber": 0.000008540118058592041,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a18p25-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "bit_errors": 92,
+      "ber": 0.000007146905576326466,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a18p25-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1676,
+      "missing": 2,
+      "bit_errors": 126,
+      "ber": 0.000009793996497791221,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a18p25-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "bit_errors": 100,
+      "ber": 0.00000776837562644181,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s2-a18p25-04",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "bit_errors": 105,
+      "ber": 0.000008151930874110586,
+      "invalid_reason": null
+    },
+    {
+      "tag": "vqpk-s3-a15-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "bit_errors": 1602,
+      "ber": 0.00012437517390785866,
+      "invalid_reason": null
+    }
+  ],
+  "outputs": [
+    {
+      "file": "h265_payload_BER_1e-4.h265",
+      "tag": "h265-s3-a15-01",
+      "target_ber": 0.0001,
+      "source_sha256": "beeccd8ec4deabc9c5a7fcbe252f518b8f765eb6e773a3c97f9d767143ebbf53",
+      "received_sha256": "775147dec6c04bd907a3b771ecddfd3d897870688d7ff197bec1b2f502bb45b4",
+      "expected_packets": 188,
+      "received_packets": 188,
+      "bit_errors": 157,
+      "compared_bits": 1443376,
+      "payload_ber": 0.00010877276607065657,
+      "weak_bit_errors": 157,
+      "weak_compared_bits": 1398256,
+      "protected_bit_errors": 0,
+      "conditions": {
+        "shift": 3,
+        "tx_attenuation_mdb": 15000,
+        "temporary_tx_elf": true
+      },
+      "capture_sha256": "3d5d20dc9a10b27852dfefb98f198c821949b02baa2bfa5a36bdd85eeb9e893b"
+    },
+    {
+      "file": "tx_payload_BER_1e-4.vqpk",
+      "tag": "vqpk-s3-a15-01",
+      "target_ber": 0.0001,
+      "source_sha256": "6bb8cfea7002f6cf832c3e6a657d4e4a5b16a57203877a1b1b2484cc83fbd6cc",
+      "received_sha256": "c66646fdad0bf30b31055ed92627f1c8e6f0cd1637e26d0a59355130bf155cf5",
+      "expected_packets": 1678,
+      "received_packets": 1678,
+      "bit_errors": 1602,
+      "compared_bits": 12880384,
+      "payload_ber": 0.00012437517390785866,
+      "weak_bit_errors": 1602,
+      "weak_compared_bits": 12477664,
+      "protected_bit_errors": 0,
+      "conditions": {
+        "shift": 3,
+        "tx_attenuation_mdb": 15000,
+        "temporary_tx_elf": true
+      },
+      "capture_sha256": "368a427eb176e2d252472cf6e03a9c5953078481b6455c272449095f8a471f3b"
+    },
+    {
+      "file": "h265_payload_BER_1e-6.h265",
+      "tag": "h265-s2-a18p25-01",
+      "target_ber": 0.000001,
+      "source_sha256": "beeccd8ec4deabc9c5a7fcbe252f518b8f765eb6e773a3c97f9d767143ebbf53",
+      "received_sha256": "04174eb95ab4ef0d0946a1fa3de440eef3618d3ef64c5a48af566c5834372f23",
+      "expected_packets": 188,
+      "received_packets": 188,
+      "bit_errors": 2,
+      "compared_bits": 1443376,
+      "payload_ber": 0.000001385640332110275,
+      "weak_bit_errors": 2,
+      "weak_compared_bits": 1398256,
+      "protected_bit_errors": 0,
+      "conditions": {
+        "shift": 2,
+        "tx_attenuation_mdb": 18250,
+        "temporary_tx_elf": true
+      },
+      "capture_sha256": "7291dbb7cf06cd4325634597eb3e763c889cb9b577e9984328129e850a20c1c2"
+    },
+    {
+      "file": "tx_payload_BER_1e-5.vqpk",
+      "tag": "vqpk-s2-a18p25-04",
+      "target_ber": 0.00001,
+      "source_sha256": "6bb8cfea7002f6cf832c3e6a657d4e4a5b16a57203877a1b1b2484cc83fbd6cc",
+      "received_sha256": "3042bf95c48927645adc0a47b13545b64d29ae554b8c500c5cba21f4609e7f60",
+      "expected_packets": 1678,
+      "received_packets": 1678,
+      "bit_errors": 105,
+      "compared_bits": 12880384,
+      "payload_ber": 0.000008151930874110586,
+      "weak_bit_errors": 105,
+      "weak_compared_bits": 12477664,
+      "protected_bit_errors": 0,
+      "conditions": {
+        "shift": 2,
+        "tx_attenuation_mdb": 18250,
+        "temporary_tx_elf": true
+      },
+      "capture_sha256": "bca6502bf559b49b398707976d2b8eba333ecb1939e3c6eb2039eb7672a32b53"
+    },
+    {
+      "file": "h265_payload_BER_1e-5.h265",
+      "tag": "h265-s2-a17p5-02",
+      "target_ber": 0.00001,
+      "source_sha256": "beeccd8ec4deabc9c5a7fcbe252f518b8f765eb6e773a3c97f9d767143ebbf53",
+      "received_sha256": "873db31def866392480ad33f4928822fac98f72c9309cd367ae82200b93409ec",
+      "expected_packets": 188,
+      "received_packets": 188,
+      "bit_errors": 19,
+      "compared_bits": 1443376,
+      "payload_ber": 0.000013163583155047611,
+      "weak_bit_errors": 19,
+      "weak_compared_bits": 1398256,
+      "protected_bit_errors": 0,
+      "conditions": {
+        "shift": 2,
+        "tx_attenuation_mdb": 17500,
+        "temporary_tx_elf": true
+      },
+      "capture_sha256": "4f343fb6f54373cd27f65be555050ea4e9bb7c00011c57bc667831900310a8ed"
+    },
+    {
+      "file": "tx_payload_BER_1e-6.vqpk",
+      "tag": "vqpk-s2-a15-01",
+      "target_ber": 0.000001,
+      "source_sha256": "6bb8cfea7002f6cf832c3e6a657d4e4a5b16a57203877a1b1b2484cc83fbd6cc",
+      "received_sha256": "7054e08f92b9fecc968e971200f8977eae6e938bb8fbb1bce168d887f35fbf07",
+      "expected_packets": 1678,
+      "received_packets": 1678,
+      "bit_errors": 19,
+      "compared_bits": 12880384,
+      "payload_ber": 0.0000014751113010295344,
+      "weak_bit_errors": 19,
+      "weak_compared_bits": 12477664,
+      "protected_bit_errors": 0,
+      "conditions": {
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "temporary_tx_elf": true
+      },
+      "capture_sha256": "5199077ad36522aa9786762e3dc5c90c7fe6da51ae9e9ed20a070e666fc099a3"
+    }
+  ],
+  "artifacts": {
+    "remote_directory": "E:/by2025/AD9361_test_board/AD9361_test2/BER_results_20260915",
+    "raw_archive": "raw_evidence.zip",
+    "raw_archive_bytes": 65768947,
+    "raw_archive_sha256": "0256dbb4bcc9765c50bec09077973a3851b83cd1adddfc2c56b5c2d5f66252a1",
+    "raw_archive_contains": "All 25 paired TX/RX acquisition attempts, original/reference source copies, serial logs, UDP captures, actual recovered bytes and per-trial reports; not committed to Git."
+  },
+  "restoration": {
+    "tx_original_elf_reloaded": true,
+    "rx_elf_not_reloaded": true,
+    "no_fpga_reprogramming": true,
+    "no_flash_sd_write": true,
+    "tx_attenuation_db": 16,
+    "rx_gain_db": 66,
+    "rx_dc_threshold": 48,
+    "plateau": 63,
+    "tx_payload_shift": 4,
+    "rx_matched_shift": 4,
+    "tx_board_ip": "192.168.2.50",
+    "rx_gui_target": "192.168.1.100:15002",
+    "checked_both_original_elf_code_prefix_words": 8,
+    "original_clocks_checked": true,
+    "rx_counts_before": {
+      "captures": 437760,
+      "valid": 435623,
+      "reject": 2137,
+      "no_magic": 1099,
+      "udp": 435623,
+      "dma_error": 0,
+      "stall": 0
+    },
+    "rx_counts_after": {
+      "captures": 456059,
+      "valid": 453727,
+      "reject": 2332,
+      "no_magic": 1294,
+      "udp": 453727,
+      "dma_error": 0,
+      "stall": 0
+    },
+    "count_interpretation": "Valid/UDP increased by 18104 = 17916 audited captures + 188 forwarded during the expired capture attempt. Missing 6/17922 in valid trials. Extra 195 no_magic rejections span idle and TX ELF reinitialization as well as trials; do not assign them all to business packet loss. Other reject classes did not change."
+  },
+  "limitations": [
+    "Selected zero-loss examples, not an unbiased reliability estimate or guaranteed future lossless delivery.",
+    "BER is post-decoder whole business payload, not PHY raw BER, weak-only BER or 1s BER.",
+    "TX reinitialization and channel variation mean attenuation is not a fixed BER mapping.",
+    "No video/semantic-model quality evaluation or absolute SNR qualification in this task.",
+    "Existing global FPGA timing violations are not resolved by this task."
+  ]
+}

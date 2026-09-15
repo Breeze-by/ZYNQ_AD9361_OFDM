@@ -22,6 +22,7 @@ def check(root):
         source = (tx / "source.bin").read_bytes()
         assert source == (rx.parent / "source.bin").read_bytes()
         digest = hashlib.sha256(source).hexdigest()
+        source_crc = zlib.crc32(source)
         assert digest == saved["source_sha256"] == sent["source_sha256"]
         total = (len(source) + 959) // 960
         assert sent["stats"]["chunks_acked"] == total
@@ -48,10 +49,10 @@ def check(root):
             seq, count = h[6], h[9]
             assert 0 <= seq < total and h[7] == total
             assert h[4] == sent["session_id"]
-            assert h[5] == ((zlib.crc32(source) ^ (len(source) << 1) ^ h[4]) & 0xffffffff)
+            assert h[5] == ((source_crc ^ (len(source) << 1) ^ h[4]) & 0xffffffff)
             assert h[8] == seq * 960 and h[10] == 1024
             assert outer[2] == seq * 1024
-            assert h[11] == len(source) and h[12] == zlib.crc32(source)
+            assert h[11] == len(source) and h[12] == source_crc
             assert h[3] == (5 if seq == total - 1 else 1)
             assert count == min(960, len(source) - seq * 960)
             expected = source[seq*960:seq*960 + count]

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "AD9361_test2/tools
 from air_protocol import build_air_packet, crc32
 from sender_core import LOOPBACK_FORMAT, LOOPBACK_MAGIC
 from trial import analyze
+from publish import eligible, select, SOURCES
 
 
 class TrialTests(unittest.TestCase):
@@ -82,6 +83,27 @@ class TrialTests(unittest.TestCase):
     def test_report_json_round_trip(self):
         report, _ = analyze([self.udp(0), self.udp(1)], self.source)
         self.assertEqual(json.loads(json.dumps(report)), report)
+
+    def test_zero_errors_not_a_nonzero_ber_sample(self):
+        report, _ = analyze([self.udp(0), self.udp(1)], self.source)
+        self.assertFalse(eligible(report, 1e-6))
+
+    def test_publish_tolerance_and_no_missing(self):
+        report = dict(zero_packet_loss=True, missing_count=0, compared_bits=1000000,
+                      bit_errors=1, payload_ber=1e-6)
+        self.assertTrue(eligible(report, 1e-6))
+        self.assertFalse(eligible(report, 1e-5))
+        report["missing_count"] = 1
+        self.assertFalse(eligible(report, 1e-6))
+
+    def test_selection_is_first_valid_not_best_looking(self):
+        report = dict(source_sha256=next(iter(SOURCES)), zero_packet_loss=True,
+                      missing_count=0, compared_bits=1000000, bit_errors=1, payload_ber=1e-6)
+        def row(tag, started, invalid=None):
+            return dict(tag=tag, receiver=report, sender=dict(stats=dict(started_at=started)),
+                        invalid_reason=invalid)
+        selected = select([row("later", 3), row("invalid", 1, "Expired capture"), row("first", 2)])
+        self.assertEqual([r["tag"] for r in selected.values()], ["first"])
 
 
 if __name__ == "__main__":

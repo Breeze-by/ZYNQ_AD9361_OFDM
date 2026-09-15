@@ -27,6 +27,7 @@ def analyze(datagrams, source, expected_session=None):
     from receiver_core import parse_udp_packet
     cap, chunk = 960, 1024
     total = (len(source) + cap - 1) // cap
+    source_crc = crc32(source)
     packets, pending, sessions = {}, {}, set()
     rejected, duplicates, conflicts = 0, 0, 0
     for raw in datagrams:
@@ -59,7 +60,7 @@ def analyze(datagrams, source, expected_session=None):
             start = h.packet_seq * cap
             expected = source[start:start + h.payload_len]
             if (h.chunk_bytes != chunk or h.total_packets != total or h.file_size != len(source) or
-                    h.file_offset != start or h.file_crc32 != crc32(source) or
+                    h.file_offset != start or h.file_crc32 != source_crc or
                     h.payload_len != min(cap, len(source) - start) or
                     h.payload_crc32 != crc32(expected) or packet["stream_offset"] != h.packet_seq * chunk or
                     h.flags != AIR_FLAG_DATA | (AIR_FLAG_LAST if h.packet_seq == total - 1 else 0) or
@@ -131,6 +132,7 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--seconds", type=float, default=35)
     parser.add_argument("--file")
+    parser.add_argument("--configure-board-ip", action="store_true")
     parser.add_argument("--expected-session", type=int)
     args = parser.parse_args()
     repo, out = Path(args.repo), Path(args.out)
@@ -161,8 +163,8 @@ def main():
         finally:
             receiver._discard_unsaved()
         return
-    if args.seconds < 10 or args.seconds > 120 or len(source) != 1048576:
-        raise ValueError("This preliminary sweep is bounded to one 1 MiB source and 10..120 seconds")
+    if args.seconds < 10 or args.seconds > 120 or not 0 < len(source) <= 2 * 1048576:
+        raise ValueError("A trial requires a nonempty source <= 2 MiB and 10..120 seconds")
     out.mkdir(parents=True, exist_ok=False)
     (out / "source.bin").write_bytes(source)
     legacy = repo / "hardware_profiles/payload_power_20260912/test_channel.py"
@@ -178,6 +180,7 @@ def main():
             time.sleep(0.1)
         if args.role == "sender":
             sender = UdpSender(SenderConfig(ip="192.168.2.50", bind_ip="192.168.2.101",
+                configure_board_ip=args.configure_board_ip,
                 chunk_size=1024, window_size=1, timeout=2, retries=5,
                 target_rate_kib_s=400, throughput_mode=True, validate_payload_crc=True,
                 rf_retry=False, air_protocol=True, transfer_protocol="air0_file", progress_interval_s=1))
@@ -210,7 +213,10 @@ def main():
                         pass
                 else:
                     raise RuntimeError("RXCFG registration failed")
-                write_json(out / "ready.json", dict(ready=True, port=15003))
+                capture_started_at = time.time()
+                write_json(out / "ready.json", dict(ready=True, port=15003,
+                    started_at=capture_started_at, expires_at=capture_started_at + args.seconds))
+                print("FILE_BER_RX_READY " + str(out), flush=True)
                 sock.settimeout(0.2)
                 deadline = time.monotonic() + args.seconds
                 last_data = 0
@@ -227,7 +233,9 @@ def main():
                         kind, _ = parse_udp_packet(raw)
                         if kind == "loopback":
                             last_data = stamp
+            capture_finished_at = time.time()
             report, reconstructed = analyze(read_capture(out / "udp.bin"), source)
+            report.update(capture_started_at=capture_started_at, capture_finished_at=capture_finished_at)
             (out / "received_payload.bin").write_bytes(reconstructed)
             write_json(out / "result.json", report)
             print(json.dumps(report), flush=True)

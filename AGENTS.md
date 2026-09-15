@@ -96,6 +96,18 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-15 实际AIR0文件六样本已取得：用户接受1e-6/1e-5/1e-4各0.5～2倍，按整轮全部业务payload解码后BER，不是弱区/1s。
+  H.265 180422B/188包，三个错误bit数2/19/157；VQPK 1610048B/1678包，19/105/1602。六轮均单轮全收，源与结果不进Git。
+  共25次采集、24次有效RF试验17916/17922；VQPK缺1/2/1后第四轮成功，另H.265缺2。h265-s2-02采集先结束、发送后开始，不能算188个RF丢包。
+  仍是独立profile采集，不改原AIR0 GUI CRC拒收，不恢复用户已取消的文件夹批量功能；保留真实错误、不跨轮拼包、不从源修补、不开RF重传。
+  临时RX DC44；TX/RX成对shift2/3。为细调在独立目录编译/下载sender-only ELF，原main加ADI API衰减邮箱，14～20dB/0.25dB有界、两路读回。
+  候选F51C23FE…，原源码/ELF/bit/HDF不覆盖；前后用现ELF新符号和8机器字前缀核对。RX不重载，无bit重编或Flash/SD写入。
+  已恢复原TX ELF 9AC341A5…、TX16/RX66、双板shift4、DC48/63、原四时钟，IPCFG恢复TX192.168.2.50，GUI15002 ACK/JTAG通过。
+  RX有效/UDP增18104=17916有效采集+188过期采集时回传；no_magic增195跨越静默/重初始化，其他拒绝/DMA/stall不增，不把195全算业务丢包。
+  全25原始采集独立audit，六个输出在本地和两机全文核验；新13单测通过。条件file_campaign.json、结果file_results.json，旧随机结果results.json保留。
+  两机工程根目录BER_results_20260915包含六业务文件、manifest和raw_evidence.zip（全25对采集，SHA0256DBB4…）；业务数据放SDK Git之外。
+  仅为选定零缺包误码样本，最多10轮/文件/配置，自适应筛选非无偏可靠性估计；BER有轮间波动，配置不是BER标定表。未验收模型/SNR/全局时序。
+  本轮原件备份/候选在TX TEMP/ad9361-file-ber-eccf95119e794080a23f491bef6c5b26，RX TEMP/ad9361-file-ber-292471dc50d24d8998047d07b8ba99a6；source-before备份文档/profile。
 - 2026-09-15 AIR0误码/零丢包摸底：用户实际文件后续提供，已确认停发/关闭IDE/释放COM3 COM4，天线约20cm。
   新独立profile ber_trials_20260915，1MiB固定随机源/1093包，保留每轮原始UDP和实际误码字节；原AIR0 GUI CRC拒收/精确恢复行为不改。
   用户之前取消的文件夹批量发送任务不得恢复。当前仅实验采集，不是重新实现批量或放宽主GUI校验。
