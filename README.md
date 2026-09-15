@@ -2174,18 +2174,21 @@ AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模�
 接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1280x720`，不再挤占主窗口日志区域。AIRV 解码在后台线程执行，Tk 主线程以约 `30fps` 刷新最近一张已解码图片，避免 PyAV 解码或坏码流导致 GUI 未响应。预览输入端会缓存最多 `240` 个 assembled encoded frame，并按 H.264 顺序送给解码器，避免为了追最新画面而跳过 P 帧参考链。只有预览队列真的满了，才清空预览队列并等待下一帧 keyframe 恢复；这只影响预览，不影响 AIRV 统计。主窗口保留 `Preview/Preview Input/Preview Backlog/Preview Drops/Decoded/Displayed/Decoder Errors/Waiting Key` 状态，其中 `Displayed` 是实际渲染到 Tk 预览窗口的帧数。预览依赖可选 Python 包 `av` 和 `Pillow`：
 
 ```bash
-conda create -n ad9361-pc -c conda-forge python=3.11 pip tk ffmpeg
-conda activate ad9361-pc
+conda activate YOUR_ENV_NAME
+conda install -c conda-forge pip tk ffmpeg
 python -m pip install -r AD9361_test2/tools/pc_sender/requirements.txt
 ```
 
-这里建议使用 64 位 Conda 环境。`requirements.txt` 只列 pip 管理的第三方 Python 包；
+这里不会新建环境，而是把依赖安装进当前已激活的 64 位 Conda 环境。建议使用 Python
+3.10～3.12；先用 `python --version` 确认当前环境版本。`requirements.txt` 只列 pip 管理的第三方 Python 包；
 `tk` 提供 Tkinter GUI，`ffmpeg` 同时提供首次从 MP4 生成 H.264 sidecar 所需的
 `ffmpeg` / `ffprobe` 可执行程序，两者应按上面方式由 Conda 安装，不能用同名 pip 包替代。
 AIR0 发送/接收核心只使用 Python 标准库；不安装 `av` / `Pillow` 也能传输 AIRV 并统计，
-但不会解码和显示实时预览。安装后可执行以下命令做 PC 工具回归检查：
+但不会解码和显示实时预览。安装后先确认所有运行依赖确实来自当前环境，再做 PC 工具回归检查：
 
 ```bash
+python -c "import tkinter, av, PIL; print('Python requirements OK')"
+ffmpeg -version
 python -m unittest discover -s AD9361_test2/tools/pc_sender -p "test_*.py"
 ```
 
