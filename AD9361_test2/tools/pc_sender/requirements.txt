@@ -1,0 +1,4 @@
+# Third-party Python packages for the complete PC sender/receiver GUI,
+# including AIRV H.264 preview. Core AIR0 transfer uses only the standard library.
+av>=10.0.0
+Pillow>=9.0.0
