@@ -1,0 +1,412 @@
+{
+  "date": "2026-09-15",
+  "purpose": "Real RF AIR0 1 MiB feasibility sweep: zero packet loss with nonzero payload BER; actual user file pending.",
+  "baseline_commit": "fc32b887d30d29879d7b051f41117a36b6e5bc9a",
+  "setup": {
+    "antennas_distance_m_approx": 0.2,
+    "frequency_hz": 2200000000,
+    "tx_attenuation_db": 16,
+    "rx_gain_db": 66,
+    "plateau": 63,
+    "protected_data_symbols": 32,
+    "rate_limit_kib_s": 400,
+    "chunk_bytes": 1024,
+    "file_bytes": 1048576,
+    "window_size": 1,
+    "pc_payload_crc": true,
+    "rf_retry": false,
+    "source_seed": 9361320
+  },
+  "methodology": {
+    "max_trials_per_condition": 10,
+    "ber": "Whole-trial post-decoder bit errors / compared business payload bits in uniquely received packets; not PHY raw BER or last-1s BER.",
+    "weak_ber": "Skip first 30 business bytes per packet, current BPSK 1/2 + guard32 only.",
+    "capture": "Port 15003, raw datagrams recorded before validation; faulty business payload retained. Original AIR0 GUI CRC rejection behavior unchanged.",
+    "zero_loss": "All 1093 unique expected sequences including first and last, one source/session, no conflicting duplicates; no cross-trial merging/source repair.",
+    "stopping": "DC48 shift3 stopped after four lossy trials for a bounded DC44 comparison. DC44 shift4/3/2 each stopped at first successful trial; not a fixed-sample reliability estimate.",
+    "audit": "Separate offline audit.py parses raw UDP/AIR0 with struct/zlib and compares per byte; all eight trials match captured bytes, counts, sessions and source hashes."
+  },
+  "startup_failure": {
+    "tag": "dc48-shift4-01",
+    "included_in_rf_trials": false,
+    "reason": "Background launch caused SSH sessions/child processes to exit; no source/result/capture directories produced, no effective RF trial. Foreground execution used afterward."
+  },
+  "results": [
+    {
+      "tag": "dc48-shift4-02",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1093,
+        "missing": [],
+        "missing_count": 0,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            2536,
+            180636815
+          ]
+        ],
+        "bad_payloads": 816,
+        "compared_bits": 8388608,
+        "bit_errors": 334692,
+        "payload_ber": 0.03989839553833008,
+        "weak_compared_bits": 8126288,
+        "weak_bit_errors": 334692,
+        "weak_ber": 0.04118633255429786,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": true,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "172d385a00b64a9a562463f27dedced15e72fd247e8f0bb0982e7097b6512f2e",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "41d6ee7cab6a414b022344df899e5a64ab9b44f9e97eb1b1c0256c08155dc35d",
+      "sender_session": 2536,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789480516.6252549,
+      "sender_finished_at": 1789480519.2967823
+    },
+    {
+      "tag": "dc48-shift3-01",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1092,
+        "missing": [
+          892
+        ],
+        "missing_count": 1,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            4918,
+            180639313
+          ]
+        ],
+        "bad_payloads": 243,
+        "compared_bits": 8380928,
+        "bit_errors": 3152,
+        "payload_ber": 0.0003760920031767365,
+        "weak_compared_bits": 8118848,
+        "weak_bit_errors": 3152,
+        "weak_ber": 0.00038823241918065223,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": false,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "8e73c1ae51b199e929cccd832d6160a3aefe0c597d51582f0bd2bf684ab784f0",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "d1a71b236512cb584dad7d2ef0b95aa0f0c093c6183dfe83f3e9c31b4928e42b",
+      "sender_session": 4918,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789480628.0112743,
+      "sender_finished_at": 1789480630.7259688
+    },
+    {
+      "tag": "dc48-shift3-02",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1092,
+        "missing": [
+          624
+        ],
+        "missing_count": 1,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            3565,
+            180635786
+          ]
+        ],
+        "bad_payloads": 244,
+        "compared_bits": 8380928,
+        "bit_errors": 2906,
+        "payload_ber": 0.00034673964506078565,
+        "weak_compared_bits": 8118848,
+        "weak_bit_errors": 2906,
+        "weak_ber": 0.00035793255397810134,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": false,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "b74f8f8e17e309d5b3261845736cc474675e120f9515aa049fe215151086ecd2",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "fdfa3b14e0ecd005abbf9137d5020e7f559a0afd802437a7e257c896e165000f",
+      "sender_session": 3565,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789480699.3827724,
+      "sender_finished_at": 1789480702.1532815
+    },
+    {
+      "tag": "dc48-shift3-03",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1091,
+        "missing": [
+          273,
+          639
+        ],
+        "missing_count": 2,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            7373,
+            180640170
+          ]
+        ],
+        "bad_payloads": 256,
+        "compared_bits": 8373248,
+        "bit_errors": 3476,
+        "payload_ber": 0.00041513161917573684,
+        "weak_compared_bits": 8111408,
+        "weak_bit_errors": 3476,
+        "weak_ber": 0.0004285322597507116,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": false,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "390c00686fb17bb2553ba24faa958d05b9e2c45bd8f8c2582d046dc529c79b41",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "29b8fb2379e57e76b772c960b50df400fa764c41fb9a3a1826a1d3e9e580cd0a",
+      "sender_session": 7373,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789480784.7963266,
+      "sender_finished_at": 1789480787.4957588
+    },
+    {
+      "tag": "dc48-shift3-04",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1092,
+        "missing": [
+          1084
+        ],
+        "missing_count": 1,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            7177,
+            180640110
+          ]
+        ],
+        "bad_payloads": 269,
+        "compared_bits": 8380928,
+        "bit_errors": 3549,
+        "payload_ber": 0.0004234614591606085,
+        "weak_compared_bits": 8118848,
+        "weak_bit_errors": 3549,
+        "weak_ber": 0.0004371309821294844,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": false,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "441fa3cae237314efdecbe170a288f97c5bd4599ed75062a17ac1a3352dc4d68",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "6941ba338e3536d287384851fffae5be2cf9ac07708c397e32b8c1f244290a58",
+      "sender_session": 7177,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789480850.844266,
+      "sender_finished_at": 1789480853.5521915
+    },
+    {
+      "tag": "dc44-shift4-01",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1093,
+        "missing": [],
+        "missing_count": 0,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            5026,
+            180639429
+          ]
+        ],
+        "bad_payloads": 780,
+        "compared_bits": 8388608,
+        "bit_errors": 289985,
+        "payload_ber": 0.0345689058303833,
+        "weak_compared_bits": 8126288,
+        "weak_bit_errors": 289985,
+        "weak_ber": 0.03568480467342531,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": true,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "68048d565d487fb8c191f7671caa6c56ac3f2c6a9d7db12265dab9d978a7d472",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "1845ac5ec68445f49aa786f7160670b167f3e432387966bdaabce15bb5a46e01",
+      "sender_session": 5026,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789481008.2155766,
+      "sender_finished_at": 1789481010.8709157
+    },
+    {
+      "tag": "dc44-shift3-01",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1093,
+        "missing": [],
+        "missing_count": 0,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            3925,
+            180636210
+          ]
+        ],
+        "bad_payloads": 250,
+        "compared_bits": 8388608,
+        "bit_errors": 3814,
+        "payload_ber": 0.0004546642303466797,
+        "weak_compared_bits": 8126288,
+        "weak_bit_errors": 3814,
+        "weak_ber": 0.0004693409832385955,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": true,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "e4c02ae4e8149376b2dea0aea06a81170ccdbf5bac1d5de46507a7e625b0f212",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "62dd6d8953a60330648e48e4e2de1beed5de354e4d85b6b7a6d8d3be11cc3073",
+      "sender_session": 3925,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789481197.568277,
+      "sender_finished_at": 1789481200.280028
+    },
+    {
+      "tag": "dc44-shift2-01",
+      "verified": true,
+      "receiver": {
+        "expected_packets": 1093,
+        "received_packets": 1093,
+        "missing": [],
+        "missing_count": 0,
+        "rejected_datagrams_or_blocks": 0,
+        "duplicate_packets": 0,
+        "conflicting_duplicates": 0,
+        "sessions": [
+          [
+            485,
+            180634754
+          ]
+        ],
+        "bad_payloads": 5,
+        "compared_bits": 8388608,
+        "bit_errors": 19,
+        "payload_ber": 0.0000022649765014648438,
+        "weak_compared_bits": 8126288,
+        "weak_bit_errors": 19,
+        "weak_ber": 0.0000023380908970984045,
+        "protected_bit_errors": 0,
+        "zero_packet_loss": true,
+        "exact_file": false,
+        "source_sha256": "2052cc12e52b5ced7cb6f5622ec21bcbba61cc7efb8368647a6cce643af242b1",
+        "received_sha256": "90959d5661f0dfe219e726e72eb811c89d6b7bd779d7134834a5e78b24f50870",
+        "missing_bytes_are_zero_filled": true
+      },
+      "capture_sha256": "a5220e05c29d0c2cdbd1384a52360d09992eae06593f231c28cd868d143d60c7",
+      "sender_session": 485,
+      "sent_packets": 1093,
+      "acked_packets": 1093,
+      "acked_bytes": 1048576,
+      "pc_retries": 0,
+      "sender_started_at": 1789481395.9674056,
+      "sender_finished_at": 1789481398.6647935
+    }
+  ],
+  "receiver_counters": {
+    "before": {
+      "captures": 429021,
+      "valid": 426884,
+      "reject": 2137,
+      "udp": 426884,
+      "dma_errors": 0,
+      "stall": 0
+    },
+    "after": {
+      "captures": 437760,
+      "valid": 435623,
+      "reject": 2137,
+      "udp": 435623,
+      "dma_errors": 0,
+      "stall": 0
+    },
+    "valid_udp_pc_delta": 8739,
+    "expected": 8744,
+    "missing": 5,
+    "interpretation": "No new PS structural rejects or DMA errors; valid/UDP/PC deltas agree. This does not locate the five losses to a specific PHY stage."
+  },
+  "restored": {
+    "tx_payload_shift": 4,
+    "rx_payload_restore_shift": 4,
+    "rx_dc_threshold": 48,
+    "plateau": 63,
+    "gui_peer": "192.168.1.100:15002",
+    "gui_registration_ack": true,
+    "jtag_readback": true,
+    "com3_com4_released": true,
+    "own_debug_processes_remaining": 0,
+    "bit_elf_hdf_unchanged": true,
+    "no_reprogramming": true,
+    "no_flash_sd_writes": true
+  },
+  "artifacts": {
+    "receiver_temp": "ad9361-ber-trials-925d1d90e0434b8e94c67ac95f3d9d7d",
+    "sender_temp": "ad9361-ber-trials-6d61efc52c6e44f790efbaeb1581bc33",
+    "local_temp": "ad9361-ber-current-18335802a0614f188160d1ba0f89d72e"
+  },
+  "limitations": [
+    "Small, sequential, adaptively stopped trials; no claim of guaranteed zero loss or unique optimal DC threshold.",
+    "BER depends on real channel/device state and actual file, not a fixed calibrated mapping from amplitude.",
+    "No semantic-model comparison performed; no absolute SNR acceptance; legacy full-design timing violations remain.",
+    "All eight trials contain real payload errors, including zero-loss trials; none is an exact file transfer."
+  ]
+}

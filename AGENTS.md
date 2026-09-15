@@ -96,6 +96,18 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-15 AIR0误码/零丢包摸底：用户实际文件后续提供，已确认停发/关闭IDE/释放COM3 COM4，天线约20cm。
+  新独立profile ber_trials_20260915，1MiB固定随机源/1093包，保留每轮原始UDP和实际误码字节；原AIR0 GUI CRC拒收/精确恢复行为不改。
+  用户之前取消的文件夹批量发送任务不得恢复。当前仅实验采集，不是重新实现批量或放宽主GUI校验。
+  DC48/shift4首有效轮0丢包、业务BER3.989840%；DC48/shift3四轮缺1/1/2/1，BER约0.035～0.042%。
+  临时DC44/shift4、3、2各首轮1093/1093，业务BER分别3.456891%、0.045466%、0.00022650%；弱BER见results.json。
+  八轮8MiB/8744包缺5，RX有效/UDP/PC增量8739，无新增结构拒绝/DMA/stall，PC重传0、保护业务前30B错误0。
+  全轮独立struct/zlib逐字节复核通过；10项新单测两机及本地通过，旧PC本地86中76过10缺Tk跳过。
+  最多10轮/配置的有界搜索，取得首成功样本即停，DC48/shift3四轮后转44；不能说可靠性已量化、44唯一最优或大文件保证成功。
+  初次后台启动导致SSH/子进程退出、未产生源/结果/捕获目录，不计RF轮次；后续直接前台Python/XSCT，不复用不可靠后台启动方式。
+  收尾两板功率shift4、RX DC48、63、TX16/RX66恢复，GUI15002已ACK/JTAG读回，COM3/4释放、自有hw_server退出；未重载/重编译/改ELF bit HDF。
+  原始记录两机TEMP/ad9361-ber-trials-925d1d90e0434b8e94c67ac95f3d9d7d（RX）和6d61efc52c6e44f790efbaeb1581bc33（TX）。
+  误码文件与精确文件分开；缺包填零只作占位并列出序号，不从源修补，不跨轮合并，不增加RF重传或人工翻转。实际文件需另测，SNR/语义模型/全局时序未验收。
 - 2026-09-15 用户要求修复SNR，并确认停止Sender/关闭两机Vivado SDK/释放COM3 COM4；允许本轮备份、重建、下载和有界RF验证，不写Flash/SD。
   已定位dot11门控误用pkt_header_valid脉冲，S_DECODE_DATA清零后弱区样本一直0；不是噪声校准或门槛问题。
   新snr_packet_valid锁存合法BPSK1/2头，FCS结束/复位/新LTF/停长同步清除，原弱符号范围和4096样本门槛不变；IP122→123。
