@@ -1,0 +1,176 @@
+{
+  "date": "2026-09-16",
+  "status": "complete_under_explicit_boundary_approval",
+  "definition": "Whole-run post-decoder BER over every business payload bit; one complete independent RF acquisition per output. Zero missing packets is not zero bit errors.",
+  "acceptance_record": "boundary_acceptance.json",
+  "approval": "我同意",
+  "samples": 18,
+  "within_original_range": 16,
+  "user_approved_boundary_samples": 2,
+  "groups": [
+    {
+      "source": "h265_payload.h265",
+      "target": 0.000001,
+      "count": 3,
+      "tags": [
+        "h265-s2-a18p25-01",
+        "r-h265-s2-a16-07",
+        "r-h265-s2-a16p75-02"
+      ],
+      "bers": [
+        0.000001385640332110275,
+        0.000002078460498165412,
+        0.000002078460498165412
+      ]
+    },
+    {
+      "source": "h265_payload.h265",
+      "target": 0.00001,
+      "count": 3,
+      "tags": [
+        "h265-s2-a17p5-02",
+        "r-h265-s2-a17-03",
+        "r-h265-s2-a16-01"
+      ],
+      "bers": [
+        0.000013163583155047611,
+        0.000006928201660551374,
+        0.000007621021826606512
+      ]
+    },
+    {
+      "source": "h265_payload.h265",
+      "target": 0.0001,
+      "count": 3,
+      "tags": [
+        "h265-s3-a15-01",
+        "r-h265-s3-a14-01",
+        "r-h265-s3-a14-02"
+      ],
+      "bers": [
+        0.00010877276607065657,
+        0.00016558401968717784,
+        0.00019676092715965903
+      ]
+    },
+    {
+      "source": "tx_payload.vqpk",
+      "target": 0.000001,
+      "count": 3,
+      "tags": [
+        "vqpk-s2-a15-01",
+        "r-vqpk-s2-a15-02",
+        "r-vqpk-s2-a14-03"
+      ],
+      "bers": [
+        0.0000014751113010295344,
+        0.0000010092866796517869,
+        7.76374368962913e-7
+      ]
+    },
+    {
+      "source": "tx_payload.vqpk",
+      "target": 0.00001,
+      "count": 3,
+      "tags": [
+        "vqpk-s2-a18p25-04",
+        "r-vqpk-s2-a16p5-03",
+        "r-vqpk-s2-a16p5-05"
+      ],
+      "bers": [
+        0.000008151930874110586,
+        0.000012189077592717732,
+        0.000007297919068251381
+      ]
+    },
+    {
+      "source": "tx_payload.vqpk",
+      "target": 0.0001,
+      "count": 3,
+      "tags": [
+        "vqpk-s3-a15-01",
+        "r-vqpk-s3-a14-01",
+        "r-vqpk-s3-a14-02"
+      ],
+      "bers": [
+        0.00012437517390785866,
+        0.0001756158822594109,
+        0.0001897458957745359
+      ]
+    }
+  ],
+  "added": [
+    {
+      "file": "h265_payload_BER_1e-06_sample02.h265",
+      "tag": "r-h265-s2-a16-07",
+      "session_id": 2247,
+      "tx_started_at": 1789488742.446939,
+      "compared_bits": 1443376,
+      "bit_errors": 3,
+      "payload_ber": 0.000002078460498165412,
+      "expected_packets": 188,
+      "received_packets": 188,
+      "missing_count": 0,
+      "duplicate_packets": 0,
+      "acceptance_reason": "user_approved_boundary_3bit",
+      "received_sha256": "97e666dd3dd910cc939804be851e223a43d73027418e59b58436c251ea8cc871",
+      "capture_sha256": "642e86896009c41e4402e5428d1efb1429d14d9e09efafe2f33a77ab4a3e8d4b",
+      "tx_attenuation_mdb": 16000,
+      "matched_payload_shift": 2
+    },
+    {
+      "file": "h265_payload_BER_1e-06_sample03.h265",
+      "tag": "r-h265-s2-a16p75-02",
+      "session_id": 271,
+      "tx_started_at": 1789489090.1373596,
+      "compared_bits": 1443376,
+      "bit_errors": 3,
+      "payload_ber": 0.000002078460498165412,
+      "expected_packets": 188,
+      "received_packets": 188,
+      "missing_count": 0,
+      "duplicate_packets": 0,
+      "acceptance_reason": "user_approved_boundary_3bit",
+      "received_sha256": "40ec6398bdca9e37820f9f468b4a291abb86afccedfda4c8fc9425d4d6350ada",
+      "capture_sha256": "7bcb6e1bd389cea3cbc1be8899b429d6cd993b44b5a379f16e866be9a8ec72b6",
+      "tx_attenuation_mdb": 16750,
+      "matched_payload_shift": 2
+    }
+  ],
+  "delivery": {
+    "remote_directory": "E:\\by2025\\AD9361_test_board\\AD9361_test2\\BER_results_20260916_repeats",
+    "local_directory": "D:\\Projects\\AD9361_test_board\\AD9361_test2\\BER_results_20260916_repeats",
+    "manifest_sha256": "AE2AADD73FC716569690F6503BE792CBCE091303D343030E16E916D79879E613",
+    "previous_manifest_backup": "manifest.before_boundary_approval.json",
+    "previous_manifest_sha256": "635A573D2D697CA9C783D338C8B59433D29542A67210631B02CCA8C012B5CD1A",
+    "raw_new_evidence_zip_sha256": "F543026D0BEE5C5556650F103C36EEDCD3B5EEB3CA78B157F0FF77CFB363F34C"
+  },
+  "verification": {
+    "existing_16_output_bytes_unchanged": true,
+    "all_18_full_bit_comparisons_passed_on": [
+      "local",
+      "sender_pc",
+      "receiver_pc"
+    ],
+    "all_79_new_trial_captures_reaudited": true,
+    "independent_acquisitions": true,
+    "additional_rf_trials_this_approval_turn": 0,
+    "raw_archive_unchanged": true,
+    "original_six_delivery_unchanged": true,
+    "no_source_repair": true,
+    "no_cross_trial_merging": true,
+    "no_artificial_bit_flips": true,
+    "no_board_or_firmware_changes_this_turn": true,
+    "local_profile_unit_tests_passed": 28
+  },
+  "historical_records_preserved": [
+    "repeat_campaign.json",
+    "repeat_results.json",
+    "file_results.json"
+  ],
+  "limitations": [
+    "Only the specified H265 low-band three-bit boundary was approved; all other groups retain 0.5-2 times their target BER and zero missing packets.",
+    "These outputs are selected zero-loss corrupted samples, not an unbiased reliability estimate or calibrated fixed-BER channel.",
+    "No additional RF measurement, absolute SNR validation, video/model quality evaluation, or hardware timing sign-off was performed."
+  ]
+}

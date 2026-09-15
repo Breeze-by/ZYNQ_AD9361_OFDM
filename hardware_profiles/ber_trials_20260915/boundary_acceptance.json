@@ -1,0 +1,17 @@
+{
+  "kind": "h265_1e6_three_bit_boundary_v1",
+  "approved": true,
+  "recorded_at_utc": "2026-09-15T16:41:54Z",
+  "local_date": "2026-09-16",
+  "user_decision": "我同意",
+  "decision_context": "User explicitly approved two independently captured, zero-loss H265 three-bit boundary samples after being told their actual BER is 2.078e-6, 3.92% above the previously agreed upper bound.",
+  "source_sha256": "beeccd8ec4deabc9c5a7fcbe252f518b8f765eb6e773a3c97f9d767143ebbf53",
+  "target_ber": 1e-6,
+  "compared_bits": 1443376,
+  "bit_errors": 3,
+  "expected_packets": 188,
+  "actual_ber": 2.078460498165412e-6,
+  "original_target_multipliers": [0.5, 2.0],
+  "scope": "Only the H265 1e-6 three-bit boundary; all other source/BER groups and zero-loss requirements unchanged. Preserve exact received bits and report measured BER without rounding it down.",
+  "selection": "First two chronologically eligible independent captures from the existing 79-trial campaign; no additional RF transmission or board changes."
+}
