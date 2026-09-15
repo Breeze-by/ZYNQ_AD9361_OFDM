@@ -2217,7 +2217,22 @@ AIRV 接收端自动从回传 payload 起始 magic `0x56524941` 识别实时模�
 接收 GUI 现在会打开独立 `AIRV Preview` 窗口，默认大小 `1280x720`，不再挤占主窗口日志区域。AIRV 解码在后台线程执行，Tk 主线程以约 `30fps` 刷新最近一张已解码图片，避免 PyAV 解码或坏码流导致 GUI 未响应。预览输入端会缓存最多 `240` 个 assembled encoded frame，并按 H.264 顺序送给解码器，避免为了追最新画面而跳过 P 帧参考链。只有预览队列真的满了，才清空预览队列并等待下一帧 keyframe 恢复；这只影响预览，不影响 AIRV 统计。主窗口保留 `Preview/Preview Input/Preview Backlog/Preview Drops/Decoded/Displayed/Decoder Errors/Waiting Key` 状态，其中 `Displayed` 是实际渲染到 Tk 预览窗口的帧数。预览依赖可选 Python 包 `av` 和 `Pillow`：
 
 ```bash
-python -m pip install av pillow
+conda activate YOUR_ENV_NAME
+conda install -c conda-forge pip tk ffmpeg
+python -m pip install -r AD9361_test2/tools/pc_sender/requirements.txt
+```
+
+这里不会新建环境，而是把依赖安装进当前已激活的 64 位 Conda 环境。建议使用 Python
+3.10～3.12；先用 `python --version` 确认当前环境版本。`requirements.txt` 只列 pip 管理的第三方 Python 包；
+`tk` 提供 Tkinter GUI，`ffmpeg` 同时提供首次从 MP4 生成 H.264 sidecar 所需的
+`ffmpeg` / `ffprobe` 可执行程序，两者应按上面方式由 Conda 安装，不能用同名 pip 包替代。
+AIR0 发送/接收核心只使用 Python 标准库；不安装 `av` / `Pillow` 也能传输 AIRV 并统计，
+但不会解码和显示实时预览。安装后先确认所有运行依赖确实来自当前环境，再做 PC 工具回归检查：
+
+```bash
+python -c "import tkinter, av, PIL; print('Python requirements OK')"
+ffmpeg -version
+python -m unittest discover -s AD9361_test2/tools/pc_sender -p "test_*.py"
 ```
 
 如果未安装，AIRV 传输、组帧和统计仍可正常运行，接收 GUI 会在日志和预览窗口中输出 `VIDEO_PREVIEW PyAV is not installed...` 或 Pillow 相关提示，提示里会带当前 GUI 使用的 Python 路径。`Preview Input` 表示接收端已经组出的 AIRV encoded frame 数；`Preview Backlog` 是等待后台解码的帧数；`Preview Drops` 只表示预览端因队列积压主动丢弃的 encoded frame，不代表传输丢包。如果 `Preview Input` 增长但 `Decoded/Displayed` 不增长，重点检查 `av/Pillow` 安装和 H.264 解码错误；如果 `Preview Input` 也不增长，重点检查接收 GUI 是否注册成功、AIRV `VIDEO frame_rx/frame_show` 是否增长、接收板是否有 `S2MM valid ... type=AIRV`。预览解码器遇到坏 payload/frame CRC 时仍会尝试解码显示；一次或两次连续 P 帧解码异常只显示 `Decode warning` 并继续喂后续帧，连续 3 次失败才重建解码器并等待下一帧 keyframe。
