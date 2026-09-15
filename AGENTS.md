@@ -96,6 +96,19 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-16 AIR0重复样本：目标每源/BER至少3份，保留原六份sample01，本轮79次新RF新增10份，严格合格16/18，未完成。
+  H265低档只有原2bit一份，其余五组已各3份；H中19/10/11、高157/239/284，V低19/13/10、中105/157/94、高1602/2262/2444。
+  仍整轮全业务BER、目标0.5～2倍、单轮零缺包，不修补/拼包/人工翻转/开RF重传。原GUI、C/ELF/bit/HDF不改，取消的批量功能不恢复。
+  79轮61042发/60996收/缺46，21轮缺包、23轮全收零误码，原始抓包独立audit全过，PC重传0、保护前30B错误0。
+  H265三轮16-07、16p75-02/06全收3bit=2.078460498e-6，超上限3.923%，用户是否允许尚待回复；不得擅自四舍五入/放宽条件计数。
+  每源/配置最多10轮；VQPK14dB预排两轮的第二轮是额外完整记录，非入选。H15-02终端换行判定失败但采集正常，已恢复审计，不是无效RF轮。
+  新profile文件replicates.py/test_replicates.py/repeat_campaign.json/repeat_results.json；发布默认要求18，显式--partial才允许complete=false和真实分组数量。
+  新结果工程根目录BER_results_20260916_repeats，16业务文件+manifest+raw_new_evidence.zip(全79对)；manifest635A573D…/zipF543026D…。
+  原BER_results_20260915六份及其25次证据不覆盖，旧manifestCA81D6F4…不变；业务文件始终SDK Git外。详见根README。
+  临时TX ELF8431801A…已恢复原9AC341A5…，RX78C7914C…不重载；TX16/RX66、shift4、DC48/63、IPCFG和GUI15002 ACK/JTAG恢复。
+  RX有效/UDP增60996等于PC；reject增143=len2+no_magic141，跨静默/初始化，不能都归入46业务缺包；DMA/stall不增。
+  本轮TEMP TX/ad9361-ber-repeat-18ec04f674e64abebe76cfbc8a8d3c48、RX/ad9361-ber-repeat-d5e9407799c14cbbad3a64bf8ded43b4，before备份原件，source-before备份文档。
+  无bit重编/FPGA下载/Flash SD写入；21项profile单测本地通过。没有验收绝对SNR、模型效果或全局时序。继续测试或接纳边界样本以用户下一次指令为准。
 - 2026-09-15 实际AIR0文件六样本已取得：用户接受1e-6/1e-5/1e-4各0.5～2倍，按整轮全部业务payload解码后BER，不是弱区/1s。
   H.265 180422B/188包，三个错误bit数2/19/157；VQPK 1610048B/1678包，19/105/1602。六轮均单轮全收，源与结果不进Git。
   共25次采集、24次有效RF试验17916/17922；VQPK缺1/2/1后第四轮成功，另H.265缺2。h265-s2-02采集先结束、发送后开始，不能算188个RF丢包。

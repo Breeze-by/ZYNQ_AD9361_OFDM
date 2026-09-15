@@ -1,0 +1,1470 @@
+{
+  "groups": [
+    {
+      "source": "h265_payload.h265",
+      "target": 0.000001,
+      "count": 1,
+      "tags": [
+        "h265-s2-a18p25-01"
+      ],
+      "bers": [
+        0.000001385640332110275
+      ]
+    },
+    {
+      "source": "h265_payload.h265",
+      "target": 0.00001,
+      "count": 3,
+      "tags": [
+        "h265-s2-a17p5-02",
+        "r-h265-s2-a17-03",
+        "r-h265-s2-a16-01"
+      ],
+      "bers": [
+        0.000013163583155047611,
+        0.000006928201660551374,
+        0.000007621021826606512
+      ]
+    },
+    {
+      "source": "h265_payload.h265",
+      "target": 0.0001,
+      "count": 3,
+      "tags": [
+        "h265-s3-a15-01",
+        "r-h265-s3-a14-01",
+        "r-h265-s3-a14-02"
+      ],
+      "bers": [
+        0.00010877276607065657,
+        0.00016558401968717784,
+        0.00019676092715965903
+      ]
+    },
+    {
+      "source": "tx_payload.vqpk",
+      "target": 0.000001,
+      "count": 3,
+      "tags": [
+        "vqpk-s2-a15-01",
+        "r-vqpk-s2-a15-02",
+        "r-vqpk-s2-a14-03"
+      ],
+      "bers": [
+        0.0000014751113010295344,
+        0.0000010092866796517869,
+        7.76374368962913e-7
+      ]
+    },
+    {
+      "source": "tx_payload.vqpk",
+      "target": 0.00001,
+      "count": 3,
+      "tags": [
+        "vqpk-s2-a18p25-04",
+        "r-vqpk-s2-a16p5-03",
+        "r-vqpk-s2-a16p5-05"
+      ],
+      "bers": [
+        0.000008151930874110586,
+        0.000012189077592717732,
+        0.000007297919068251381
+      ]
+    },
+    {
+      "source": "tx_payload.vqpk",
+      "target": 0.0001,
+      "count": 3,
+      "tags": [
+        "vqpk-s3-a15-01",
+        "r-vqpk-s3-a14-01",
+        "r-vqpk-s3-a14-02"
+      ],
+      "bers": [
+        0.00012437517390785866,
+        0.0001756158822594109,
+        0.0001897458957745359
+      ]
+    }
+  ],
+  "trials": [
+    {
+      "tag": "r-h265-s2-a15-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 7,
+      "ber": 0.000004849741162385962,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15-04",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15p5-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 187,
+      "missing": 1,
+      "errors": 5,
+      "ber": 0.000003482631420579287,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15p5-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15p5-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a15p5-04",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 5,
+      "ber": 0.000003464100830275687,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 15500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 11,
+      "ber": 0.000007621021826606512,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 6,
+      "ber": 0.000004156920996330824,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-04",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 17,
+      "ber": 0.000011777942822937336,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-05",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-06",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-07",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-08",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-09",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16-10",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 7,
+      "ber": 0.000004849741162385962,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p25-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16250,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p25-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16250,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p25-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16250,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p25-04",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16250,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p5-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 10,
+      "ber": 0.000006928201660551374,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-04",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 8,
+      "ber": 0.0000055425613284411,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-05",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-06",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-07",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-08",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-09",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 8,
+      "ber": 0.0000055425613284411,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-10",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 11,
+      "ber": 0.000007621021826606512,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 186,
+      "missing": 2,
+      "errors": 33,
+      "ber": 0.000023108984773279852,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 187,
+      "missing": 1,
+      "errors": 5,
+      "ber": 0.000003482631420579287,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-03",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 10,
+      "ber": 0.000006928201660551374,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-04",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 185,
+      "missing": 3,
+      "errors": 43,
+      "ber": 0.00003027452659089117,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-05",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 19,
+      "ber": 0.000013163583155047611,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-06",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-07",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-08",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-09",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 0,
+      "ber": 0,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17-10",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 5,
+      "ber": 0.000003464100830275687,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a17p5-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 24,
+      "ber": 0.000016627683985323297,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 17500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s3-a14-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 239,
+      "ber": 0.00016558401968717784,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 3,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s3-a14-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 284,
+      "ber": 0.00019676092715965903,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 3,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s3-a14p5-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 458,
+      "ber": 0.00031731163605325295,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 3,
+        "tx_attenuation_mdb": 14500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s3-a15-01",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 442,
+      "ber": 0.0003062265133963707,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 3,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 43,
+      "ber": 0.0000033404015193699784,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 8,
+      "ber": 6.214700501153448e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 10,
+      "ber": 7.76374368962913e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14-04",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 3,
+      "ber": 2.3291231068887387e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p5-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 7,
+      "ber": 5.437862938509268e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p5-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 3,
+      "ber": 2.3291231068887387e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p5-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 3,
+      "ber": 2.3291231068887387e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p75-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 3,
+      "ber": 2.3291231068887387e-7,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p75-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1675,
+      "missing": 3,
+      "errors": 35,
+      "ber": 0.000002722179635234151,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p75-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 36,
+      "ber": 0.0000027966152255190517,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p75-04",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 29,
+      "ber": 0.000002252828931668125,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a14p75-05",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1676,
+      "missing": 2,
+      "errors": 41,
+      "ber": 0.0000031869353683288892,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 14750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a15-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1676,
+      "missing": 2,
+      "errors": 35,
+      "ber": 0.0000027205545827197837,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a15-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 13,
+      "ber": 0.0000010092866796517869,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a15-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1673,
+      "missing": 5,
+      "errors": 33,
+      "ber": 0.000002569696395821705,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a15-04",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1676,
+      "missing": 2,
+      "errors": 20,
+      "ber": 0.000001554602618697019,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a15p5-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 35,
+      "ber": 0.0000027173102913701953,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 15500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a15p5-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 64,
+      "ber": 0.000004968795961362643,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 15500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a16-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 50,
+      "ber": 0.0000038818718448145645,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a16p5-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 56,
+      "ber": 0.0000043476964661923125,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 16500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a16p5-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 79,
+      "ber": 0.00000613701674488903,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 16500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a16p5-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 157,
+      "ber": 0.000012189077592717732,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 16500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a16p5-04",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 101,
+      "ber": 0.000007846059382706229,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 16500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a16p5-05",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 94,
+      "ber": 0.000007297919068251381,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 16500,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a17-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1668,
+      "missing": 10,
+      "errors": 2116,
+      "ber": 0.00016526622545687207,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a17-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1677,
+      "missing": 1,
+      "errors": 162,
+      "ber": 0.000012584768514835734,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a17-03",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1676,
+      "missing": 2,
+      "errors": 140,
+      "ber": 0.000010882218330879135,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s2-a17-04",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1675,
+      "missing": 3,
+      "errors": 130,
+      "ber": 0.000010110952930869704,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 2,
+        "tx_attenuation_mdb": 17000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s3-a14-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 2262,
+      "ber": 0.0001756158822594109,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 3,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s3-a14-02",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1678,
+      "missing": 0,
+      "errors": 2444,
+      "ber": 0.0001897458957745359,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 3,
+        "tx_attenuation_mdb": 14000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-vqpk-s3-a15-01",
+      "source": "tx_payload.vqpk",
+      "sent": 1678,
+      "received": 1676,
+      "missing": 2,
+      "errors": 4423,
+      "ber": 0.00034380036912484577,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "tx_payload.vqpk",
+        "shift": 3,
+        "tx_attenuation_mdb": 15000,
+        "rx_dc_threshold": 44
+      }
+    }
+  ],
+  "complete": false,
+  "accepted_count": 16,
+  "requested_count": 18,
+  "new_accepted_count": 10,
+  "status": "Incomplete under unchanged acceptance: H265 1e-6 remains one original sample; needs two more.",
+  "campaign_file": "repeat_campaign.json",
+  "delivery_directory": "BER_results_20260916_repeats",
+  "manifest_sha256": "635a573d2d697ca9c783d338c8b59433d29542a67210631b02cca8c012b5cd1a",
+  "raw_new_evidence_sha256": "f543026d0bee5c5556650f103c36eedcd3b5eeeb3ca78b157f0ff77cfb363f34c",
+  "new_totals": {
+    "trials": 79,
+    "sent_packets": 61042,
+    "received_packets": 60996,
+    "missing_packets": 46,
+    "lossy_trials": 21,
+    "zero_error_zero_loss_trials": 23
+  },
+  "boundary_candidates_not_accepted": [
+    {
+      "tag": "r-h265-s2-a16-07",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16000,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-02",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    },
+    {
+      "tag": "r-h265-s2-a16p75-06",
+      "source": "h265_payload.h265",
+      "sent": 188,
+      "received": 188,
+      "missing": 0,
+      "errors": 3,
+      "ber": 0.000002078460498165412,
+      "invalid_reason": null,
+      "conditions": {
+        "source": "h265_payload.h265",
+        "shift": 2,
+        "tx_attenuation_mdb": 16750,
+        "rx_dc_threshold": 44
+      }
+    }
+  ],
+  "restoration": {
+    "original_tx_elf_reloaded": true,
+    "original_rx_elf_not_reloaded": true,
+    "original_bitstreams_not_reprogrammed": true,
+    "tx_attenuation_db": 16,
+    "rx_gain_db": 66,
+    "power_shift_both": 4,
+    "rx_dc_threshold": 48,
+    "plateau": 63,
+    "tx_board_ip": "192.168.2.50",
+    "gui_peer": "192.168.1.100:15002",
+    "fresh_elf_prefix_verified": true,
+    "original_disk_elf_bit_hdf_hashes_unchanged": true,
+    "rx_counts_after": {
+      "captures": 517198,
+      "valid": 514723,
+      "reject": 2475,
+      "len": 8,
+      "no_magic": 1435,
+      "magic_shift": 53,
+      "header": 979,
+      "udp": 514723,
+      "dma_error": 0,
+      "stall": 0
+    },
+    "rx_delta": {
+      "captures": 61139,
+      "valid": 60996,
+      "reject": 143,
+      "len": 2,
+      "no_magic": 141,
+      "magic_shift": 0,
+      "header": 0,
+      "udp": 60996,
+      "dma_error": 0,
+      "stall": 0
+    }
+  },
+  "limitations": [
+    "Selected zero-loss samples do not estimate unbiased reliability or prove semantic-model performance.",
+    "No source repair, artificial corruption, RF retry, cross-trial merging, or relaxation of BER limits.",
+    "Three H265 zero-loss trials have BER 2.078460498e-6 (3 errors), 3.923% above the agreed upper bound. User approval pending; not accepted.",
+    "Reject counters include quiet time and TX reinitialization; cannot identify 46 missing source packets one-to-one.",
+    "One extra VQPK14dB trial completed in a prequeued two-trial batch after enough eligible VQPK samples; preserved, not selected.",
+    "Orchestrator initially misrecognized wrapped terminal text for r-h265-s2-a15-02; completed zero-error capture independently recovered and audited, not an invalid RF trial.",
+    "Absolute SNR, model decoding, and historical global FPGA timing are not qualified."
+  ]
+}

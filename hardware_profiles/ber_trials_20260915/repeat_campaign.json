@@ -1,0 +1,521 @@
+{
+  "definition": "Real RF AIR0; whole trial all business payload post-decoder BER; exactly zero missing packets per selected individual trial.",
+  "samples_per_source_per_target": 3,
+  "targets": [
+    0.000001,
+    0.00001,
+    0.0001
+  ],
+  "accepted_target_multipliers": [
+    0.5,
+    2
+  ],
+  "selection": "Retain original six delivered examples and take first two chronologically eligible NEW independent transmissions per source/target. Preserve all other acquisitions. No source repair or cross-trial merging.",
+  "search_limit": "At most 10 trials per source and RF configuration. Adaptive search; not an unbiased reliability estimate.",
+  "baseline_manifest_sha256": "ca81d6f443cc656b50b4aae192ee5c979a25bd1442c3484d4884c30cf740df0a",
+  "baseline_commit": "be9bc357fd87bb933b11a0d9266d3591554f2a0b",
+  "common": {
+    "antenna_separation_m_approx": 0.2,
+    "frequency_hz": 2200000000,
+    "sample_rate_hz": 40000000,
+    "rx_gain_db": 66,
+    "rx_dc_threshold": 44,
+    "plateau": 63,
+    "protected_data_symbols": 32,
+    "chunk_bytes": 1024,
+    "business_capacity_bytes": 960,
+    "window": 1,
+    "rate_limit_kib_s": 400,
+    "host_payload_crc": true,
+    "rf_retry": false,
+    "artificial_bit_flips": false,
+    "rx_elf_reloaded": false,
+    "fpga_reprogrammed": false
+  },
+  "temporary_tx_elf_sha256": "8431801a8e4e990e15a35e08b3696d3cd1155aef7652e7bcb02bf8eb55db364b",
+  "original_tx_elf_sha256": "9ac341a57a61ed7ce7d286473b311adbdc4f017a1d4b24f08108c940eddbb49c",
+  "original_rx_elf_sha256": "78c7914ca1c87deb065601a14f39f24c426c41e1d9e3d21a45bc49d9d0663544",
+  "before": {
+    "rxCaptures": 456059,
+    "rxValid": 453727,
+    "rxReject": 2332,
+    "rxNoMagic": 1294,
+    "rxUDP": 453727
+  },
+  "trials": {
+    "r-h265-s3-a15-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s3-a15-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 3,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s3-a14p5-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s3-a14-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s3-a14-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s3-a14-02": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s3-a14-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a17-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a17-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a17-03": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a17-04": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a16-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a16p5-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 16500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a16p5-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 16500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a16p5-03": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 16500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a16p5-04": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 16500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p5-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a16p5-05": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 16500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a15-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a15-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a15-03": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a15-04": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15p5-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a15p5-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 15500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15p5-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15p5-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a15p5-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 15500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a15p5-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 15500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p5-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p5-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p5-03": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p75-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14750,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p75-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14750,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p75-03": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14750,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p75-04": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14750,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14p75-05": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14750,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14-01": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14-02": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14-03": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-vqpk-s2-a14-04": {
+      "source": "tx_payload.vqpk",
+      "shift": 2,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-05": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-06": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-07": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-08": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-09": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16-10": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p25-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16250,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p25-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16250,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p25-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16250,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p25-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16250,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17p5-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17500,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-05": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-06": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-07": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-08": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-09": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a16p75-10": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 16750,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-05": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-06": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-07": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-08": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-09": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    },
+    "r-h265-s2-a17-10": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44
+    }
+  }
+}
