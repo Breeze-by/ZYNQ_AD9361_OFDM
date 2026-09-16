@@ -1,0 +1,409 @@
+{
+  "date": "2026-09-16",
+  "definition": "Fresh real-RF AIR0 independent zero-packet-loss acquisitions; whole-run all business payload post-decoder BER, no source repair or cross-run merging.",
+  "samples_per_group": 5,
+  "targets": [
+    0.001,
+    0.0001,
+    0.00001
+  ],
+  "accepted_target_multipliers": [
+    0.5,
+    2
+  ],
+  "user_confirmed": true,
+  "new_acquisitions_only": true,
+  "search_limit": "At most 10 RF trials per source and matched shift/attenuation/DC configuration, counting both RX initializations. Adaptive bounded search; preserve every attempt.",
+  "sources": [
+    {
+      "name": "indices.bin",
+      "path": "E:\\by2025\\USRP_UDP\\indices.bin",
+      "size": 517980,
+      "sha256": "9a1f399db98698ccf15e232288c9644af28b676eb7f842bd827cd255bc9e1675"
+    },
+    {
+      "name": "h265_payload.h265",
+      "path": "E:\\by2025\\USRP_UDP\\h265_payload.h265",
+      "size": 180422,
+      "sha256": "beeccd8ec4deabc9c5a7fcbe252f518b8f765eb6e773a3c97f9d767143ebbf53"
+    }
+  ],
+  "common": {
+    "antenna_distance_m": 0.2,
+    "frequency_hz": 2200000000,
+    "rx_gain_db": 66,
+    "rx_dc_threshold": 44,
+    "plateau": 63,
+    "protected_symbols": 32,
+    "chunk_bytes": 1024,
+    "business_capacity": 960,
+    "rate_kib_s": 400,
+    "window": 1,
+    "rf_retry": false,
+    "artificial_bit_flips": false,
+    "receiver_baseline_reloaded": true,
+    "fpga_reprogrammed_receiver": true,
+    "rx_dc_threshold_note": "44 in selected samples; diagnostic trials with 40 are explicitly tagged."
+  },
+  "trials": {
+    "b30-idx-s3-a16-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 16000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 1
+    },
+    "b30-idx-s3-a15-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 15000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 1
+    },
+    "b30-idx-s3-a14-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 1
+    },
+    "b30-h265-s3-a14-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 1
+    },
+    "b30-idx-s3-a14-c40-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 40,
+      "rx_initialization": 1
+    },
+    "b30-h265-s3-a14-c40-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 40,
+      "rx_initialization": 1
+    },
+    "b30-idx-s3-a14-boot2-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a14-boot2-02": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14-boot2-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a14p5-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14p5-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a14p5-02": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14p5-02": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a14p5-03": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14p5-03": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a14p5-04": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14p5-04": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a14p5-05": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14p5-05": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a14p5-06": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 14500,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-01": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a17-01": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-02": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a17-02": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-03": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a17-03": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-04": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a17-04": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-05": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s3-a17-05": {
+      "source": "h265_payload.h265",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-06": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s3-a17-07": {
+      "source": "indices.bin",
+      "shift": 3,
+      "tx_attenuation_mdb": 17000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-01": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-01": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-02": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-02": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-03": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-03": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-04": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-04": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-05": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-05": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-06": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-06": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-07": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-07": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-08": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-h265-s2-a19-08": {
+      "source": "h265_payload.h265",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-09": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    },
+    "b30-idx-s2-a19-10": {
+      "source": "indices.bin",
+      "shift": 2,
+      "tx_attenuation_mdb": 19000,
+      "rx_dc_threshold": 44,
+      "rx_initialization": 2
+    }
+  },
+  "temporary_tx_elf_sha256": "56B16EE82DAE504F22EB71C654429B24897F68FC3617BC621B8789860FD97255",
+  "startup": {
+    "receiver_initial_state": "FPGA level shifters disabled; board network unresponsive. Restored the current receiver bit/ELF before trials.",
+    "receiver_elf_sha256": "78C7914CA1C87DEB065601A14F39F24C426C41E1D9E3D21A45BC49D9D0663544",
+    "receiver_bit_sha256": "BF40B3EC430622C5D51877B3AE989A81771D31D38E36137E7274A5EA379FBDBD",
+    "sender_original_elf_sha256": "9AC341A57A61ED7CE7D286473B311ADBDC4F017A1D4B24F08108C940EDDBB49C"
+  },
+  "completed_rf_trials": 50,
+  "status": "RF collection complete: six groups of five strictly eligible new independent samples."
+}

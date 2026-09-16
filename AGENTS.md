@@ -96,6 +96,23 @@ AD9361_test2/tools/pc_sender/video_playback.py
 
 ## 调参边界
 
+- 2026-09-16 最新新批次：源改为发送机USRP_UDP下indices.bin与h265_payload.h265，目标1e-3/1e-4/1e-5各5份，共30份，全部新RF采集。
+  用户重新确认0.5～2倍、停发/关闭IDE/释放COM/20cm固定；旧H低边界批准不适用。整轮全业务BER、零缺包，不修补/拼包/人工翻转/开RF重传。
+  已30/30完成：indices 517980B/540包，H265 180422B/188包；错误bit数和逐样本BER详见根README和results30.json。
+  50轮19256发/18905收/缺351，16轮缺包、4轮全收但BER越界、30轮入选；PC重传全0，原始50对独立审计通过。
+  每源/配置至多10轮、按时间取最早5份；H低30bit=2.078460498e-5明确越界不选，不套用旧批准。
+  首次RX未初始化，加载现有原bit/ELF后前6轮缺337/2536；再加载相同RX版本后44轮缺14/16720，具体启动状态根因未闭环。
+  第一阶段PS reject86=len2+no_magic84；第二阶段采样结束capture16709/valid16706/reject3/UDP16706，DMA/stall0。
+  恢复TX时RX no_magic另增82，非业务包一一映射；初期一轮保护业务前30B有5bit错误，入选30份该区域均0，不泛化到未收到帧。
+  入选RX66/DC44/63，高shift3/TX17、中shift3/TX14.5、低shift2/TX19；双板匹配，2.2GHz/40MSPS/guard32/chunk1024/w1/400KiB保持。
+  临时sender-only ELF56B16EE8…通过ADI API有界调衰减；正式C/ELF/bit/HDF不改，原TX9AC341A5…已恢复。
+  已恢复TX16/RX66、shift4、DC48/63、原时钟、TX IP2.50及RX GUI1.100:15002 ACK/JTAG；串口释放、两板ping通。
+  本轮确实下载RX原bit/ELF两次及TX候选/正式ELF；未重新生成bit、未写Flash/SD，不要说全程未下载。
+  两机工程根BER_results_20260916_batch30及本地有30份、manifest(DBB677CC…)、全50对raw_evidence.zip(181C31C3…)；数据不进SDK Git。
+  旧六份和18份及manifest保持，原GUI严格CRC行为与已取消批量功能均不改；配置不是BER标定表，筛选样本非无偏可靠性统计。
+  新collect30.py/test_collect30.py/campaign30.json/results30.json与根文档记录本批；本地37项profile测试过。
+  本轮备份TX TEMP/ad9361-ber30-8b31acdd8a1246c8b2fbcad12e036a70，RX TEMP/ad9361-ber30-441a22eaf85e47ee943aca43fe8db2af。
+  原BSP/IDE无关dirty94/15须保留；绝对SNR、模型效果、全局时序仍未验收。后续发射/改配置按用户新任务执行。
 - 2026-09-16 用户回复“我同意”，仅批准H265低档全1443376bit、3错误bit、188/188包的边界样本；没有普遍放宽BER范围。
   离线重审已有79轮，按时间选r-h265-s2-a16-07和r-h265-s2-a16p75-02，session2247/271、采集时间及双哈希不同。
   原16业务文件不变，新增H低sample02/03；当前18份=原范围16+获批边界2，每源/BER各3份，H低错误2/3/3。
